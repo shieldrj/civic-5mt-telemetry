@@ -1,4 +1,4 @@
-import { OBDLiveMetrics, TripAnalytics, OilLifeProfile, ConnectionStatus } from '../types/obd';
+import { OBDLiveMetrics, TripAnalytics, OilLifeProfile, LifetimeStats, ConnectionStatus } from '../types/obd';
 import { CIVIC_2013_SPECS } from './obd2/civicSpecs';
 import { FuelModelEngine } from './obd2/fuelModel';
 import { GearCalculatorEngine } from './obd2/gearCalculator';
@@ -25,6 +25,8 @@ export class TelemetryManager {
 
   private currentMetrics: OBDLiveMetrics;
   private tripAnalytics: TripAnalytics;
+  private lifetimeStats: LifetimeStats;
+  private lifetimeSaveTimestamp: number = 0;
   private timerHandle: any = null;
   private lastUpdateTimestamp: number = Date.now();
 
@@ -38,6 +40,7 @@ export class TelemetryManager {
 
     this.currentMetrics = this.getInitialMetrics();
     this.tripAnalytics = this.getInitialTripAnalytics();
+    this.lifetimeStats = this.loadLifetimeStats();
 
     // Start in simulator mode by default so user immediately sees live reactive gauges on launch!
     this.startSimulation();
@@ -92,6 +95,7 @@ export class TelemetryManager {
       fuelFlowLitersPerHour: 0.83,
       airFuelRatio: 14.7,
       rolling30sMpg: 32.5,
+      lifetimeMpg: this.lifetimeStats?.lifetimeMpg ?? 0,
       currentGear: 'N',
       gearRatio: 0,
       isClutchSlipping: false,
@@ -205,8 +209,9 @@ export class TelemetryManager {
       return;
     }
 
-    // 1. Speeds
-    const speedMph = parseFloat((raw.speedKmh * 0.621371).toFixed(1));
+    // 1. Speeds (use raw precision for integration, not pre-rounded)
+    const speedMphRaw = raw.speedKmh * 0.621371;
+    const speedMph = parseFloat(speedMphRaw.toFixed(1));
     const coolantF = Math.round((raw.coolantC * 9) / 5 + 32);
     const iatF = Math.round((raw.iatC * 9) / 5 + 32);
 
@@ -249,6 +254,7 @@ export class TelemetryManager {
       fuelFlowLitersPerHour: parseFloat(fuelFlow.fuelFlowLitersPerHour.toFixed(2)),
       airFuelRatio: parseFloat(afr.toFixed(2)),
       rolling30sMpg: parseFloat(rollingMpg.toFixed(1)),
+      lifetimeMpg: parseFloat(this.lifetimeStats.lifetimeMpg.toFixed(1)),
       currentGear: gearResult.currentGear,
       gearRatio: parseFloat(gearResult.calculatedRatio.toFixed(2)),
       isClutchSlipping: gearResult.isClutchSlipping,
@@ -259,7 +265,7 @@ export class TelemetryManager {
     };
 
     // 6. Integrate Trip Statistics
-    this.updateTripAnalytics(dtSec, speedMph, fuelFlow.fuelFlowGalPerHour, isDfco, raw.rpm);
+    this.updateTripAnalytics(dtSec, speedMphRaw, fuelFlow.fuelFlowGalPerHour, isDfco, raw.rpm);
 
     // 7. Record Engine Wear to Oil Life Model
     this.oilLifeModel.recordTelemetryStep(raw.rpm, raw.coolantC, raw.engineLoad, speedMph, dtSec);
@@ -282,6 +288,9 @@ export class TelemetryManager {
 
     const stepFuelGal = (fuelFlowGph / 3600) * dtSec;
     this.tripAnalytics.totalFuelUsedGallons += stepFuelGal;
+
+    // Accumulate into persistent lifetime stats
+    this.updateLifetimeStats(stepMiles, stepFuelGal);
 
     // Idle fuel tracking
     if (speedMph <= 1.0) {
@@ -324,6 +333,55 @@ export class TelemetryManager {
   public resetOilLife(): void {
     this.oilLifeModel.resetOilLife();
     this.notify();
+  }
+
+  // --- Lifetime Stats Persistence ---
+
+  private loadLifetimeStats(): LifetimeStats {
+    try {
+      const saved = localStorage.getItem('civic_2013_lifetime_stats_v1');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch {
+      // Fallback
+    }
+    return {
+      totalMiles: 0,
+      totalFuelGallons: 0,
+      lifetimeMpg: 0,
+      firstTrackedTimestamp: Date.now(),
+    };
+  }
+
+  private saveLifetimeStats(): void {
+    try {
+      localStorage.setItem('civic_2013_lifetime_stats_v1', JSON.stringify(this.lifetimeStats));
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
+
+  private updateLifetimeStats(stepMiles: number, stepFuelGal: number): void {
+    if (stepMiles <= 0 && stepFuelGal <= 0) return;
+
+    this.lifetimeStats.totalMiles += stepMiles;
+    this.lifetimeStats.totalFuelGallons += stepFuelGal;
+
+    if (this.lifetimeStats.totalFuelGallons > 0.01) {
+      this.lifetimeStats.lifetimeMpg = this.lifetimeStats.totalMiles / this.lifetimeStats.totalFuelGallons;
+    }
+
+    // Debounce saves to once per 30 seconds
+    const now = Date.now();
+    if (now - this.lifetimeSaveTimestamp >= 30000) {
+      this.lifetimeSaveTimestamp = now;
+      this.saveLifetimeStats();
+    }
+  }
+
+  public getLifetimeStats(): LifetimeStats {
+    return { ...this.lifetimeStats };
   }
 }
 

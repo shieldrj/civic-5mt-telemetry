@@ -78,6 +78,7 @@ export class VLinkerBluetoothManager {
           { namePrefix: 'V-LINK' },
           { namePrefix: 'OBD' },
           { namePrefix: 'IOS-VLINK' },
+          { namePrefix: 'Vgate' },
         ],
         optionalServices: VLINKER_SERVICE_UUIDS,
       });

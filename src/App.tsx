@@ -169,7 +169,6 @@ export function App() {
       <ShiftLightBar
         stage={metrics.shiftLightStage}
         rpm={metrics.rpm}
-        maxRpm={6700}
         shiftMode={shiftMode}
         shouldShiftUp={metrics.shouldShiftUp}
         onToggleMode={toggleShiftMode}
@@ -255,17 +254,17 @@ export function App() {
               size={260}
             />
 
-            {/* Instantaneous MPG Gauge */}
+            {/* Lifetime Cumulative MPG Gauge */}
             <RadialGauge
-              value={metrics.isDfcoActive ? 99.9 : metrics.instantMpg}
+              value={metrics.lifetimeMpg}
               min={0}
-              max={80}
-              title="INSTANT MPG"
+              max={60}
+              title="LIFETIME MPG"
               unit="MPG"
-              subValue={metrics.isDfcoActive ? 'DFCO CUT' : `${metrics.rolling30sMpg} 30s`}
-              subLabel="Efficiency"
+              subValue={`${telemetryManager.getLifetimeStats().totalMiles.toFixed(0)} mi tracked`}
+              subLabel="Cumulative"
               accentColor="#00e676"
-              ticks={[0, 15, 30, 45, 60, 75]}
+              ticks={[0, 10, 20, 30, 40, 50, 60]}
               size={230}
             />
           </div>

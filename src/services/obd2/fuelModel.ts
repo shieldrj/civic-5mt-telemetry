@@ -2,7 +2,7 @@ import { CIVIC_2013_SPECS } from './civicSpecs';
 
 export class FuelModelEngine {
   private recentMpgHistory: number[] = [];
-  private readonly MAX_HISTORY_SAMPLES = 30; // 30 samples (~3-5 seconds of buffer)
+  private readonly MAX_HISTORY_SAMPLES = 600; // 600 samples (30 seconds at 20Hz)
 
   /**
    * Calculates actual Air:Fuel Ratio from wideband lambda and fuel trims.
@@ -13,10 +13,15 @@ export class FuelModelEngine {
     shortTermFuelTrimPercent: number = 0,
     longTermFuelTrimPercent: number = 0
   ): number {
-    const lambda = equivalenceRatioLambda > 0 ? equivalenceRatioLambda : 1.0;
+    // If wideband lambda (PID 0124) is available and valid, it already reflects
+    // post-trim combustion AFR. Using trims ON TOP of lambda double-counts.
+    if (equivalenceRatioLambda > 0.5 && equivalenceRatioLambda < 2.0) {
+      const dynamicAfr = CIVIC_2013_SPECS.stoichiometricAfr * equivalenceRatioLambda;
+      return Math.max(9.0, Math.min(22.0, dynamicAfr));
+    }
+    // Narrowband fallback: positive trim = ECU injecting MORE fuel = lower AFR
     const totalTrimFactor = 1.0 + (shortTermFuelTrimPercent + longTermFuelTrimPercent) / 100.0;
-    // AFR = 14.7 * Lambda * (1 + Trim)
-    const dynamicAfr = CIVIC_2013_SPECS.stoichiometricAfr * lambda * totalTrimFactor;
+    const dynamicAfr = CIVIC_2013_SPECS.stoichiometricAfr / (totalTrimFactor > 0 ? totalTrimFactor : 1.0);
     return Math.max(9.0, Math.min(22.0, dynamicAfr));
   }
 
@@ -31,7 +36,7 @@ export class FuelModelEngine {
     speedKmh: number,
     currentGear: number | string
   ): boolean {
-    const isThrottleClosed = throttlePosPercent <= 2.0;
+    const isThrottleClosed = throttlePosPercent <= CIVIC_2013_SPECS.closedThrottleBaselinePercent;
     const isAboveIdleRpm = rpm >= 1200;
     const isMoving = speedKmh >= 10;
     const isInGear = typeof currentGear === 'number' && currentGear >= 1 && currentGear <= 5;
@@ -111,8 +116,17 @@ export class FuelModelEngine {
       this.recentMpgHistory.shift();
     }
 
-    const sum = this.recentMpgHistory.reduce((acc, val) => acc + val, 0);
-    return sum / this.recentMpgHistory.length;
+    // Harmonic mean: N / Σ(1/MPG_i), excluding zero/DFCO entries
+    // This prevents 99.9 MPG coasting spikes from inflating the average
+    let reciprocalSum = 0;
+    let validCount = 0;
+    for (const mpg of this.recentMpgHistory) {
+      if (mpg > 0.1 && mpg < 99.9) {
+        reciprocalSum += 1.0 / mpg;
+        validCount++;
+      }
+    }
+    return validCount > 0 ? validCount / reciprocalSum : 0;
   }
 
   /**

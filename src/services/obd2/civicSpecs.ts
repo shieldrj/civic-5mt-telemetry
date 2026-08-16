@@ -58,4 +58,5 @@ export const CIVIC_2013_SPECS = {
   optimalOperatingTempC: 85,   // 185°F
   highThermalThresholdRpm: 4500,
   highLoadThresholdPercent: 75,
+  closedThrottleBaselinePercent: 14.0, // Honda DBW PID 0111 reads ~12-15% at foot-off idle
 } as const;

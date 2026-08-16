@@ -97,9 +97,11 @@ export const ManualTransmissionCard: React.FC<ManualTransmissionCardProps> = ({ 
           <ArrowUpRight size={12} className="text-[#00e676]" />
           Shift Guidance:
         </span>
-        <span className={metrics.shouldShiftUp ? 'text-[#00d2ff] font-bold animate-pulse' : 'text-[#94a3b8]'}>
-          {metrics.shouldShiftUp
+        <span className={metrics.shouldShiftUp && gear !== 5 ? 'text-[#00d2ff] font-bold animate-pulse' : 'text-[#94a3b8]'}>
+          {metrics.shouldShiftUp && gear !== 5
             ? `Upshift to ${typeof gear === 'number' ? gear + 1 : 'next gear'} for fuel efficiency`
+            : gear === 5
+            ? 'Top gear'
             : 'Holding optimal RPM band'}
         </span>
       </div>

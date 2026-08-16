@@ -27,6 +27,7 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
   ticks = [],
   size = 230,
 }) => {
+  const filterId = 'glow-' + title.replace(/\s+/g, '-').toLowerCase();
   const clampedValue = Math.max(min, Math.min(max, value));
   
   // 240-degree sweep from bottom-left (210°) clockwise to bottom-right (450° / 90°)
@@ -70,7 +71,7 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
     <div className="relative flex flex-col items-center justify-center select-none" style={{ width: size, height: size }}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="overflow-visible">
         <defs>
-          <filter id={`glow-${title}`} x="-20%" y="-20%" width="140%" height="140%">
+          <filter id={filterId} x="-20%" y="-20%" width="140%" height="140%">
             <feGaussianBlur stdDeviation="3" result="blur" />
             <feComposite in="SourceGraphic" in2="blur" operator="over" />
           </filter>
@@ -108,7 +109,7 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
             stroke={accentColor}
             strokeWidth={strokeWidth}
             strokeLinecap="round"
-            filter={`url(#glow-${title})`}
+            filter={`url(#${filterId})`}
           />
         )}
 
@@ -153,7 +154,7 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
         <polygon
           points={`${needleTip.x},${needleTip.y} ${baseLeft.x},${baseLeft.y} ${baseRight.x},${baseRight.y}`}
           fill={accentColor}
-          filter={`url(#glow-${title})`}
+          filter={`url(#${filterId})`}
         />
 
         {/* Center Cap */}

@@ -3,7 +3,6 @@ import React from 'react';
 interface ShiftLightBarProps {
   stage: number; // 0 to 5
   rpm: number;
-  maxRpm: number;
   shiftMode: 'eco' | 'power';
   shouldShiftUp: boolean;
   onToggleMode: () => void;
@@ -58,27 +57,21 @@ export const ShiftLightBar: React.FC<ShiftLightBarProps> = ({
         {Array.from({ length: totalLeds }).map((_, index) => {
           const isActive = index < activeLeds;
           let activeColor = '#00e676'; // Green
-          let glowClass = 'shadow-[0_0_8px_#00e676]';
 
           if (shiftMode === 'power') {
             if (index >= 8) {
               activeColor = '#ff2a40'; // Red
-              glowClass = 'shadow-[0_0_12px_#ff2a40]';
             } else if (index >= 6) {
               activeColor = '#00d2ff'; // Cyan
-              glowClass = 'shadow-[0_0_10px_#00d2ff]';
             } else if (index >= 3) {
               activeColor = '#ffaa00'; // Amber
-              glowClass = 'shadow-[0_0_8px_#ffaa00]';
             }
           } else {
             // Eco Mode
             if (index >= 9) {
               activeColor = '#ffaa00'; // Amber warning: revving high for eco
-              glowClass = 'shadow-[0_0_8px_#ffaa00]';
             } else if (index >= 6) {
               activeColor = '#00d2ff'; // Cyan shift prompt
-              glowClass = 'shadow-[0_0_10px_#00d2ff]';
             }
           }
 
@@ -88,7 +81,7 @@ export const ShiftLightBar: React.FC<ShiftLightBarProps> = ({
               className="h-full rounded-sm transition-all duration-75"
               style={{
                 backgroundColor: isActive ? activeColor : '#121520',
-                boxShadow: isActive ? (glowClass.includes('shadow') ? undefined : undefined) : 'none',
+                boxShadow: isActive ? `0 0 8px ${activeColor}` : 'none',
               }}
             />
           );

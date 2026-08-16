@@ -346,11 +346,15 @@ export const DtcScannerCard: React.FC = () => {
                     </div>
                     <div className="bg-[#121622] rounded p-1">
                       <span className="text-[#64748b] block">STFT</span>
-                      <strong className="text-[#00e676] font-['Chakra_Petch']">+{activeDtcDetail.freezeFrame.fuelTrimSt}%</strong>
+                      <strong className="text-[#00e676] font-['Chakra_Petch']">
+                        {activeDtcDetail.freezeFrame.fuelTrimSt >= 0 ? '+' : ''}{activeDtcDetail.freezeFrame.fuelTrimSt}%
+                      </strong>
                     </div>
                     <div className="bg-[#121622] rounded p-1">
                       <span className="text-[#64748b] block">LTFT</span>
-                      <strong className="text-[#00e676] font-['Chakra_Petch']">+{activeDtcDetail.freezeFrame.fuelTrimLt}%</strong>
+                      <strong className="text-[#00e676] font-['Chakra_Petch']">
+                        {activeDtcDetail.freezeFrame.fuelTrimLt >= 0 ? '+' : ''}{activeDtcDetail.freezeFrame.fuelTrimLt}%
+                      </strong>
                     </div>
                   </div>
                 </div>

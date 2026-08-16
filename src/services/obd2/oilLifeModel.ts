@@ -7,6 +7,7 @@ export class OilLifeEngine {
   private profile: OilLifeProfile;
   private currentTripDurationSec: number = 0;
   private currentTripMaxTempC: number = 0;
+  private lastSaveTimestamp: number = 0;
 
   constructor() {
     this.profile = this.loadProfile();
@@ -55,6 +56,14 @@ export class OilLifeEngine {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(profile));
     } catch {
       // Ignore storage quota errors
+    }
+  }
+
+  private debouncedSave(): void {
+    const now = Date.now();
+    if (now - this.lastSaveTimestamp >= 30000) { // Save at most once per 30 seconds
+      this.lastSaveTimestamp = now;
+      this.saveProfile();
     }
   }
 
@@ -107,7 +116,7 @@ export class OilLifeEngine {
 
     // Recompute Remaining Oil Life %
     this.recalculateOilHealth();
-    this.saveProfile();
+    this.debouncedSave();
     return { ...this.profile };
   }
 
@@ -118,7 +127,7 @@ export class OilLifeEngine {
     this.currentTripDurationSec = 0;
     this.currentTripMaxTempC = coolantTempC;
 
-    if (coolantTempC < 60) {
+    if (coolantTempC < CIVIC_2013_SPECS.operatingTempThresholdC) {
       this.profile.coldStartsCount++;
     }
     this.saveProfile();
@@ -198,6 +207,13 @@ export class OilLifeEngine {
     const degradationRatio = totalDegradation > 0 ? totalDegradation / 100 : 0.01;
     const effectiveTotalMiles = milesDriven > 50 ? (milesDriven / degradationRatio) : CIVIC_2013_SPECS.baselineOilLifeMiles;
     this.profile.estimatedMilesRemaining = Math.max(0, Math.round((remainingPercent / 100) * effectiveTotalMiles));
+
+    // Dynamic days remaining based on daily mileage burn rate
+    const daysSinceReset = Math.max(1, (Date.now() - this.profile.lastResetTimestamp) / (24 * 60 * 60 * 1000));
+    const dailyMileage = milesDriven / daysSinceReset;
+    this.profile.estimatedDaysRemaining = dailyMileage > 0.1
+      ? Math.round(this.profile.estimatedMilesRemaining / dailyMileage)
+      : 180;
 
     // Condition Grade
     if (remainingPercent > 70) {

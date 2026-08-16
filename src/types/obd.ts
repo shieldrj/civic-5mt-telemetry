@@ -22,6 +22,7 @@ export interface OBDLiveMetrics {
   fuelFlowLitersPerHour: number;// Current fuel consumption (L/hr)
   airFuelRatio: number;         // Actual Air:Fuel ratio (e.g. 14.7)
   rolling30sMpg: number;        // Smooth 30s rolling window
+  lifetimeMpg: number;           // Cumulative lifetime MPG (persisted)
   
   // Manual Transmission Dynamics
   currentGear: 1 | 2 | 3 | 4 | 5 | 'N' | 'CLUTCH';
@@ -75,6 +76,13 @@ export interface OilLifeProfile {
     shortTripPenalty: number;
     thermalShearPenalty: number;
   };
+}
+
+export interface LifetimeStats {
+  totalMiles: number;
+  totalFuelGallons: number;
+  lifetimeMpg: number;
+  firstTrackedTimestamp: number;
 }
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'simulating' | 'error';
