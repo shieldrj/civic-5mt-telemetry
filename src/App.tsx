@@ -12,6 +12,8 @@ import {
   Gauge,
   ScanLine,
   Droplet,
+  Fuel,
+  Navigation,
   Layers
 } from 'lucide-react';
 import { OBDLiveMetrics, TripAnalytics, OilLifeProfile, ConnectionStatus } from './types/obd';
@@ -20,7 +22,6 @@ import { ShiftLightBar } from './components/ShiftLightBar';
 import { RadialGauge } from './components/RadialGauge';
 import { MpgTelemetryCard } from './components/MpgTelemetryCard';
 import { OilLifeCard } from './components/OilLifeCard';
-import { ManualTransmissionCard } from './components/ManualTransmissionCard';
 import { TripSummaryBar } from './components/TripSummaryBar';
 import { SimulatorControls } from './components/SimulatorControls';
 import { BluetoothModal } from './components/BluetoothModal';
@@ -34,7 +35,7 @@ export function App() {
   const [shiftMode, setShiftMode] = useState<'eco' | 'power'>('eco');
   const [isBluetoothModalOpen, setIsBluetoothModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'cockpit' | 'dtc' | 'oil_wear' | 'bench'>('cockpit');
+  const [activeTab, setActiveTab] = useState<'cockpit' | 'fuel_physics' | 'trip' | 'oil_wear' | 'dtc' | 'bench'>('cockpit');
 
   useEffect(() => {
     const unsubscribe = telemetryManager.subscribe((m, t, o, s) => {
@@ -80,11 +81,11 @@ export function App() {
   const isOverheating = metrics.coolantTempF > 220;
 
   return (
-    <div className="min-h-screen w-full bg-[#08090d] text-[#f8fafc] flex flex-col p-2.5 sm:p-4 max-w-6xl mx-auto gap-3 select-none">
-      {/* Sleek Minimal Header */}
-      <header className="flex items-center justify-between bg-[#0e111a] border border-[rgba(255,255,255,0.08)] rounded-xl px-3 py-2 shadow-sm">
+    <div className="min-h-screen w-full bg-[#08090d] text-[#f8fafc] flex flex-col p-2.5 sm:p-4 max-w-5xl mx-auto gap-2 select-none justify-between">
+      {/* Sleek Minimal Header Bar */}
+      <header className="flex items-center justify-between bg-[#0e111a] border border-[rgba(255,255,255,0.08)] rounded-xl px-3 py-2 shadow-sm shrink-0">
         {/* Left: Vehicle Badge */}
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2">
           <div className="w-7 h-7 rounded-lg bg-[rgba(255,42,64,0.12)] border border-[rgba(255,42,64,0.3)] flex items-center justify-center text-[#ff2a40]">
             <Car size={15} />
           </div>
@@ -101,7 +102,6 @@ export function App() {
 
         {/* Center: Live Engine Vitals */}
         <div className="flex items-center gap-2 font-['Chakra_Petch'] text-xs">
-          {/* Coolant chip */}
           <div
             className={`flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] ${
               isColdEngine
@@ -116,7 +116,6 @@ export function App() {
             {isColdEngine && <span className="text-[8px] text-[#00d2ff] font-semibold hidden sm:inline">COLD</span>}
           </div>
 
-          {/* IAT & Load for tablet/desktop */}
           <div className="hidden md:flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#08090d] text-[#94a3b8] border border-[rgba(255,255,255,0.06)] text-[11px]">
             <Wind size={11} className="text-[#64748b]" />
             <span className="tabular-nums">IAT {metrics.intakeAirTempF}°F</span>
@@ -128,7 +127,7 @@ export function App() {
           </div>
         </div>
 
-        {/* Right: OBD Status Pill & Fullscreen */}
+        {/* Right: OBD Status & Fullscreen */}
         <div className="flex items-center gap-1.5">
           <button
             onClick={() => setIsBluetoothModalOpen(true)}
@@ -168,17 +167,20 @@ export function App() {
         </div>
       </header>
 
-      {/* Formula 1 / GT3 Shift Light Ribbon */}
-      <ShiftLightBar
-        stage={metrics.shiftLightStage}
-        rpm={metrics.rpm}
-        shiftMode={shiftMode}
-        shouldShiftUp={metrics.shouldShiftUp}
-        onToggleMode={toggleShiftMode}
-      />
+      {/* Formula 1 Shift Tachometer Ribbon with Active Gear */}
+      <div className="shrink-0">
+        <ShiftLightBar
+          stage={metrics.shiftLightStage}
+          rpm={metrics.rpm}
+          shiftMode={shiftMode}
+          shouldShiftUp={metrics.shouldShiftUp}
+          onToggleMode={toggleShiftMode}
+          currentGear={metrics.currentGear}
+        />
+      </div>
 
-      {/* Minimalist Segmented Navigation Tabs */}
-      <nav className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+      {/* Clean Segmented Tab Navigation */}
+      <nav className="flex items-center gap-1.5 overflow-x-auto pb-0.5 shrink-0">
         <button
           onClick={() => setActiveTab('cockpit')}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
@@ -191,15 +193,26 @@ export function App() {
           Cockpit
         </button>
         <button
-          onClick={() => setActiveTab('dtc')}
+          onClick={() => setActiveTab('fuel_physics')}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
-            activeTab === 'dtc'
+            activeTab === 'fuel_physics'
               ? 'bg-[#ff2a40] text-white shadow-xs'
               : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[rgba(255,255,255,0.05)]'
           }`}
         >
-          <ScanLine size={13} />
-          Code Scanner (DTC)
+          <Fuel size={13} />
+          Fuel & Physics
+        </button>
+        <button
+          onClick={() => setActiveTab('trip')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
+            activeTab === 'trip'
+              ? 'bg-[#ff2a40] text-white shadow-xs'
+              : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[rgba(255,255,255,0.05)]'
+          }`}
+        >
+          <Navigation size={13} />
+          Trip Stats
         </button>
         <button
           onClick={() => setActiveTab('oil_wear')}
@@ -210,7 +223,18 @@ export function App() {
           }`}
         >
           <Droplet size={13} />
-          Oil Diagnostics
+          Oil Life
+        </button>
+        <button
+          onClick={() => setActiveTab('dtc')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
+            activeTab === 'dtc'
+              ? 'bg-[#ff2a40] text-white shadow-xs'
+              : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[rgba(255,255,255,0.05)]'
+          }`}
+        >
+          <ScanLine size={13} />
+          DTC Scanner
         </button>
         <button
           onClick={() => setActiveTab('bench')}
@@ -221,17 +245,16 @@ export function App() {
           }`}
         >
           <Cpu size={13} />
-          ECU Bench / Simulator
+          Simulator
         </button>
       </nav>
 
-      {/* TAB 1: PRIMARY COCKPIT DASHBOARD */}
+      {/* TAB 1: PURE DRIVING COCKPIT (ZERO SCROLL & FULLSCREEN ERGONOMICS) */}
       {activeTab === 'cockpit' && (
-        <main className="flex flex-col gap-3">
-          {/* Main Dial Cluster: Hero Coolant Temp on Top + Twin Dials Underneath on Mobile / 3 Across on Desktop */}
-          <section className="bg-[#0e111a] border border-[rgba(255,255,255,0.08)] rounded-2xl p-3 sm:p-4 shadow-sm flex flex-col md:grid md:grid-cols-3 items-center justify-center gap-2">
-            {/* 1. Hero Center: Engine Coolant Temperature */}
-            <div className="order-1 md:order-2 flex justify-center scale-105 my-0.5">
+        <main className="flex-1 flex flex-col justify-around my-1 py-1">
+          <section className="bg-[#0e111a] border border-[rgba(255,255,255,0.08)] rounded-2xl p-4 sm:p-6 shadow-sm flex flex-col md:grid md:grid-cols-3 items-center justify-around gap-4 flex-1">
+            {/* 1. Hero Coolant Temp Dial (Large & High-Contrast) */}
+            <div className="order-1 md:order-2 flex justify-center scale-105 sm:scale-115 my-1">
               <RadialGauge
                 value={metrics.coolantTempF}
                 min={100}
@@ -243,29 +266,30 @@ export function App() {
                 accentColor={isColdEngine ? '#00d2ff' : isOverheating ? '#ff2a40' : '#00e676'}
                 redlineStart={225}
                 ticks={[100, 140, 180, 220, 260]}
-                size={175}
+                size={230}
+                isHero={true}
               />
             </div>
 
-            {/* 2. Twin Companion Dials (2-column on mobile portrait, left/right on desktop) */}
-            <div className="order-2 md:contents w-full grid grid-cols-2 gap-2 justify-items-center items-center">
-              {/* Companion Left: Cumulative MPG */}
+            {/* 2. Twin Large Driving Dials: Real-Time Instant MPG & Oil Health */}
+            <div className="order-2 md:contents w-full grid grid-cols-2 gap-3 sm:gap-6 justify-items-center items-center">
+              {/* Instantaneous Driving MPG */}
               <div className="flex justify-center">
                 <RadialGauge
-                  value={metrics.lifetimeMpg}
+                  value={metrics.instantMpg}
                   min={0}
                   max={60}
-                  title="LIFETIME MPG"
+                  title="INSTANT MPG"
                   unit="MPG"
-                  subValue={`${telemetryManager.getLifetimeStats().totalMiles.toFixed(0)} mi`}
-                  subLabel="Total"
-                  accentColor="#00e676"
+                  subValue={metrics.isDfcoActive ? 'DFCO CUT' : `${metrics.rolling30sMpg} avg`}
+                  subLabel="30s"
+                  accentColor={metrics.isDfcoActive ? '#00d2ff' : metrics.instantMpg >= 35 ? '#00e676' : '#f8fafc'}
                   ticks={[0, 15, 30, 45, 60]}
-                  size={140}
+                  size={175}
                 />
               </div>
 
-              {/* Companion Right: Oil Health */}
+              {/* Oil Health Remaining */}
               <div className="flex justify-center">
                 <RadialGauge
                   value={oil.oilLifePercent}
@@ -277,19 +301,24 @@ export function App() {
                   subLabel="Left"
                   accentColor={oil.oilLifePercent < 15 ? '#ff2a40' : oil.oilLifePercent < 40 ? '#ffaa00' : '#00e676'}
                   ticks={[0, 25, 50, 75, 100]}
-                  size={140}
+                  size={175}
                 />
               </div>
             </div>
           </section>
+        </main>
+      )}
 
-          {/* Core Analytics Cards Grid */}
-          <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <ManualTransmissionCard metrics={metrics} />
-            <MpgTelemetryCard metrics={metrics} trip={trip} />
-          </section>
+      {/* TAB 2: DEDICATED PHYSICS MPG & FUEL FLOW */}
+      {activeTab === 'fuel_physics' && (
+        <main className="flex-1 flex flex-col gap-3">
+          <MpgTelemetryCard metrics={metrics} trip={trip} />
+        </main>
+      )}
 
-          {/* Trip Analytics Bar */}
+      {/* TAB 3: DEDICATED TRIP TELEMETRY & ECO STATS */}
+      {activeTab === 'trip' && (
+        <main className="flex-1 flex flex-col gap-3">
           <TripSummaryBar
             trip={trip}
             onResetTrip={() => telemetryManager.resetTrip()}
@@ -297,26 +326,16 @@ export function App() {
         </main>
       )}
 
-      {/* TAB 2: DIAGNOSTIC DTC SCANNER */}
-      {activeTab === 'dtc' && (
-        <main className="flex flex-col gap-3">
-          <DtcScannerCard />
-        </main>
-      )}
-
-      {/* TAB 3: OIL LIFE & WEAR DIAGNOSTICS */}
+      {/* TAB 4: DEDICATED OIL LIFE & WEAR DIAGNOSTICS */}
       {activeTab === 'oil_wear' && (
-        <main className="flex flex-col gap-3">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <OilLifeCard
-              oilProfile={oil}
-              coolantTempF={metrics.coolantTempF}
-              onResetOil={() => telemetryManager.resetOilLife()}
-            />
-            <MpgTelemetryCard metrics={metrics} trip={trip} />
-          </div>
+        <main className="flex-1 flex flex-col gap-3">
+          <OilLifeCard
+            oilProfile={oil}
+            coolantTempF={metrics.coolantTempF}
+            onResetOil={() => telemetryManager.resetOilLife()}
+          />
 
-          {/* Deep Explanation of 2013 Civic Oil Degradation Model */}
+          {/* Deep Explanation */}
           <section className="telemetry-card flex flex-col gap-2.5 text-xs text-[#94a3b8]">
             <h3 className="text-xs font-bold font-['Chakra_Petch'] text-[#f8fafc] flex items-center gap-1.5">
               <Layers size={14} className="text-[#ff2a40]" />
@@ -347,19 +366,21 @@ export function App() {
         </main>
       )}
 
-      {/* TAB 4: ECU BENCH / SIMULATOR */}
+      {/* TAB 5: DIAGNOSTIC DTC SCANNER */}
+      {activeTab === 'dtc' && (
+        <main className="flex-1 flex flex-col gap-3">
+          <DtcScannerCard />
+        </main>
+      )}
+
+      {/* TAB 6: ECU BENCH / SIMULATOR */}
       {activeTab === 'bench' && (
-        <main className="flex flex-col gap-3">
+        <main className="flex-1 flex flex-col gap-3">
           <SimulatorControls
             scenario={telemetryManager.simulator.scenario}
             onSelectScenario={(sc) => telemetryManager.startSimulation(sc)}
           />
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <ManualTransmissionCard metrics={metrics} />
-            <MpgTelemetryCard metrics={metrics} trip={trip} />
-          </div>
-
+          <MpgTelemetryCard metrics={metrics} trip={trip} />
           <TripSummaryBar
             trip={trip}
             onResetTrip={() => telemetryManager.resetTrip()}

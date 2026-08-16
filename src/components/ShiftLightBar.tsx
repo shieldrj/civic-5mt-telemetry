@@ -7,6 +7,7 @@ interface ShiftLightBarProps {
   shiftMode: 'eco' | 'power';
   shouldShiftUp: boolean;
   onToggleMode: () => void;
+  currentGear?: number | 'N' | 'CLUTCH';
 }
 
 export const ShiftLightBar: React.FC<ShiftLightBarProps> = ({
@@ -15,14 +16,16 @@ export const ShiftLightBar: React.FC<ShiftLightBarProps> = ({
   shiftMode,
   shouldShiftUp,
   onToggleMode,
+  currentGear = 'N',
 }) => {
   const totalLeds = 16;
   const activeLeds = Math.min(totalLeds, Math.round((stage / 5) * totalLeds));
 
   return (
-    <div className="w-full bg-[#0e111a] border border-[rgba(255,255,255,0.08)] rounded-xl p-2.5 sm:p-3 flex flex-col gap-2 shadow-md">
-      {/* Top Header: Shift Coach & RPM Readout */}
+    <div className="w-full bg-[#0e111a] border border-[rgba(255,255,255,0.08)] rounded-xl p-2.5 sm:p-3 flex flex-col gap-2 shadow-sm">
+      {/* Top Header: Shift Coach, Active Gear & RPM Readout */}
       <div className="flex items-center justify-between px-0.5">
+        {/* Left: Mode Switcher */}
         <div className="flex items-center gap-2">
           <button
             onClick={onToggleMode}
@@ -44,19 +47,30 @@ export const ShiftLightBar: React.FC<ShiftLightBarProps> = ({
               </>
             )}
           </button>
-          <span className="text-[10px] text-[#64748b] hidden sm:inline">
-            {shiftMode === 'eco' ? 'Target: 2,200–2,800 RPM' : 'Target: 6,500 RPM Redline'}
-          </span>
-        </div>
 
-        <div className="flex items-center gap-2 font-['Chakra_Petch'] text-xs">
+          {/* Shift Guidance Cue */}
           {shouldShiftUp && (
-            <span className="text-[#00d2ff] font-bold text-xs flex items-center gap-1 animate-pulse">
+            <span className="text-[#00d2ff] font-bold text-xs flex items-center gap-1 animate-pulse font-['Chakra_Petch']">
               ▲ SHIFT UP
             </span>
           )}
-          <div className="flex items-baseline gap-1 bg-[#08090d] px-2 py-0.5 rounded border border-[rgba(255,255,255,0.06)]">
-            <span className="text-[#f8fafc] font-bold tabular-nums text-sm">
+        </div>
+
+        {/* Right: Active Gear & Live RPM Readout */}
+        <div className="flex items-center gap-2 font-['Chakra_Petch']">
+          {/* Prominent Active Gear Pill */}
+          <div className="flex items-center gap-1 bg-[#08090d] border border-[#ff2a40]/40 px-2.5 py-0.5 rounded-lg">
+            <span className="text-base font-black text-[#f8fafc] leading-none">
+              {currentGear === 'CLUTCH' ? 'C' : currentGear}
+            </span>
+            <span className="text-[9px] uppercase font-bold text-[#ff6b7b]">
+              {currentGear === 'N' ? 'NEUTRAL' : currentGear === 'CLUTCH' ? 'CLUTCH' : 'GEAR'}
+            </span>
+          </div>
+
+          {/* Large RPM Digital Readout */}
+          <div className="flex items-baseline gap-1 bg-[#08090d] px-2.5 py-0.5 rounded-lg border border-[rgba(255,255,255,0.08)]">
+            <span className="text-[#f8fafc] font-black tabular-nums text-sm sm:text-base">
               {rpm}
             </span>
             <span className="text-[9px] text-[#64748b] font-semibold">RPM</span>
@@ -66,7 +80,7 @@ export const ShiftLightBar: React.FC<ShiftLightBarProps> = ({
 
       {/* LED Segmented Ribbon */}
       <div
-        className={`grid grid-cols-16 gap-1 h-3 sm:h-3.5 w-full p-1 bg-[#08090d] rounded-lg border border-[rgba(255,255,255,0.06)] ${
+        className={`grid grid-cols-16 gap-1 h-3.5 sm:h-4 w-full p-1 bg-[#08090d] rounded-lg border border-[rgba(255,255,255,0.06)] ${
           stage >= 5 ? 'animate-redline' : ''
         }`}
       >
@@ -97,7 +111,7 @@ export const ShiftLightBar: React.FC<ShiftLightBarProps> = ({
               className="h-full rounded-xs transition-colors duration-75"
               style={{
                 backgroundColor: isActive ? segmentColor : '#131722',
-                opacity: isActive ? 1 : 0.4,
+                opacity: isActive ? 1 : 0.35,
               }}
             />
           );
