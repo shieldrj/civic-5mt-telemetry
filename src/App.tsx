@@ -225,36 +225,7 @@ export function App() {
         <div className="flex flex-col gap-3.5">
           {/* Main Radial Dial Cluster */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-[#0a0d14]/70 border border-[#1b2030] rounded-2xl p-4 shadow-xl items-center justify-items-center">
-            {/* Speed Gauge */}
-            <RadialGauge
-              value={metrics.speedMph}
-              min={0}
-              max={120}
-              title="SPEED"
-              unit="MPH"
-              subValue={`${metrics.speedKmh} km/h`}
-              subLabel="Metric"
-              accentColor="#00d2ff"
-              ticks={[0, 20, 40, 60, 80, 100, 120]}
-              size={230}
-            />
-
-            {/* Central Tachometer (Hero Gauge) */}
-            <RadialGauge
-              value={metrics.rpm}
-              min={0}
-              max={8000}
-              title="TACHOMETER"
-              unit="RPM"
-              subValue={metrics.currentGear === 'CLUTCH' ? 'CLUTCH' : `GEAR ${metrics.currentGear}`}
-              subLabel="Civic 5MT"
-              accentColor="#ff2a40"
-              redlineStart={6700}
-              ticks={[0, 1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]}
-              size={260}
-            />
-
-            {/* Lifetime Cumulative MPG Gauge */}
+            {/* 1. Lifetime Cumulative MPG Gauge */}
             <RadialGauge
               value={metrics.lifetimeMpg}
               min={0}
@@ -265,6 +236,35 @@ export function App() {
               subLabel="Cumulative"
               accentColor="#00e676"
               ticks={[0, 10, 20, 30, 40, 50, 60]}
+              size={230}
+            />
+
+            {/* 2. Coolant Temperature Hero Gauge */}
+            <RadialGauge
+              value={metrics.coolantTempF}
+              min={100}
+              max={260}
+              title="COOLANT TEMP"
+              unit="°F"
+              subValue={`${metrics.coolantTempC}°C • ${metrics.coolantTempF < 160 ? 'COLD' : metrics.coolantTempF > 220 ? 'OVERHEAT' : 'OPTIMAL'}`}
+              subLabel="Engine Status"
+              accentColor={metrics.coolantTempF < 160 ? '#00d2ff' : metrics.coolantTempF > 220 ? '#ff2a40' : '#00e676'}
+              redlineStart={225}
+              ticks={[100, 140, 180, 220, 260]}
+              size={260}
+            />
+
+            {/* 3. Engine Oil Life Gauge */}
+            <RadialGauge
+              value={oil.oilLifePercent}
+              min={0}
+              max={100}
+              title="OIL LIFE"
+              unit="%"
+              subValue={`~${oil.estimatedMilesRemaining.toLocaleString()} mi`}
+              subLabel="Est. Remaining"
+              accentColor={oil.oilLifePercent < 15 ? '#ff2a40' : oil.oilLifePercent < 40 ? '#ffaa00' : '#00e676'}
+              ticks={[0, 20, 40, 60, 80, 100]}
               size={230}
             />
           </div>

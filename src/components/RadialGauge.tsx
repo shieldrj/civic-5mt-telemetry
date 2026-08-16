@@ -175,7 +175,7 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
             className="text-2xl font-extrabold tracking-tight text-[#f8fafc] font-['Chakra_Petch']"
             style={{ textShadow: `0 0 12px ${accentColor}50` }}
           >
-            {typeof value === 'number' ? (value >= 100 ? Math.round(value) : value.toFixed(1)) : value}
+            {typeof value === 'number' ? (unit === '%' || unit === '°F' || value >= 100 ? Math.round(value) : value.toFixed(1)) : value}
           </span>
           <span className="text-[10px] font-bold text-[#64748b] font-['Chakra_Petch']">
             {unit}
