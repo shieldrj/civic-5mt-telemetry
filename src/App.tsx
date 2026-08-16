@@ -575,7 +575,8 @@ export function App() {
         onClose={() => setIsBluetoothModalOpen(false)}
         status={status}
         statusMessage={telemetryManager.statusMessage}
-        onConnect={() => telemetryManager.connectBluetooth()}
+        onConnect={(options) => telemetryManager.connectBluetooth(options)}
+        checkEnvironment={() => telemetryManager.getBluetoothEnvironment()}
         onDisconnect={() => telemetryManager.disconnect()}
         onStartSim={() => telemetryManager.startSimulation()}
       />

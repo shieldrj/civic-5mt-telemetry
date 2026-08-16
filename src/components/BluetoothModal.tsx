@@ -1,15 +1,22 @@
-import React from 'react';
-import { Bluetooth, X, Radio, Info, Cpu } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Bluetooth, X, Radio, Info, Cpu, AlertTriangle, Search, CheckCircle2 } from 'lucide-react';
 import { ConnectionStatus } from '../types/obd';
+
+interface BluetoothEnvironment {
+  supported: boolean;
+  secureContext: boolean;
+  adapterAvailable: boolean;
+}
 
 interface BluetoothModalProps {
   isOpen: boolean;
   onClose: () => void;
   status: ConnectionStatus;
   statusMessage: string;
-  onConnect: () => void;
+  onConnect: (options?: { acceptAllDevices?: boolean }) => void;
   onDisconnect: () => void;
   onStartSim: () => void;
+  checkEnvironment: () => Promise<BluetoothEnvironment>;
 }
 
 export const BluetoothModal: React.FC<BluetoothModalProps> = ({
@@ -20,8 +27,32 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
   onConnect,
   onDisconnect,
   onStartSim,
+  checkEnvironment,
 }) => {
+  const [env, setEnv] = useState<BluetoothEnvironment | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    checkEnvironment().then((result) => {
+      if (!cancelled) setEnv(result);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, checkEnvironment]);
+
   if (!isOpen) return null;
+
+  const blocker = !env
+    ? null
+    : !env.supported
+    ? 'This browser has no Web Bluetooth. Use Chrome or Edge on Android — Firefox and iOS Safari cannot do this at all.'
+    : !env.secureContext
+    ? 'This page is not on HTTPS, so the browser will refuse Bluetooth. Open the published https:// address.'
+    : !env.adapterAvailable
+    ? 'No Bluetooth radio is available. Switch Bluetooth on.'
+    : null;
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
@@ -84,7 +115,7 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
             </button>
           ) : (
             <button
-              onClick={onConnect}
+              onClick={() => onConnect()}
               className="px-3.5 py-1.5 rounded-xl bg-[#00d2ff] hover:bg-[#00b4db] text-black text-xs font-bold font-['Chakra_Petch'] transition-all flex items-center gap-1.5"
             >
               <Radio size={13} />
@@ -93,17 +124,50 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
           )}
         </div>
 
+        {/* Environment blocker - the things that make scanning fail before it starts */}
+        {blocker && (
+          <div className="flex items-start gap-2 rounded-lg border border-[#ff2a40]/40 bg-[#ff2a40]/10 p-2.5 text-[11px] leading-relaxed text-[#ff9aa5]">
+            <AlertTriangle size={14} className="text-[#ff2a40] shrink-0 mt-0.5" />
+            <span>{blocker}</span>
+          </div>
+        )}
+        {env && !blocker && status !== 'connected' && (
+          <div className="flex items-center gap-2 rounded-lg border border-[#00e676]/30 bg-[#00e676]/10 p-2 text-[11px] text-[#5aff9f]">
+            <CheckCircle2 size={13} className="shrink-0" />
+            Browser, HTTPS and Bluetooth radio all check out.
+          </div>
+        )}
+
+        {/* Escape hatch: a filtered picker that finds nothing looks the same whether the
+            adapter is absent, silent, or just named unexpectedly. */}
+        {status !== 'connected' && (
+          <button
+            onClick={() => onConnect({ acceptAllDevices: true })}
+            className="flex items-center justify-center gap-1.5 w-full py-2 rounded-lg bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.12)] text-[#f8fafc] text-[12px] font-bold font-['Chakra_Petch'] transition-colors hover:bg-[rgba(255,255,255,0.1)]"
+          >
+            <Search size={13} className="text-[#00d2ff]" />
+            Show all nearby devices
+          </button>
+        )}
+
         {/* Android instructions */}
         <div className="telemetry-card-subtle flex flex-col gap-2 text-xs text-[#94a3b8]">
           <div className="flex items-center gap-1.5 text-[#f8fafc] font-bold font-['Chakra_Petch'] text-[11px]">
             <Info size={13} className="text-[#00d2ff]" />
-            Quick Connection Steps:
+            If the list stays empty:
           </div>
-          <ol className="list-decimal list-inside space-y-1 text-[11px] leading-relaxed text-[#94a3b8]">
-            <li>Plug <strong>OBDLink MX+</strong> into the Civic OBD port (under steering column).</li>
-            <li>Press the <strong>Pair</strong> button on the front of the OBDLink MX+.</li>
-            <li>Turn ignition to <strong>ON / II</strong> (or start engine).</li>
-            <li>Click <strong>Pair OBDLink MX+</strong> above and select your device.</li>
+          <ol className="list-decimal list-inside space-y-1.5 text-[11px] leading-relaxed text-[#94a3b8]">
+            <li>
+              <strong className="text-[#f8fafc]">Turn Location on.</strong> Android blocks all
+              Bluetooth LE scanning without it, and gives no warning — the list just stays empty.
+            </li>
+            <li>
+              <strong className="text-[#f8fafc]">Un-pair it in Android Bluetooth settings.</strong>{' '}
+              This app needs Bluetooth <em>LE</em>, not the Classic pairing those settings create.
+              Holding a Classic connection can stop the adapter advertising over LE entirely.
+            </li>
+            <li>Turn the ignition to <strong>ON / II</strong> so the adapter is powered and its LED is lit.</li>
+            <li>Tap <strong>Show all nearby devices</strong> — if it appears there but not above, the name filter is the problem.</li>
           </ol>
         </div>
 

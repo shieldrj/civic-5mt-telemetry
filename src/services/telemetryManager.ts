@@ -168,7 +168,20 @@ export class TelemetryManager {
     }
   }
 
-  public async connectBluetooth(): Promise<void> {
+  /** Reports what the browser/phone can actually do, for the connection screen. */
+  public async getBluetoothEnvironment(): Promise<{
+    supported: boolean;
+    secureContext: boolean;
+    adapterAvailable: boolean;
+  }> {
+    return {
+      supported: this.bluetooth.isSupported(),
+      secureContext: this.bluetooth.isSecureContext(),
+      adapterAvailable: await this.bluetooth.isAdapterAvailable(),
+    };
+  }
+
+  public async connectBluetooth(options: { acceptAllDevices?: boolean } = {}): Promise<void> {
     this.stopLoop();
     this.connectionStatus = 'connecting';
     this.statusMessage = 'Connecting to OBDLink MX+...';
@@ -178,15 +191,20 @@ export class TelemetryManager {
       await this.bluetooth.connect((msg) => {
         this.statusMessage = msg;
         this.notify();
-      });
+      }, options);
       this.connectionStatus = 'connected';
       this.statusMessage = 'Connected via Bluetooth';
       this.resetTrip();
       this.oilLifeModel.registerEngineStart(this.bluetooth.latestData.coolantC);
       this.startLoop();
     } catch (err: any) {
-      this.connectionStatus = 'error';
-      this.statusMessage = err.message || 'Bluetooth connection failed';
+      const reason = err?.message || 'Bluetooth connection failed';
+      // Fall back to the simulator rather than leaving a stopped loop behind - a failed
+      // pairing used to freeze every gauge on screen, which reads as the app hanging
+      // rather than as the connection being refused. The reason stays on the modal.
+      this.startSimulation(this.simulator.scenario);
+      this.connectionStatus = 'simulating';
+      this.statusMessage = reason;
       this.notify();
     }
   }

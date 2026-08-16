@@ -79,24 +79,73 @@ export class OBDLinkBluetoothManager {
     return typeof navigator !== 'undefined' && 'bluetooth' in navigator;
   }
 
-  public async connect(onStatus?: (msg: string) => void): Promise<boolean> {
+  /** Web Bluetooth is refused outright outside a secure context. */
+  public isSecureContext(): boolean {
+    return typeof window === 'undefined' || window.isSecureContext !== false;
+  }
+
+  /** Whether the phone has a usable Bluetooth radio switched on. */
+  public async isAdapterAvailable(): Promise<boolean> {
+    try {
+      if (!this.isSupported()) return false;
+      const bt = navigator.bluetooth as Bluetooth & { getAvailability?: () => Promise<boolean> };
+      if (typeof bt.getAvailability !== 'function') return true;
+      return await bt.getAvailability();
+    } catch {
+      return true; // Unknown - let the picker be the judge
+    }
+  }
+
+  /**
+   * Opens the browser's device picker and connects.
+   *
+   * `acceptAllDevices` drops the name filters and lists everything advertising nearby.
+   * It exists because a filtered picker that finds nothing is ambiguous: it looks
+   * identical whether the adapter is absent, is not advertising over BLE, or is simply
+   * advertising under a name the filters do not match. Listing everything separates
+   * those cases in a couple of seconds.
+   */
+  public async connect(
+    onStatus?: (msg: string) => void,
+    options: { acceptAllDevices?: boolean } = {}
+  ): Promise<boolean> {
     if (!this.isSupported()) {
-      throw new Error('Web Bluetooth API is not supported on this browser. Use Chrome on Android or enable experimental flags.');
+      throw new Error(
+        'This browser has no Web Bluetooth. Use Chrome or Edge on Android - Firefox and iOS Safari do not support it at all.'
+      );
+    }
+    if (!this.isSecureContext()) {
+      throw new Error('Web Bluetooth requires HTTPS. Open the published https:// address rather than a local or http:// one.');
+    }
+    if (!(await this.isAdapterAvailable())) {
+      throw new Error('No Bluetooth radio available. Switch Bluetooth on and try again.');
     }
 
     try {
-      onStatus?.('Scanning for OBDLink MX+ adapter...');
-      
-      // Request device with optional service filters
-      this.device = await navigator.bluetooth.requestDevice({
-        filters: [
-          { namePrefix: 'OBDLink' },
-          { namePrefix: 'MX+' },
-          { namePrefix: 'ScanTool' },
-          { namePrefix: 'OBD' },
-        ],
-        optionalServices: OBDLINK_SERVICE_UUIDS,
-      });
+      onStatus?.(
+        options.acceptAllDevices
+          ? 'Listing every nearby Bluetooth LE device...'
+          : 'Scanning for OBDLink MX+ adapter...'
+      );
+
+      // Web Bluetooth forbids combining filters with acceptAllDevices.
+      const request: RequestDeviceOptions = options.acceptAllDevices
+        ? { acceptAllDevices: true, optionalServices: OBDLINK_SERVICE_UUIDS }
+        : {
+            filters: [
+              { namePrefix: 'OBDLink' },
+              { namePrefix: 'MX+' },
+              { namePrefix: 'ScanTool' },
+              { namePrefix: 'OBD' },
+              { namePrefix: 'STN' },
+              { namePrefix: 'ELM' },
+              { namePrefix: 'Vgate' },
+              { namePrefix: 'VEEPEAK' },
+            ],
+            optionalServices: OBDLINK_SERVICE_UUIDS,
+          };
+
+      this.device = await navigator.bluetooth.requestDevice(request);
 
       onStatus?.(`Connecting to ${this.device.name || 'OBDLink MX+'}...`);
       
@@ -111,38 +160,58 @@ export class OBDLinkBluetoothManager {
       }
 
       onStatus?.('Discovering OBD-II Services...');
-      
-      // Find matching service and characteristics
-      let foundService: BluetoothRemoteGATTService | null = null;
-      for (const uuid of OBDLINK_SERVICE_UUIDS) {
+
+      // Enumerate everything the device exposes rather than probing known UUIDs one by
+      // one, so an adapter using a serial service we have not seen before still works.
+      // Only services named in optionalServices are visible, which is why that list has
+      // to stay broad.
+      let services: BluetoothRemoteGATTService[] = [];
+      try {
+        services = await this.server.getPrimaryServices();
+      } catch {
+        for (const uuid of OBDLINK_SERVICE_UUIDS) {
+          try {
+            services.push(await this.server.getPrimaryService(uuid));
+          } catch {
+            // Not present on this device
+          }
+        }
+      }
+
+      if (!services.length) {
+        throw new Error(
+          'Connected, but the adapter exposes no readable BLE service. This usually means it is a Bluetooth Classic (SPP) adapter, which Web Bluetooth cannot use.'
+        );
+      }
+
+      // A serial link needs one characteristic to write commands and one that notifies
+      // with replies. Some adapters combine both into a single characteristic.
+      for (const service of services) {
+        let characteristics: BluetoothRemoteGATTCharacteristic[] = [];
         try {
-          foundService = await this.server.getPrimaryService(uuid);
-          if (foundService) break;
+          characteristics = await service.getCharacteristics();
         } catch {
-          // Try next
+          continue;
+        }
+
+        const notifier = characteristics.find((c) => c.properties.notify || c.properties.indicate);
+        const writer = characteristics.find(
+          (c) => c.properties.write || c.properties.writeWithoutResponse
+        );
+
+        if (notifier && (writer || notifier)) {
+          this.txCharacteristic = notifier;
+          this.rxCharacteristic = writer ?? notifier;
+          await notifier.startNotifications();
+          notifier.addEventListener('characteristicvaluechanged', this.handleNotification.bind(this));
+          break;
         }
       }
 
-      if (!foundService) {
-        throw new Error('Could not find compatible OBD BLE service on device.');
-      }
-
-      // Find RX & TX characteristics
-      const characteristics = await foundService.getCharacteristics();
-      for (const char of characteristics) {
-        if (char.properties.notify || char.properties.indicate) {
-          this.txCharacteristic = char;
-          await char.startNotifications();
-          char.addEventListener('characteristicvaluechanged', this.handleNotification.bind(this));
-        }
-        if (char.properties.write || char.properties.writeWithoutResponse) {
-          this.rxCharacteristic = char;
-        }
-      }
-
-      if (!this.rxCharacteristic) {
-        // Some devices use single characteristic for both
-        this.rxCharacteristic = this.txCharacteristic;
+      if (!this.txCharacteristic || !this.rxCharacteristic) {
+        throw new Error(
+          'Connected, but found no serial read/write characteristic on this device. It is probably not an OBD adapter, or it only speaks Bluetooth Classic.'
+        );
       }
 
       onStatus?.('Initializing 2013 Honda Civic ISO 15765-4 CAN Protocol...');
@@ -153,8 +222,36 @@ export class OBDLinkBluetoothManager {
       return true;
     } catch (err: any) {
       this.disconnect();
-      throw err;
+      throw new Error(this.describeConnectError(err));
     }
+  }
+
+  /**
+   * Turns a Web Bluetooth DOMException into something that says what to do next.
+   * NotFoundError covers both "you closed the picker" and "the picker never found
+   * anything", which are very different problems wearing the same name.
+   */
+  private describeConnectError(err: any): string {
+    const name = err?.name ?? '';
+    const message = err?.message ?? String(err);
+
+    if (name === 'NotFoundError') {
+      return (
+        'No adapter was selected. If the list stayed empty: turn Location on (Android requires it for Bluetooth LE scanning), ' +
+        'then remove the adapter from Android Bluetooth settings - a Classic pairing there can stop it advertising over LE. ' +
+        'Use "Show all nearby devices" to see everything that is advertising.'
+      );
+    }
+    if (name === 'SecurityError') {
+      return `Blocked by the browser: ${message}. Web Bluetooth needs an HTTPS page and a tap to start the scan.`;
+    }
+    if (name === 'NetworkError') {
+      return 'Connection dropped during pairing. Make sure the ignition is ON, the adapter LED is lit, and nothing else is connected to it.';
+    }
+    if (name === 'NotSupportedError') {
+      return 'This device or browser refused the connection. Web Bluetooth cannot use Bluetooth Classic (SPP) adapters - only Bluetooth LE.';
+    }
+    return message;
   }
 
   public disconnect(): void {
