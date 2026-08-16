@@ -1,10 +1,15 @@
-import { CIVIC_2013_SPECS } from '../services/obd2/civicSpecs';
+import { CIVIC_2013_SPECS, FUEL_BLENDS, LITERS_PER_US_GALLON } from '../services/obd2/civicSpecs';
 import { GearCalculatorEngine } from '../services/obd2/gearCalculator';
 import { FuelModelEngine } from '../services/obd2/fuelModel';
 import { OilLifeEngine } from '../services/obd2/oilLifeModel';
 import { HONDA_DTC_DATABASE } from '../services/obd2/dtcSpecs';
 import { OBDLinkBluetoothManager } from '../services/bluetooth/obdlinkBluetooth';
 import { decodeReadinessMonitors, UNKNOWN_MONITORS } from '../services/obd2/dtcScanner';
+import {
+  resolveIntegrationStep,
+  shouldRecordLifetime,
+  MAX_INTEGRATION_STEP_SEC,
+} from '../services/obd2/integrationRules';
 
 // Polyfill localStorage for Node test runner
 if (typeof globalThis.localStorage === 'undefined') {
@@ -68,9 +73,15 @@ assert(gN.currentGear === 'N', `Neutral detected when stationary (Got: ${gN.curr
 console.log('\n--- 2. Physics Fuel Model & Deceleration Fuel Cut-Off (DFCO) ---');
 const fuelModel = new FuelModelEngine();
 
-// Air-Fuel Ratio computation
-const afrStoich = fuelModel.calculateAirFuelRatio(1.0, 0, 0);
-assert(Math.abs(afrStoich - 14.7) < 0.05, `AFR at Stoichiometry is 14.7:1 (Got: ${afrStoich.toFixed(2)})`);
+// Air-Fuel Ratio computation. Stoichiometry is a property of the fuel, not a constant:
+// the ECU targets lambda 1.0 for whatever is in the tank, so both directions are pinned.
+fuelModel.setFuelBlend('E0');
+const afrStoichE0 = fuelModel.calculateAirFuelRatio(1.0, 0, 0);
+assert(Math.abs(afrStoichE0 - 14.7) < 0.05, `AFR at stoichiometry on E0 is 14.7:1 (Got: ${afrStoichE0.toFixed(2)})`);
+
+fuelModel.setFuelBlend('E10'); // the default - US pump gas
+const afrStoichE10 = fuelModel.calculateAirFuelRatio(1.0, 0, 0);
+assert(Math.abs(afrStoichE10 - 13.78) < 0.05, `AFR at stoichiometry on E10 is 13.78:1 (Got: ${afrStoichE10.toFixed(2)})`);
 
 const afrRich = fuelModel.calculateAirFuelRatio(0.85, 0, 0);
 assert(afrRich < 13.0, `Rich AFR properly calculated for power pull (Got: ${afrRich.toFixed(2)})`);
@@ -185,6 +196,92 @@ assert(
   Object.values(UNKNOWN_MONITORS).every((v) => v === 'N/A'),
   'Unreadable ECU reply falls back to all-N/A, never all-Ready'
 );
+
+// 7. FUEL BLEND CHEMISTRY & LIFETIME MPG
+console.log('\n--- 7. Fuel Blend Chemistry (E0 / E10 / E15) ---');
+
+// E0 must reproduce the pure-gasoline reference exactly.
+const e0 = FUEL_BLENDS.E0;
+assert(Math.abs(e0.stoichAfr - 14.7) < 0.001, `E0 stoichiometric AFR is the gasoline reference 14.7 (${e0.stoichAfr.toFixed(3)})`);
+assert(Math.abs(e0.ethanolByMass) < 1e-9, `E0 contains no ethanol by mass (${e0.ethanolByMass})`);
+
+// E10 is 10% ethanol BY VOLUME; ethanol is denser, so its mass share is slightly higher.
+const e10 = FUEL_BLENDS.E10;
+assert(
+  e10.ethanolByMass > 0.10 && e10.ethanolByMass < 0.11,
+  `E10 mass fraction exceeds its volume fraction because ethanol is denser (${(e10.ethanolByMass * 100).toFixed(2)}% by mass)`
+);
+assert(
+  e10.stoichAfr > 13.6 && e10.stoichAfr < 13.9,
+  `E10 stoichiometric AFR lands near 13.8 by mass-correct blending (${e10.stoichAfr.toFixed(3)})`
+);
+assert(e10.stoichAfr < e0.stoichAfr, `Adding ethanol lowers the stoichiometric ratio (${e10.stoichAfr.toFixed(2)} < ${e0.stoichAfr.toFixed(2)})`);
+assert(
+  e10.densityGramsPerLiter > e0.densityGramsPerLiter,
+  `Adding ethanol raises blend density (${e10.densityGramsPerLiter.toFixed(1)} > ${e0.densityGramsPerLiter.toFixed(1)} g/L)`
+);
+
+// More ethanol keeps pushing the ratio down.
+assert(
+  FUEL_BLENDS.E15.stoichAfr < e10.stoichAfr,
+  `E15 sits below E10 (${FUEL_BLENDS.E15.stoichAfr.toFixed(2)} < ${e10.stoichAfr.toFixed(2)})`
+);
+
+// Reciprocal blending is the point: a naive average of the two AFRs would give ~14.1 for
+// E10, which is the figure that made the old pure-gasoline assumption look defensible.
+const naiveAverage = 0.9 * 14.7 + 0.1 * 9.0;
+assert(
+  Math.abs(e10.stoichAfr - naiveAverage) > 0.2,
+  `Mass-correct E10 AFR differs materially from a naive volume average (${e10.stoichAfr.toFixed(2)} vs ${naiveAverage.toFixed(2)})`
+);
+
+// Density round-trip: g/L -> g/gal must use the exact US gallon.
+assert(
+  Math.abs(e10.densityGramsPerGallon - e10.densityGramsPerLiter * LITERS_PER_US_GALLON) < 0.001,
+  'Blend density converts between litres and US gallons consistently'
+);
+
+// The blend actually changes computed fuel flow: same air mass, more fuel on E10.
+const blendModel = new FuelModelEngine();
+blendModel.setFuelBlend('E0');
+const flowE0 = blendModel.calculateFuelFlow(10, blendModel.getFuelBlend().stoichAfr, false);
+blendModel.setFuelBlend('E10');
+const flowE10 = blendModel.calculateFuelFlow(10, blendModel.getFuelBlend().stoichAfr, false);
+assert(
+  flowE10.fuelFlowGalPerHour > flowE0.fuelFlowGalPerHour,
+  `E10 burns more volume than E0 for identical airflow (${flowE10.fuelFlowGalPerHour.toFixed(4)} > ${flowE0.fuelFlowGalPerHour.toFixed(4)} gal/hr)`
+);
+
+// At lambda 1.0 the AFR returned must be the blend's stoichiometric ratio, not 14.7.
+blendModel.setFuelBlend('E10');
+const afrAtStoichE10 = blendModel.calculateAirFuelRatio(1.0, 0, 0);
+assert(
+  Math.abs(afrAtStoichE10 - e10.stoichAfr) < 0.001,
+  `Lambda 1.0 on E10 yields the blend's ratio rather than gasoline's (${afrAtStoichE10.toFixed(2)})`
+);
+
+// Lifetime MPG is total miles over total gallons - the definition, not an average of averages.
+const lifetimeMpg = 1000 / 31.25;
+assert(Math.abs(lifetimeMpg - 32) < 0.001, `Lifetime MPG is cumulative miles over cumulative gallons (${lifetimeMpg.toFixed(2)})`);
+
+console.log('\n--- 8. Lifetime Record Integrity ---');
+
+// Only a real adapter may write to the permanent record.
+assert(shouldRecordLifetime('connected') === true, 'A connected adapter records to the lifetime figure');
+assert(shouldRecordLifetime('simulating') === false, 'Simulated driving is refused by the lifetime figure');
+assert(shouldRecordLifetime('disconnected') === false, 'Disconnected state records nothing');
+assert(shouldRecordLifetime('connecting') === false, 'Mid-connection state records nothing');
+assert(shouldRecordLifetime('error') === false, 'Error state records nothing');
+
+// Normal 80ms ticks integrate; a stalled timer does not.
+assert(resolveIntegrationStep(0.08) === 0.08, 'A normal 80ms tick integrates in full');
+assert(resolveIntegrationStep(0.95) === 0.95, 'A slow but plausible tick still integrates');
+assert(resolveIntegrationStep(MAX_INTEGRATION_STEP_SEC) === MAX_INTEGRATION_STEP_SEC, 'The boundary step integrates');
+assert(resolveIntegrationStep(1200) === 0, 'A 20-minute stall from a locked phone is discarded, not integrated');
+assert(resolveIntegrationStep(5) === 0, 'A 5-second gap already exceeds the trusted window');
+assert(resolveIntegrationStep(0) === 0, 'A zero step contributes nothing');
+assert(resolveIntegrationStep(-3) === 0, 'A negative step (clock adjustment) contributes nothing');
+assert(resolveIntegrationStep(NaN) === 0, 'A non-finite step contributes nothing');
 
 console.log('\n==================================================');
 console.log(`🏁 TEST RESULTS: ${passed} PASSED, ${failed} FAILED`);

@@ -1,12 +1,33 @@
-import { CIVIC_2013_SPECS } from './civicSpecs';
+import {
+  CIVIC_2013_SPECS,
+  FUEL_BLENDS,
+  DEFAULT_FUEL_BLEND,
+  FuelBlendId,
+  FuelBlendProperties,
+} from './civicSpecs';
 
 export class FuelModelEngine {
   private recentMpgHistory: number[] = [];
   private readonly MAX_HISTORY_SAMPLES = 600; // 600 samples (30 seconds at 20Hz)
 
   /**
+   * The blend in the tank. Every mass-to-volume and air-to-fuel conversion below depends
+   * on it: the ECU targets stoichiometry for whatever fuel is actually present, so the
+   * lambda it reports is relative to that fuel's ratio, not to pure gasoline's 14.7.
+   */
+  private blend: FuelBlendProperties = FUEL_BLENDS[DEFAULT_FUEL_BLEND];
+
+  public setFuelBlend(id: FuelBlendId): void {
+    this.blend = FUEL_BLENDS[id] ?? FUEL_BLENDS[DEFAULT_FUEL_BLEND];
+  }
+
+  public getFuelBlend(): FuelBlendProperties {
+    return this.blend;
+  }
+
+  /**
    * Calculates actual Air:Fuel Ratio from wideband lambda and fuel trims.
-   * If lambda is 1.0 (stoich) and fuel trims are 0%, AFR is 14.7.
+   * At lambda 1.0 with zero trims this returns the blend's stoichiometric ratio.
    */
   public calculateAirFuelRatio(
     equivalenceRatioLambda: number = 1.0,
@@ -16,13 +37,13 @@ export class FuelModelEngine {
     // If wideband lambda (PID 0124) is available and valid, it already reflects
     // post-trim combustion AFR. Using trims ON TOP of lambda double-counts.
     if (equivalenceRatioLambda > 0.5 && equivalenceRatioLambda < 2.0) {
-      const dynamicAfr = CIVIC_2013_SPECS.stoichiometricAfr * equivalenceRatioLambda;
-      return Math.max(9.0, Math.min(22.0, dynamicAfr));
+      const dynamicAfr = this.blend.stoichAfr * equivalenceRatioLambda;
+      return Math.max(6.0, Math.min(22.0, dynamicAfr));
     }
     // Narrowband fallback: positive trim = ECU injecting MORE fuel = lower AFR
     const totalTrimFactor = 1.0 + (shortTermFuelTrimPercent + longTermFuelTrimPercent) / 100.0;
-    const dynamicAfr = CIVIC_2013_SPECS.stoichiometricAfr / (totalTrimFactor > 0 ? totalTrimFactor : 1.0);
-    return Math.max(9.0, Math.min(22.0, dynamicAfr));
+    const dynamicAfr = this.blend.stoichAfr / (totalTrimFactor > 0 ? totalTrimFactor : 1.0);
+    return Math.max(6.0, Math.min(22.0, dynamicAfr));
   }
 
   /**
@@ -64,19 +85,16 @@ export class FuelModelEngine {
       };
     }
 
-    const afr = airFuelRatio > 0 ? airFuelRatio : CIVIC_2013_SPECS.stoichiometricAfr;
+    const afr = airFuelRatio > 0 ? airFuelRatio : this.blend.stoichAfr;
     const maf = Math.max(0, mafGramsPerSec);
-    
-    // Fuel mass flow (g/s) = Air mass flow (g/s) / AFR
+
+    // Fuel mass flow (g/s) = Air mass flow (g/s) / AFR.
+    // MAF measures air mass directly, so this chain stays in mass until the final
+    // division by density - which is where the blend's density has to be the real one.
     const fuelFlowGramsPerSec = maf / afr;
 
-    // Convert to Gallons / Hour:
-    // (g/s * 3600 s/hr) / (2788 g/gal)
-    const fuelFlowGalPerHour = (fuelFlowGramsPerSec * 3600) / CIVIC_2013_SPECS.gasolineDensityGramsPerGallon;
-    
-    // Convert to Liters / Hour:
-    // (g/s * 3600 s/hr) / (736.5 g/L)
-    const fuelFlowLitersPerHour = (fuelFlowGramsPerSec * 3600) / CIVIC_2013_SPECS.gasolineDensityGramsPerLiter;
+    const fuelFlowGalPerHour = (fuelFlowGramsPerSec * 3600) / this.blend.densityGramsPerGallon;
+    const fuelFlowLitersPerHour = (fuelFlowGramsPerSec * 3600) / this.blend.densityGramsPerLiter;
 
     return {
       fuelFlowGramsPerSec,

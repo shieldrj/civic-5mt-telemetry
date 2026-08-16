@@ -29,7 +29,8 @@ export interface OBDLiveMetrics {
   fuelFlowLitersPerHour: number;// Current fuel consumption (L/hr)
   airFuelRatio: number;         // Actual Air:Fuel ratio (e.g. 14.7)
   rolling30sMpg: number;        // Smooth 30s rolling window
-  lifetimeMpg: number;           // Cumulative lifetime MPG (persisted)
+  lifetimeMpg: number;           // Cumulative lifetime MPG (persisted, real OBD data only)
+  lifetimeMiles: number;         // Real vehicle miles behind lifetimeMpg (0 = never connected)
   fuelRangeMiles: number;        // Estimated miles-to-empty from fuel level + rolling MPG
 
   // Manual Transmission Dynamics

@@ -1,11 +1,17 @@
 import { OBDLiveMetrics, TripAnalytics, OilLifeProfile, LifetimeStats, ConnectionStatus } from '../types/obd';
-import { CIVIC_2013_SPECS } from './obd2/civicSpecs';
+import {
+  CIVIC_2013_SPECS,
+  FUEL_BLENDS,
+  FuelBlendId,
+  FuelBlendProperties,
+} from './obd2/civicSpecs';
 import { FuelModelEngine } from './obd2/fuelModel';
 import { GearCalculatorEngine } from './obd2/gearCalculator';
 import { OilLifeEngine } from './obd2/oilLifeModel';
 import { DtcScannerEngine, DtcScanReport } from './obd2/dtcScanner';
 import { OBDLinkBluetoothManager, RawObdData } from './bluetooth/obdlinkBluetooth';
 import { CivicSimulatorEngine, SimulatorScenario } from './simulator/civicSimulator';
+import { resolveIntegrationStep, shouldRecordLifetime } from './obd2/integrationRules';
 
 export class TelemetryManager {
   private fuelModel: FuelModelEngine;
@@ -30,6 +36,10 @@ export class TelemetryManager {
   private timerHandle: any = null;
   private lastUpdateTimestamp: number = Date.now();
 
+  private static readonly LIFETIME_KEY = 'civic_2013_lifetime_stats_v2';
+  private static readonly LEGACY_LIFETIME_KEY = 'civic_2013_lifetime_stats_v1';
+  private static readonly FUEL_BLEND_KEY = 'civic_2013_fuel_blend_v1';
+
   constructor() {
     this.fuelModel = new FuelModelEngine();
     this.gearCalculator = new GearCalculatorEngine();
@@ -41,6 +51,15 @@ export class TelemetryManager {
     this.currentMetrics = this.getInitialMetrics();
     this.tripAnalytics = this.getInitialTripAnalytics();
     this.lifetimeStats = this.loadLifetimeStats();
+    this.loadFuelBlend();
+
+    // The 30s save debounce would otherwise lose the tail of a drive whenever the app is
+    // backgrounded or closed, which on a phone is how it ends every single time.
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') this.saveLifetimeStats();
+      });
+    }
 
     // Start in simulator mode by default so user immediately sees live reactive gauges on launch!
     this.startSimulation();
@@ -103,6 +122,7 @@ export class TelemetryManager {
       airFuelRatio: 14.7,
       rolling30sMpg: 32.5,
       lifetimeMpg: this.lifetimeStats?.lifetimeMpg ?? 0,
+      lifetimeMiles: this.lifetimeStats?.totalMiles ?? 0,
       fuelRangeMiles: 275,
       currentGear: 'N',
       gearRatio: 0,
@@ -205,8 +225,13 @@ export class TelemetryManager {
 
   private processUpdateStep(): void {
     const now = Date.now();
-    const dtSec = Math.max(0.01, (now - this.lastUpdateTimestamp) / 1000);
+    const rawDtSec = (now - this.lastUpdateTimestamp) / 1000;
     this.lastUpdateTimestamp = now;
+
+    // Display smoothing can use the raw step; the permanent record cannot. See
+    // resolveIntegrationStep for why an over-long gap is dropped rather than integrated.
+    const dtSec = Math.max(0.01, rawDtSec);
+    const integrationDtSec = resolveIntegrationStep(rawDtSec);
 
     let raw: RawObdData;
     if (this.connectionStatus === 'simulating') {
@@ -276,6 +301,7 @@ export class TelemetryManager {
       airFuelRatio: parseFloat(afr.toFixed(2)),
       rolling30sMpg: parseFloat(rollingMpg.toFixed(1)),
       lifetimeMpg: parseFloat(this.lifetimeStats.lifetimeMpg.toFixed(1)),
+      lifetimeMiles: this.lifetimeStats.totalMiles,
       fuelRangeMiles: Math.round(fuelRangeMiles),
       currentGear: gearResult.currentGear,
       gearRatio: parseFloat(gearResult.calculatedRatio.toFixed(2)),
@@ -287,7 +313,7 @@ export class TelemetryManager {
     };
 
     // 6. Integrate Trip Statistics
-    this.updateTripAnalytics(dtSec, speedMphRaw, fuelFlow.fuelFlowGalPerHour, isDfco, raw.rpm);
+    this.updateTripAnalytics(integrationDtSec, speedMphRaw, fuelFlow.fuelFlowGalPerHour, isDfco, raw.rpm);
 
     // 7. Record Engine Wear to Oil Life Model
     this.oilLifeModel.recordTelemetryStep(raw.rpm, raw.coolantC, raw.engineLoad, speedMph, dtSec);
@@ -303,6 +329,7 @@ export class TelemetryManager {
     rpm: number
   ): void {
     if (rpm < 350) return; // Engine off
+    if (dtSec <= 0) return; // Unobserved gap - see MAX_INTEGRATION_STEP_SEC
 
     this.tripAnalytics.tripDurationSec += dtSec;
     const stepMiles = (speedMph / 3600) * dtSec;
@@ -311,8 +338,10 @@ export class TelemetryManager {
     const stepFuelGal = (fuelFlowGph / 3600) * dtSec;
     this.tripAnalytics.totalFuelUsedGallons += stepFuelGal;
 
-    // Accumulate into persistent lifetime stats
-    this.updateLifetimeStats(stepMiles, stepFuelGal);
+    // Accumulate into persistent lifetime stats - REAL VEHICLE DATA ONLY.
+    if (shouldRecordLifetime(this.connectionStatus)) {
+      this.updateLifetimeStats(stepMiles, stepFuelGal);
+    }
 
     // Idle fuel tracking
     if (speedMph <= 1.0) {
@@ -361,9 +390,25 @@ export class TelemetryManager {
 
   private loadLifetimeStats(): LifetimeStats {
     try {
-      const saved = localStorage.getItem('civic_2013_lifetime_stats_v1');
+      // v1 mixed simulated driving in with real driving and cannot be separated after the
+      // fact, so it is dropped rather than migrated. Starting from zero on real data is
+      // worth more than a large number that means nothing.
+      localStorage.removeItem(TelemetryManager.LEGACY_LIFETIME_KEY);
+
+      const saved = localStorage.getItem(TelemetryManager.LIFETIME_KEY);
       if (saved) {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved) as Partial<LifetimeStats>;
+        const totalMiles = Number(parsed.totalMiles);
+        const totalFuelGallons = Number(parsed.totalFuelGallons);
+        if (Number.isFinite(totalMiles) && Number.isFinite(totalFuelGallons)) {
+          return {
+            totalMiles: Math.max(0, totalMiles),
+            totalFuelGallons: Math.max(0, totalFuelGallons),
+            lifetimeMpg:
+              totalFuelGallons > 0.01 ? totalMiles / totalFuelGallons : 0,
+            firstTrackedTimestamp: Number(parsed.firstTrackedTimestamp) || Date.now(),
+          };
+        }
       }
     } catch {
       // Fallback
@@ -378,9 +423,46 @@ export class TelemetryManager {
 
   private saveLifetimeStats(): void {
     try {
-      localStorage.setItem('civic_2013_lifetime_stats_v1', JSON.stringify(this.lifetimeStats));
+      localStorage.setItem(TelemetryManager.LIFETIME_KEY, JSON.stringify(this.lifetimeStats));
     } catch {
       // Ignore storage quota errors
+    }
+  }
+
+  /** Clears the lifetime record and starts accumulating again from zero. */
+  public resetLifetimeStats(): void {
+    this.lifetimeStats = {
+      totalMiles: 0,
+      totalFuelGallons: 0,
+      lifetimeMpg: 0,
+      firstTrackedTimestamp: Date.now(),
+    };
+    this.saveLifetimeStats();
+    this.notify();
+  }
+
+  public setFuelBlend(id: FuelBlendId): void {
+    this.fuelModel.setFuelBlend(id);
+    try {
+      localStorage.setItem(TelemetryManager.FUEL_BLEND_KEY, id);
+    } catch {
+      // Ignore storage quota errors
+    }
+    this.notify();
+  }
+
+  public getFuelBlend(): FuelBlendProperties {
+    return this.fuelModel.getFuelBlend();
+  }
+
+  private loadFuelBlend(): void {
+    try {
+      const saved = localStorage.getItem(TelemetryManager.FUEL_BLEND_KEY) as FuelBlendId | null;
+      if (saved && FUEL_BLENDS[saved]) {
+        this.fuelModel.setFuelBlend(saved);
+      }
+    } catch {
+      // Keep the default blend
     }
   }
 

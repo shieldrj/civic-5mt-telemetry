@@ -1,23 +1,34 @@
 import React from 'react';
 import { Fuel, DollarSign, Activity, Zap, TrendingUp, Waves } from 'lucide-react';
 import { OBDLiveMetrics, TripAnalytics } from '../types/obd';
+import { FUEL_BLENDS, FuelBlendId, FuelBlendProperties } from '../services/obd2/civicSpecs';
 
 interface MpgTelemetryCardProps {
   metrics: OBDLiveMetrics;
   trip: TripAnalytics;
+  activeBlend: FuelBlendProperties;
+  onSelectFuelBlend: (id: FuelBlendId) => void;
 }
 
-export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({ metrics, trip }) => {
+export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({
+  metrics,
+  trip,
+  activeBlend,
+  onSelectFuelBlend,
+}) => {
   const isDfco = metrics.isDfcoActive;
-  
-  // AFR status
+
+  // AFR status, judged against the blend rather than a fixed 14.7. Stoichiometry moves
+  // with the fuel, so comparing an E10 mixture to gasoline's ratio would read every
+  // perfectly normal cruise as rich.
   const afr = metrics.airFuelRatio;
-  let afrStatus = 'Stoich (14.7)';
+  const lambda = afr / activeBlend.stoichAfr;
+  let afrStatus = `Stoich (${activeBlend.stoichAfr.toFixed(2)})`;
   let afrColor = 'text-[#00e676]';
-  if (afr < 13.2) {
+  if (lambda < 0.97) {
     afrStatus = 'Rich (Power)';
     afrColor = 'text-[#ffaa00]';
-  } else if (afr > 15.8) {
+  } else if (lambda > 1.03) {
     afrStatus = 'Lean (Eco)';
     afrColor = 'text-[#00d2ff]';
   }
@@ -155,6 +166,34 @@ export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({ metrics, tri
               {metrics.longTermFuelTrim > 0 ? `+${metrics.longTermFuelTrim}` : metrics.longTermFuelTrim}%
             </strong>
           </span>
+        </div>
+      </div>
+
+      {/* Fuel blend - drives the stoichiometric ratio and density every fuel figure
+          on this screen depends on, so it is set here rather than buried in a menu. */}
+      <div className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded-lg p-2.5 flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[11px] font-bold text-[#94a3b8] font-['Chakra_Petch'] uppercase tracking-wider">
+            Fuel In Tank
+          </span>
+          <span className="text-[11px] text-[#64748b] tabular-nums">
+            {activeBlend.stoichAfr.toFixed(2)}:1 &bull; {activeBlend.densityGramsPerLiter.toFixed(0)} g/L
+          </span>
+        </div>
+        <div className="grid grid-cols-3 gap-1.5">
+          {(Object.keys(FUEL_BLENDS) as FuelBlendId[]).map((id) => (
+            <button
+              key={id}
+              onClick={() => onSelectFuelBlend(id)}
+              className={`py-1.5 rounded-md text-[12px] font-bold font-['Chakra_Petch'] border transition-all ${
+                activeBlend.id === id
+                  ? 'bg-[#ff2a40] text-white border-[#ff4b5c]'
+                  : 'bg-[#0e111a] text-[#94a3b8] border-[rgba(255,255,255,0.08)]'
+              }`}
+            >
+              {id}
+            </button>
+          ))}
         </div>
       </div>
 

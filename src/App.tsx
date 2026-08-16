@@ -67,6 +67,7 @@ export function App() {
   const [isBluetoothModalOpen, setIsBluetoothModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('cockpit');
+  const [fuelBlend, setFuelBlend] = useState(() => telemetryManager.getFuelBlend());
   const [viewport, setViewport] = useState(() => ({
     width: typeof window !== 'undefined' ? window.innerWidth : 412,
     height: typeof window !== 'undefined' ? window.innerHeight : 900,
@@ -182,6 +183,10 @@ export function App() {
   // Charging system status (control module / battery voltage)
   const isBatteryLow = metrics.batteryVoltage < 12.0;
   const isBatteryHigh = metrics.batteryVoltage > 15.0;
+
+  // A tenth of a mile of real driving is enough to stop showing a placeholder, but the
+  // figure stays visibly provisional until there is a meaningful sample behind it.
+  const hasLifetimeData = metrics.lifetimeMiles >= 0.1 && metrics.lifetimeMpg > 0;
 
   const vitals: { icon: typeof Thermometer; label: string; value: string; tone: VitalTone }[] = [
     {
@@ -359,18 +364,33 @@ export function App() {
 
             {/* 2. Twin Large Driving Dials: Real-Time Instant MPG & Oil Health */}
             <div className="order-2 md:contents w-full grid grid-cols-2 gap-3 sm:gap-6 justify-items-center items-center">
-              {/* Instantaneous Driving MPG */}
+              {/* Lifetime MPG - real vehicle miles only, so it reads 0 until an adapter
+                  has actually been connected. The sub-label carries the mileage behind
+                  it, because an average over 4 miles and one over 4,000 are not the
+                  same claim. */}
               <div className="flex justify-center">
                 <RadialGauge
-                  value={metrics.instantMpg}
+                  value={hasLifetimeData ? metrics.lifetimeMpg : 0}
                   min={0}
-                  max={60}
-                  title="INSTANT MPG"
+                  max={50}
+                  title="LIFETIME MPG"
                   unit="MPG"
-                  subValue={metrics.isDfcoActive ? 'DFCO CUT' : `${metrics.rolling30sMpg} avg`}
-                  subLabel="30s"
-                  accentColor={metrics.isDfcoActive ? '#00d2ff' : metrics.instantMpg >= 35 ? '#00e676' : '#f8fafc'}
-                  ticks={[0, 15, 30, 45, 60]}
+                  subValue={
+                    hasLifetimeData
+                      ? `${Math.round(metrics.lifetimeMiles).toLocaleString()} mi`
+                      : 'Needs OBD'
+                  }
+                  subLabel={hasLifetimeData ? 'Tracked' : 'Status'}
+                  accentColor={
+                    !hasLifetimeData
+                      ? '#475569'
+                      : metrics.lifetimeMpg >= 32
+                      ? '#00e676'
+                      : metrics.lifetimeMpg >= 26
+                      ? '#f8fafc'
+                      : '#ffaa00'
+                  }
+                  ticks={[0, 10, 20, 30, 40, 50]}
                   size={twinGaugeSize}
                 />
               </div>
@@ -436,7 +456,15 @@ export function App() {
       {/* TAB 2: DEDICATED PHYSICS MPG & FUEL FLOW */}
       {activeTab === 'fuel_physics' && (
         <main className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pb-1">
-          <MpgTelemetryCard metrics={metrics} trip={trip} />
+          <MpgTelemetryCard
+            metrics={metrics}
+            trip={trip}
+            activeBlend={fuelBlend}
+            onSelectFuelBlend={(id) => {
+              telemetryManager.setFuelBlend(id);
+              setFuelBlend(telemetryManager.getFuelBlend());
+            }}
+          />
         </main>
       )}
 
@@ -505,7 +533,15 @@ export function App() {
             scenario={telemetryManager.simulator.scenario}
             onSelectScenario={(sc) => telemetryManager.startSimulation(sc)}
           />
-          <MpgTelemetryCard metrics={metrics} trip={trip} />
+          <MpgTelemetryCard
+            metrics={metrics}
+            trip={trip}
+            activeBlend={fuelBlend}
+            onSelectFuelBlend={(id) => {
+              telemetryManager.setFuelBlend(id);
+              setFuelBlend(telemetryManager.getFuelBlend());
+            }}
+          />
           <TripSummaryBar
             trip={trip}
             onResetTrip={() => telemetryManager.resetTrip()}
