@@ -4,7 +4,7 @@ import { FuelModelEngine } from './obd2/fuelModel';
 import { GearCalculatorEngine } from './obd2/gearCalculator';
 import { OilLifeEngine } from './obd2/oilLifeModel';
 import { DtcScannerEngine, DtcScanReport } from './obd2/dtcScanner';
-import { VLinkerBluetoothManager, RawObdData } from './bluetooth/vlinkerBluetooth';
+import { OBDLinkBluetoothManager, RawObdData } from './bluetooth/obdlinkBluetooth';
 import { CivicSimulatorEngine, SimulatorScenario } from './simulator/civicSimulator';
 
 export class TelemetryManager {
@@ -12,7 +12,7 @@ export class TelemetryManager {
   private gearCalculator: GearCalculatorEngine;
   public oilLifeModel: OilLifeEngine;
   public dtcScanner: DtcScannerEngine;
-  public bluetooth: VLinkerBluetoothManager;
+  public bluetooth: OBDLinkBluetoothManager;
   public simulator: CivicSimulatorEngine;
 
   private listeners: ((metrics: OBDLiveMetrics, trip: TripAnalytics, oil: OilLifeProfile, status: ConnectionStatus) => void)[] = [];
@@ -34,7 +34,7 @@ export class TelemetryManager {
     this.fuelModel = new FuelModelEngine();
     this.gearCalculator = new GearCalculatorEngine();
     this.oilLifeModel = new OilLifeEngine();
-    this.bluetooth = new VLinkerBluetoothManager();
+    this.bluetooth = new OBDLinkBluetoothManager();
     this.dtcScanner = new DtcScannerEngine(this.bluetooth);
     this.simulator = new CivicSimulatorEngine();
 
@@ -143,7 +143,7 @@ export class TelemetryManager {
   public async connectBluetooth(): Promise<void> {
     this.stopLoop();
     this.connectionStatus = 'connecting';
-    this.statusMessage = 'Connecting to vLinker MC+...';
+    this.statusMessage = 'Connecting to OBDLink MX+...';
     this.notify();
 
     try {

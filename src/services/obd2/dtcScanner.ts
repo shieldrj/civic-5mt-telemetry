@@ -1,4 +1,4 @@
-import { VLinkerBluetoothManager } from '../bluetooth/vlinkerBluetooth';
+import { OBDLinkBluetoothManager } from '../bluetooth/obdlinkBluetooth';
 import { DtcDefinition, HONDA_DTC_DATABASE } from './dtcSpecs';
 
 export type DtcStatusType = 'Pending' | 'Confirmed' | 'Permanent';
@@ -39,9 +39,9 @@ export interface DtcScanReport {
 }
 
 export class DtcScannerEngine {
-  private bluetooth: VLinkerBluetoothManager;
+  private bluetooth: OBDLinkBluetoothManager;
 
-  constructor(bluetooth: VLinkerBluetoothManager) {
+  constructor(bluetooth: OBDLinkBluetoothManager) {
     this.bluetooth = bluetooth;
   }
 
@@ -101,7 +101,7 @@ export class DtcScannerEngine {
       };
     }
 
-    // --- Live Hardware Scan via Vgate vLinker MC+ ---
+    // --- Live Hardware Scan via OBDLink MX+ ---
     try {
       // 1. Check MIL status and readiness monitors (Mode 01 PID 01)
       const milResp = await this.bluetooth.sendCommand('0101', 800);

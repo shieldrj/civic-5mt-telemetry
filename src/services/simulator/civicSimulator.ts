@@ -1,5 +1,5 @@
 import { CIVIC_2013_SPECS } from '../obd2/civicSpecs';
-import { RawObdData } from '../bluetooth/vlinkerBluetooth';
+import { RawObdData } from '../bluetooth/obdlinkBluetooth';
 
 export type SimulatorScenario = 'manual' | 'city_commute' | 'spirited_pull' | 'highway_cruise';
 

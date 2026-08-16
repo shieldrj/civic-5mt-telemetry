@@ -1,5 +1,5 @@
 /**
- * Vgate vLinker MC+ Bluetooth Low Energy (BLE) Client & ELM327/STN2120 Parser
+ * OBDLink MX+ Bluetooth Low Energy (BLE) Client & STN/ELM327 CAN Parser
  */
 
 export interface RawObdData {
@@ -16,30 +16,30 @@ export interface RawObdData {
   lambda: number;
 }
 
-export const VLINKER_SERVICE_UUIDS = [
-  '0000fff0-0000-1000-8000-00805f9b34fb', // Standard vLinker BLE Service
-  '0000ffe0-0000-1000-8000-00805f9b34fb', // Alternate vLinker / CC2541 Service / OBDLink
+export const OBDLINK_SERVICE_UUIDS = [
+  '0000ffe0-0000-1000-8000-00805f9b34fb', // Standard BLE Serial Service / OBDLink
   '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART Service (OBDLink MX+ BLE)
   'bef8d6c0-ae6c-11e6-bdf4-0800200c9a66', // OBDLink proprietary BLE Service
-  'e7810a71-73ae-499d-8c15-faa9aef0c3f2', // OBDLink GATT
+  'e7810a71-73ae-499d-8c15-faa9aef0c3f2', // OBDLink GATT Service
+  '0000fff0-0000-1000-8000-00805f9b34fb', // Alternate BLE Service
   '000018f0-0000-1000-8000-00805f9b34fb',
 ];
 
-export const VLINKER_RX_CHAR_UUIDS = [
-  '0000fff1-0000-1000-8000-00805f9b34fb',
+export const OBDLINK_RX_CHAR_UUIDS = [
   '0000ffe1-0000-1000-8000-00805f9b34fb',
   '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
   'bef8d6c1-ae6c-11e6-bdf4-0800200c9a66',
+  '0000fff1-0000-1000-8000-00805f9b34fb',
 ];
 
-export const VLINKER_TX_CHAR_UUIDS = [
-  '0000fff2-0000-1000-8000-00805f9b34fb',
+export const OBDLINK_TX_CHAR_UUIDS = [
   '0000ffe1-0000-1000-8000-00805f9b34fb',
   '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
   'bef8d6c2-ae6c-11e6-bdf4-0800200c9a66',
+  '0000fff2-0000-1000-8000-00805f9b34fb',
 ];
 
-export class VLinkerBluetoothManager {
+export class OBDLinkBluetoothManager {
   private device: BluetoothDevice | null = null;
   private server: BluetoothRemoteGATTServer | null = null;
   private rxCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
@@ -73,7 +73,7 @@ export class VLinkerBluetoothManager {
     }
 
     try {
-      onStatus?.('Scanning for OBDLink MX+ or vLinker adapter...');
+      onStatus?.('Scanning for OBDLink MX+ adapter...');
       
       // Request device with optional service filters
       this.device = await navigator.bluetooth.requestDevice({
@@ -81,20 +81,16 @@ export class VLinkerBluetoothManager {
           { namePrefix: 'OBDLink' },
           { namePrefix: 'MX+' },
           { namePrefix: 'ScanTool' },
-          { namePrefix: 'vLinker' },
-          { namePrefix: 'V-LINK' },
           { namePrefix: 'OBD' },
-          { namePrefix: 'IOS-VLINK' },
-          { namePrefix: 'Vgate' },
         ],
-        optionalServices: VLINKER_SERVICE_UUIDS,
+        optionalServices: OBDLINK_SERVICE_UUIDS,
       });
 
-      onStatus?.(`Connecting to ${this.device.name || 'OBD Device'}...`);
+      onStatus?.(`Connecting to ${this.device.name || 'OBDLink MX+'}...`);
       
       this.device.addEventListener('gattserverdisconnected', () => {
         this.isPolling = false;
-        onStatus?.('Bluetooth connection lost');
+        onStatus?.('OBDLink Bluetooth connection lost');
       });
 
       this.server = await this.device.gatt?.connect() || null;
@@ -106,7 +102,7 @@ export class VLinkerBluetoothManager {
       
       // Find matching service and characteristics
       let foundService: BluetoothRemoteGATTService | null = null;
-      for (const uuid of VLINKER_SERVICE_UUIDS) {
+      for (const uuid of OBDLINK_SERVICE_UUIDS) {
         try {
           foundService = await this.server.getPrimaryService(uuid);
           if (foundService) break;
@@ -169,7 +165,7 @@ export class VLinkerBluetoothManager {
     const chunk = decoder.decode(value);
     this.incomingBuffer += chunk;
 
-    // ELM327 terminates responses with '>' prompt
+    // ELM327/STN terminates responses with '>' prompt
     if (this.incomingBuffer.includes('>')) {
       const response = this.incomingBuffer.trim();
       this.incomingBuffer = '';
@@ -183,7 +179,7 @@ export class VLinkerBluetoothManager {
 
   public async sendCommand(cmd: string, timeoutMs: number = 600): Promise<string> {
     if (!this.rxCharacteristic) {
-      throw new Error('Not connected to OBD adapter');
+      throw new Error('Not connected to OBDLink adapter');
     }
 
     const cleanCmd = cmd.trim() + '\r';
@@ -267,10 +263,10 @@ export class VLinkerBluetoothManager {
         }
 
         cycle++;
-        // Low sleep to maximize refresh rate
-        await new Promise((r) => setTimeout(r, 20));
+        // Low sleep to maximize refresh rate on STN processor
+        await new Promise((r) => setTimeout(r, 15));
       } catch (err) {
-        console.warn('OBD polling cycle warning:', err);
+        console.warn('OBDLink polling cycle warning:', err);
         await new Promise((r) => setTimeout(r, 200));
       }
     }

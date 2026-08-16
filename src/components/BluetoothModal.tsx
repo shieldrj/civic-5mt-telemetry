@@ -36,7 +36,7 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
               <h2 className="text-sm font-bold font-['Chakra_Petch'] text-[#f8fafc]">
                 OBD-II Hardware Link
               </h2>
-              <p className="text-[10px] text-[#64748b]">OBDLink MX+ / vLinker BLE Interface</p>
+              <p className="text-[10px] text-[#64748b]">OBDLink MX+ BLE Interface</p>
             </div>
           </div>
           <button
