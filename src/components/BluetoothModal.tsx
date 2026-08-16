@@ -36,7 +36,7 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
               <h2 className="text-sm font-bold font-['Chakra_Petch'] text-[#f8fafc]">
                 OBD-II Hardware Link
               </h2>
-              <p className="text-[10px] text-[#64748b]">Vgate vLinker MC+ / BLE Interface</p>
+              <p className="text-[10px] text-[#64748b]">OBDLink MX+ / vLinker BLE Interface</p>
             </div>
           </div>
           <button
@@ -88,22 +88,22 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
               className="px-3.5 py-1.5 rounded-xl bg-[#00d2ff] hover:bg-[#00b4db] text-black text-xs font-bold font-['Chakra_Petch'] transition-all flex items-center gap-1.5"
             >
               <Radio size={13} />
-              Pair vLinker MC+
+              Pair OBDLink MX+
             </button>
           )}
         </div>
 
-        {/* Android & Vgate instructions */}
+        {/* Android instructions */}
         <div className="telemetry-card-subtle flex flex-col gap-2 text-xs text-[#94a3b8]">
           <div className="flex items-center gap-1.5 text-[#f8fafc] font-bold font-['Chakra_Petch'] text-[11px]">
             <Info size={13} className="text-[#00d2ff]" />
             Quick Connection Steps:
           </div>
           <ol className="list-decimal list-inside space-y-1 text-[11px] leading-relaxed text-[#94a3b8]">
-            <li>Plug <strong>Vgate vLinker MC+</strong> into the Civic OBD port (under dash).</li>
+            <li>Plug <strong>OBDLink MX+</strong> into the Civic OBD port (under steering column).</li>
+            <li>Press the <strong>Pair</strong> button on the front of the OBDLink MX+.</li>
             <li>Turn ignition to <strong>ON / II</strong> (or start engine).</li>
-            <li>Ensure <strong>Bluetooth</strong> is enabled on your phone.</li>
-            <li>Click <strong>Pair vLinker MC+</strong> above and select your device.</li>
+            <li>Click <strong>Pair OBDLink MX+</strong> above and select your device.</li>
           </ol>
         </div>
 

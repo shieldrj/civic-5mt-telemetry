@@ -95,7 +95,7 @@ export function App() {
               </h1>
               <span className="badge-pill badge-red text-[8px] py-0 px-1">R18Z1</span>
             </div>
-            <p className="text-[9px] text-[#64748b] hidden sm:block">1.8L i-VTEC • Vgate vLinker MC+</p>
+            <p className="text-[9px] text-[#64748b] hidden sm:block">1.8L i-VTEC • OBDLink MX+ / vLinker</p>
           </div>
         </div>
 

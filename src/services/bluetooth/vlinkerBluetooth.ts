@@ -18,8 +18,10 @@ export interface RawObdData {
 
 export const VLINKER_SERVICE_UUIDS = [
   '0000fff0-0000-1000-8000-00805f9b34fb', // Standard vLinker BLE Service
-  '0000ffe0-0000-1000-8000-00805f9b34fb', // Alternate vLinker / CC2541 Service
-  '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART Service
+  '0000ffe0-0000-1000-8000-00805f9b34fb', // Alternate vLinker / CC2541 Service / OBDLink
+  '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART Service (OBDLink MX+ BLE)
+  'bef8d6c0-ae6c-11e6-bdf4-0800200c9a66', // OBDLink proprietary BLE Service
+  'e7810a71-73ae-499d-8c15-faa9aef0c3f2', // OBDLink GATT
   '000018f0-0000-1000-8000-00805f9b34fb',
 ];
 
@@ -27,12 +29,14 @@ export const VLINKER_RX_CHAR_UUIDS = [
   '0000fff1-0000-1000-8000-00805f9b34fb',
   '0000ffe1-0000-1000-8000-00805f9b34fb',
   '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
+  'bef8d6c1-ae6c-11e6-bdf4-0800200c9a66',
 ];
 
 export const VLINKER_TX_CHAR_UUIDS = [
   '0000fff2-0000-1000-8000-00805f9b34fb',
   '0000ffe1-0000-1000-8000-00805f9b34fb',
   '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
+  'bef8d6c2-ae6c-11e6-bdf4-0800200c9a66',
 ];
 
 export class VLinkerBluetoothManager {
@@ -69,11 +73,14 @@ export class VLinkerBluetoothManager {
     }
 
     try {
-      onStatus?.('Scanning for Vgate vLinker MC+ or OBD-II adapter...');
+      onStatus?.('Scanning for OBDLink MX+ or vLinker adapter...');
       
       // Request device with optional service filters
       this.device = await navigator.bluetooth.requestDevice({
         filters: [
+          { namePrefix: 'OBDLink' },
+          { namePrefix: 'MX+' },
+          { namePrefix: 'ScanTool' },
           { namePrefix: 'vLinker' },
           { namePrefix: 'V-LINK' },
           { namePrefix: 'OBD' },
