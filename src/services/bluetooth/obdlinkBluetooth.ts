@@ -222,24 +222,38 @@ export class OBDLinkBluetoothManager {
       return true;
     } catch (err: any) {
       this.disconnect();
-      throw new Error(this.describeConnectError(err));
+      throw new Error(this.describeConnectError(err, options.acceptAllDevices === true));
     }
   }
 
   /**
    * Turns a Web Bluetooth DOMException into something that says what to do next.
-   * NotFoundError covers both "you closed the picker" and "the picker never found
-   * anything", which are very different problems wearing the same name.
+   *
+   * NotFoundError is the awkward one: the spec raises the identical error whether the
+   * picker found nothing or the user dismissed it, and the page is not allowed to see
+   * the list, so it genuinely cannot tell those apart. Rather than guess - the previous
+   * wording asserted "cancelled", which sent you looking in the wrong place - the message
+   * asks the one question that separates them. With no filters applied, an empty list
+   * means the scan itself never ran, because something is always advertising.
    */
-  private describeConnectError(err: any): string {
+  private describeConnectError(err: any, wasUnfiltered: boolean): string {
     const name = err?.name ?? '';
     const message = err?.message ?? String(err);
 
     if (name === 'NotFoundError') {
+      if (wasUnfiltered) {
+        return (
+          'Picker closed with nothing selected. The browser cannot tell whether it found nothing or you dismissed it, so: ' +
+          'did the list show ANY device at all - earbuds, a TV, another phone? ' +
+          'If it was completely empty, Android is blocking the scan, not the adapter: grant Chrome the "Nearby devices" permission ' +
+          'and turn Location on. If other devices appeared but the adapter did not, it is not advertising over Bluetooth LE - ' +
+          'hold its Pair button until the LED flashes, and forget it in Android Bluetooth settings first.'
+        );
+      }
       return (
-        'No adapter was selected. If the list stayed empty: turn Location on (Android requires it for Bluetooth LE scanning), ' +
-        'then remove the adapter from Android Bluetooth settings - a Classic pairing there can stop it advertising over LE. ' +
-        'Use "Show all nearby devices" to see everything that is advertising.'
+        'No adapter selected. Try "Show all nearby devices" - if other Bluetooth gear appears there but the adapter does not, ' +
+        'it is not advertising over LE. If nothing appears at all, Android is blocking the scan: Location on, and grant Chrome ' +
+        'the "Nearby devices" permission.'
       );
     }
     if (name === 'SecurityError') {

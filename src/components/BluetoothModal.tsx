@@ -156,19 +156,32 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
             <Info size={13} className="text-[#00d2ff]" />
             If the list stays empty:
           </div>
-          <ol className="list-decimal list-inside space-y-1.5 text-[11px] leading-relaxed text-[#94a3b8]">
-            <li>
-              <strong className="text-[#f8fafc]">Turn Location on.</strong> Android blocks all
-              Bluetooth LE scanning without it, and gives no warning — the list just stays empty.
-            </li>
-            <li>
-              <strong className="text-[#f8fafc]">Un-pair it in Android Bluetooth settings.</strong>{' '}
-              This app needs Bluetooth <em>LE</em>, not the Classic pairing those settings create.
-              Holding a Classic connection can stop the adapter advertising over LE entirely.
-            </li>
-            <li>Turn the ignition to <strong>ON / II</strong> so the adapter is powered and its LED is lit.</li>
-            <li>Tap <strong>Show all nearby devices</strong> — if it appears there but not above, the name filter is the problem.</li>
-          </ol>
+          <p className="text-[11px] leading-relaxed text-[#94a3b8]">
+            First answer this: in <strong className="text-[#f8fafc]">Show all nearby devices</strong>,
+            did <em>any</em> device appear — earbuds, a TV, another phone?
+          </p>
+          <div className="rounded-md border border-[rgba(255,255,255,0.08)] bg-[#08090d] p-2 text-[11px] leading-relaxed">
+            <p className="text-[#ffaa00] font-bold font-['Chakra_Petch']">Completely empty →</p>
+            <p className="text-[#94a3b8]">
+              Android is blocking the scan, not the adapter. Grant Chrome{' '}
+              <strong className="text-[#f8fafc]">Nearby devices</strong> permission (Settings → Apps →
+              Chrome → Permissions) and switch <strong className="text-[#f8fafc]">Location</strong> on.
+              Both are required for any BLE scan, and both fail silently.
+            </p>
+          </div>
+          <div className="rounded-md border border-[rgba(255,255,255,0.08)] bg-[#08090d] p-2 text-[11px] leading-relaxed">
+            <p className="text-[#00d2ff] font-bold font-['Chakra_Petch']">Other devices, but not the adapter →</p>
+            <p className="text-[#94a3b8]">
+              It is not advertising over LE. Forget it in Android Bluetooth settings, turn the
+              ignition to <strong className="text-[#f8fafc]">ON / II</strong>, then hold the adapter's
+              <strong className="text-[#f8fafc]"> Pair</strong> button until its LED flashes and scan again.
+            </p>
+          </div>
+          <p className="text-[10px] leading-relaxed text-[#64748b]">
+            Still nothing? Install a BLE scanner (nRF Connect) and look for the adapter there. That
+            app sees everything advertising over LE — if it cannot find it either, the adapter does
+            not speak Bluetooth LE on Android, and no browser can reach it.
+          </p>
         </div>
 
         {/* Switch to Simulator */}
