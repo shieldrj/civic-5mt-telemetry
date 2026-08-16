@@ -17,5 +17,6 @@
     "noFallthroughCasesInSwitch": true,
     "types": ["web-bluetooth"]
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/tests"]
 }
