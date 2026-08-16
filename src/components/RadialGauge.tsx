@@ -61,11 +61,9 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
     return `M ${p1.x} ${p1.y} A ${r} ${r} 0 ${largeArc} 1 ${p2.x} ${p2.y}`;
   };
 
-  // Needle calculations
+  // Base needle points pointing straight up (0° / 12 o'clock)
   const needleLength = radius * 0.90;
-  const needleTip = angleToCoord(center, center, needleLength, currentAngle);
-  const baseLeft = angleToCoord(center, center, 6, currentAngle - 90);
-  const baseRight = angleToCoord(center, center, 6, currentAngle + 90);
+  const isCompact = size < 200;
 
   return (
     <div className="relative flex flex-col items-center justify-center select-none" style={{ width: size, height: size }}>
@@ -117,9 +115,9 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
         {ticks.map((t) => {
           const tRatio = (t - min) / (max - min);
           const tAngle = startAngle + tRatio * totalSweep;
-          const pOuter = angleToCoord(center, center, radius + 11, tAngle);
+          const pOuter = angleToCoord(center, center, radius + (isCompact ? 8 : 11), tAngle);
           const pInner = angleToCoord(center, center, radius + 3, tAngle);
-          const pText = angleToCoord(center, center, radius - 15, tAngle);
+          const pText = angleToCoord(center, center, radius - (isCompact ? 11 : 15), tAngle);
           const isRed = redlineStart && t >= redlineStart;
 
           // Format tick display (e.g. 7000 -> 7k if large)
@@ -137,9 +135,9 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
               />
               <text
                 x={pText.x}
-                y={pText.y + 3.5}
+                y={pText.y + (isCompact ? 2.5 : 3.5)}
                 fill={isRed ? '#ff6b7b' : '#64748b'}
-                fontSize="9"
+                fontSize={isCompact ? "8" : "9"}
                 fontFamily="'Rajdhani', sans-serif"
                 fontWeight="700"
                 textAnchor="middle"
@@ -150,39 +148,61 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
           );
         })}
 
-        {/* Needle */}
-        <polygon
-          points={`${needleTip.x},${needleTip.y} ${baseLeft.x},${baseLeft.y} ${baseRight.x},${baseRight.y}`}
-          fill={accentColor}
-          filter={`url(#${filterId})`}
-        />
+        {/* Hardware Accelerated Smooth Rotating Needle */}
+        <g
+          style={{
+            transform: `rotate(${currentAngle}deg)`,
+            transformOrigin: `${center}px ${center}px`,
+            transition: 'transform 0.09s cubic-bezier(0.1, 0.9, 0.2, 1)',
+          }}
+        >
+          <polygon
+            points={`${center},${center - needleLength} ${center - (isCompact ? 4.5 : 6)},${center} ${center + (isCompact ? 4.5 : 6)},${center}`}
+            fill={accentColor}
+            filter={`url(#${filterId})`}
+          />
+        </g>
 
         {/* Center Cap */}
-        <circle cx={center} cy={center} r={12} fill="#0d0f17" stroke="#252b3d" strokeWidth={2.5} />
-        <circle cx={center} cy={center} r={5} fill={accentColor} />
+        <circle cx={center} cy={center} r={isCompact ? 9 : 12} fill="#0d0f17" stroke="#252b3d" strokeWidth={isCompact ? 2 : 2.5} />
+        <circle cx={center} cy={center} r={isCompact ? 3.5 : 5} fill={accentColor} />
       </svg>
 
       {/* Digital Inset Readout - Placed clearly at bottom open section */}
       <div
         className="absolute flex flex-col items-center justify-center text-center pointer-events-none"
-        style={{ bottom: size * 0.08 }}
+        style={{ bottom: size * (isCompact ? 0.06 : 0.08) }}
       >
-        <span className="text-[10px] font-bold uppercase tracking-wider text-[#64748b] font-['Chakra_Petch']">
+        <span
+          className={`font-bold uppercase tracking-wider text-[#64748b] font-['Chakra_Petch'] ${
+            isCompact ? 'text-[9px]' : 'text-[10px]'
+          }`}
+        >
           {title}
         </span>
         <div className="flex items-baseline gap-1 mt-[-2px]">
           <span
-            className="text-2xl font-extrabold tracking-tight text-[#f8fafc] font-['Chakra_Petch']"
+            className={`font-extrabold tracking-tight text-[#f8fafc] font-['Chakra_Petch'] ${
+              isCompact ? 'text-xl' : 'text-2xl'
+            }`}
             style={{ textShadow: `0 0 12px ${accentColor}50` }}
           >
             {typeof value === 'number' ? (unit === '%' || unit === '°F' || value >= 100 ? Math.round(value) : value.toFixed(1)) : value}
           </span>
-          <span className="text-[10px] font-bold text-[#64748b] font-['Chakra_Petch']">
+          <span
+            className={`font-bold text-[#64748b] font-['Chakra_Petch'] ${
+              isCompact ? 'text-[9px]' : 'text-[10px]'
+            }`}
+          >
             {unit}
           </span>
         </div>
         {subValue !== undefined && (
-          <span className="text-[10px] text-[#475569] font-medium font-['Inter'] mt-[-2px]">
+          <span
+            className={`text-[#475569] font-medium font-['Inter'] mt-[-2px] ${
+              isCompact ? 'text-[9px]' : 'text-[10px]'
+            }`}
+          >
             {subLabel}: <strong className="text-[#94a3b8]">{subValue}</strong>
           </span>
         )}

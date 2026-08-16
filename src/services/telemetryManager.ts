@@ -184,8 +184,8 @@ export class TelemetryManager {
     this.lastUpdateTimestamp = Date.now();
     if (this.timerHandle) clearInterval(this.timerHandle);
     
-    // Run telemetry processing at 20Hz (50ms interval) for fluid gauge needles
-    this.timerHandle = setInterval(() => this.processUpdateStep(), 50);
+    // Run telemetry processing at 12.5Hz (80ms interval) with GPU CSS needle interpolation for battery efficiency
+    this.timerHandle = setInterval(() => this.processUpdateStep(), 80);
   }
 
   private stopLoop(): void {

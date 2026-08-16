@@ -223,61 +223,72 @@ export function App() {
       {/* TAB 1: PRIMARY COCKPIT DASHBOARD */}
       {activeTab === 'cockpit' && (
         <div className="flex flex-col gap-3.5">
-          {/* Main Radial Dial Cluster */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 bg-[#0a0d14]/70 border border-[#1b2030] rounded-2xl p-4 shadow-xl items-center justify-items-center">
-            {/* 1. Lifetime Cumulative MPG Gauge */}
-            <RadialGauge
-              value={metrics.lifetimeMpg}
-              min={0}
-              max={60}
-              title="LIFETIME MPG"
-              unit="MPG"
-              subValue={`${telemetryManager.getLifetimeStats().totalMiles.toFixed(0)} mi tracked`}
-              subLabel="Cumulative"
-              accentColor="#00e676"
-              ticks={[0, 10, 20, 30, 40, 50, 60]}
-              size={230}
-            />
+          {/* Main Radial Dial Cluster - Option A: Hero Coolant Top + Dual Companion Dials (Portrait Mobile) / 3 Across (Desktop) */}
+          <div className="flex flex-col md:grid md:grid-cols-3 gap-2.5 sm:gap-3 bg-[#0a0d14]/70 border border-[#1b2030] rounded-2xl p-3 sm:p-4 shadow-xl items-center justify-center">
+            {/* 1. Hero Center: Coolant Temperature (Large, Prominent Thermal Vital) */}
+            <div className="order-1 md:order-2 flex justify-center">
+              <RadialGauge
+                value={metrics.coolantTempF}
+                min={100}
+                max={260}
+                title="COOLANT TEMP"
+                unit="°F"
+                subValue={`${metrics.coolantTempC}°C • ${metrics.coolantTempF < 160 ? 'COLD' : metrics.coolantTempF > 220 ? 'OVERHEAT' : 'OPTIMAL'}`}
+                subLabel="Engine Status"
+                accentColor={metrics.coolantTempF < 160 ? '#00d2ff' : metrics.coolantTempF > 220 ? '#ff2a40' : '#00e676'}
+                redlineStart={225}
+                ticks={[100, 140, 180, 220, 260]}
+                size={200}
+              />
+            </div>
 
-            {/* 2. Coolant Temperature Hero Gauge */}
-            <RadialGauge
-              value={metrics.coolantTempF}
-              min={100}
-              max={260}
-              title="COOLANT TEMP"
-              unit="°F"
-              subValue={`${metrics.coolantTempC}°C • ${metrics.coolantTempF < 160 ? 'COLD' : metrics.coolantTempF > 220 ? 'OVERHEAT' : 'OPTIMAL'}`}
-              subLabel="Engine Status"
-              accentColor={metrics.coolantTempF < 160 ? '#00d2ff' : metrics.coolantTempF > 220 ? '#ff2a40' : '#00e676'}
-              redlineStart={225}
-              ticks={[100, 140, 180, 220, 260]}
-              size={260}
-            />
+            {/* Twin Companion Dials for Mobile: Lifetime MPG (Left) & Oil Life (Right) */}
+            <div className="order-2 md:contents w-full grid grid-cols-2 gap-2 justify-items-center items-center">
+              {/* Lifetime Cumulative MPG */}
+              <div className="flex justify-center">
+                <RadialGauge
+                  value={metrics.lifetimeMpg}
+                  min={0}
+                  max={60}
+                  title="LIFETIME MPG"
+                  unit="MPG"
+                  subValue={`${telemetryManager.getLifetimeStats().totalMiles.toFixed(0)} mi`}
+                  subLabel="Cumulative"
+                  accentColor="#00e676"
+                  ticks={[0, 15, 30, 45, 60]}
+                  size={155}
+                />
+              </div>
 
-            {/* 3. Engine Oil Life Gauge */}
-            <RadialGauge
-              value={oil.oilLifePercent}
-              min={0}
-              max={100}
-              title="OIL LIFE"
-              unit="%"
-              subValue={`~${oil.estimatedMilesRemaining.toLocaleString()} mi`}
-              subLabel="Est. Remaining"
-              accentColor={oil.oilLifePercent < 15 ? '#ff2a40' : oil.oilLifePercent < 40 ? '#ffaa00' : '#00e676'}
-              ticks={[0, 20, 40, 60, 80, 100]}
-              size={230}
-            />
+              {/* Engine Oil Life */}
+              <div className="flex justify-center">
+                <RadialGauge
+                  value={oil.oilLifePercent}
+                  min={0}
+                  max={100}
+                  title="OIL LIFE"
+                  unit="%"
+                  subValue={`~${oil.estimatedMilesRemaining.toLocaleString()} mi`}
+                  subLabel="Remaining"
+                  accentColor={oil.oilLifePercent < 15 ? '#ff2a40' : oil.oilLifePercent < 40 ? '#ffaa00' : '#00e676'}
+                  ticks={[0, 25, 50, 75, 100]}
+                  size={155}
+                />
+              </div>
+            </div>
           </div>
 
           {/* Core Analytics Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
-            <MpgTelemetryCard metrics={metrics} trip={trip} />
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             <ManualTransmissionCard metrics={metrics} />
-            <OilLifeCard
-              oilProfile={oil}
-              coolantTempF={metrics.coolantTempF}
-              onResetOil={() => telemetryManager.resetOilLife()}
-            />
+            <MpgTelemetryCard metrics={metrics} trip={trip} />
+            <div className="hidden lg:block">
+              <OilLifeCard
+                oilProfile={oil}
+                coolantTempF={metrics.coolantTempF}
+                onResetOil={() => telemetryManager.resetOilLife()}
+              />
+            </div>
           </div>
 
           {/* Trip Analytics Bar */}
