@@ -173,11 +173,17 @@ export class TelemetryManager {
     supported: boolean;
     secureContext: boolean;
     adapterAvailable: boolean;
+    transportKind: 'ble' | 'spp';
+    transportLabel: string;
+    pairedAdapters: { name: string; address: string }[];
   }> {
     return {
       supported: this.bluetooth.isSupported(),
       secureContext: this.bluetooth.isSecureContext(),
       adapterAvailable: await this.bluetooth.isAdapterAvailable(),
+      transportKind: this.bluetooth.transportKind,
+      transportLabel: this.bluetooth.transportLabel,
+      pairedAdapters: await this.bluetooth.listPairedAdapters(),
     };
   }
 

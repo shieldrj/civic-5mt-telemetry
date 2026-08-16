@@ -1,6 +1,15 @@
 /**
- * OBDLink MX+ Bluetooth Low Energy (BLE) Client & STN/ELM327 CAN Parser
+ * STN/ELM327 protocol client for the 2013 Civic's ISO 15765-4 CAN bus.
+ *
+ * Transport-agnostic by design: the AT handshake, PID polling and response parsing below
+ * are identical whether the bytes travel over Bluetooth LE in a browser or Bluetooth
+ * Classic RFCOMM in the native app. See transport.ts for why that split exists.
  */
+import { ObdTransport, ObdConnectOptions } from './transport';
+import { WebBluetoothTransport, OBDLINK_SERVICE_UUIDS } from './webBluetoothTransport';
+import { ClassicSppTransport, isNativePlatform } from './classicSppTransport';
+
+export { OBDLINK_SERVICE_UUIDS };
 
 export interface RawObdData {
   rpm: number;
@@ -22,35 +31,8 @@ export interface RawObdData {
   engineRuntimeSec: number;
 }
 
-export const OBDLINK_SERVICE_UUIDS = [
-  '0000ffe0-0000-1000-8000-00805f9b34fb', // Standard BLE Serial Service / OBDLink
-  '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART Service (OBDLink MX+ BLE)
-  'bef8d6c0-ae6c-11e6-bdf4-0800200c9a66', // OBDLink proprietary BLE Service
-  'e7810a71-73ae-499d-8c15-faa9aef0c3f2', // OBDLink GATT Service
-  '0000fff0-0000-1000-8000-00805f9b34fb', // Alternate BLE Service
-  '000018f0-0000-1000-8000-00805f9b34fb',
-];
-
-export const OBDLINK_RX_CHAR_UUIDS = [
-  '0000ffe1-0000-1000-8000-00805f9b34fb',
-  '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
-  'bef8d6c1-ae6c-11e6-bdf4-0800200c9a66',
-  '0000fff1-0000-1000-8000-00805f9b34fb',
-];
-
-export const OBDLINK_TX_CHAR_UUIDS = [
-  '0000ffe1-0000-1000-8000-00805f9b34fb',
-  '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
-  'bef8d6c2-ae6c-11e6-bdf4-0800200c9a66',
-  '0000fff2-0000-1000-8000-00805f9b34fb',
-];
-
 export class OBDLinkBluetoothManager {
-  private device: BluetoothDevice | null = null;
-  private server: BluetoothRemoteGATTServer | null = null;
-  private rxCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
-  private txCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
-  
+  private transport: ObdTransport;
   private isPolling = false;
   private incomingBuffer = '';
   private pendingResolver: ((value: string) => void) | null = null;
@@ -75,220 +57,67 @@ export class OBDLinkBluetoothManager {
     engineRuntimeSec: 0,
   };
 
+  constructor(transport?: ObdTransport) {
+    // Native builds get Bluetooth Classic, the only way to reach an OBDLink MX+; the
+    // browser gets Bluetooth LE, which is all it is permitted to speak.
+    this.transport =
+      transport ?? (isNativePlatform() ? new ClassicSppTransport() : new WebBluetoothTransport());
+    this.transport.setDataHandler((chunk) => this.handleIncoming(chunk));
+    this.transport.setDisconnectHandler(() => {
+      this.isPolling = false;
+    });
+  }
+
+  public get transportKind(): 'ble' | 'spp' {
+    return this.transport.kind;
+  }
+
+  public get transportLabel(): string {
+    return this.transport.label;
+  }
+
   public isSupported(): boolean {
-    return typeof navigator !== 'undefined' && 'bluetooth' in navigator;
+    return this.transport instanceof WebBluetoothTransport ? this.transport.isSupported() : true;
   }
 
-  /** Web Bluetooth is refused outright outside a secure context. */
   public isSecureContext(): boolean {
-    return typeof window === 'undefined' || window.isSecureContext !== false;
+    return this.transport instanceof WebBluetoothTransport ? this.transport.isSecureContext() : true;
   }
 
-  /** Whether the phone has a usable Bluetooth radio switched on. */
   public async isAdapterAvailable(): Promise<boolean> {
-    try {
-      if (!this.isSupported()) return false;
-      const bt = navigator.bluetooth as Bluetooth & { getAvailability?: () => Promise<boolean> };
-      if (typeof bt.getAvailability !== 'function') return true;
-      return await bt.getAvailability();
-    } catch {
-      return true; // Unknown - let the picker be the judge
-    }
+    return this.transport.isAvailable();
   }
 
-  /**
-   * Opens the browser's device picker and connects.
-   *
-   * `acceptAllDevices` drops the name filters and lists everything advertising nearby.
-   * It exists because a filtered picker that finds nothing is ambiguous: it looks
-   * identical whether the adapter is absent, is not advertising over BLE, or is simply
-   * advertising under a name the filters do not match. Listing everything separates
-   * those cases in a couple of seconds.
-   */
+  /** Paired adapters. Native transport only - empty in the browser. */
+  public async listPairedAdapters(): Promise<{ name: string; address: string }[]> {
+    if (this.transport instanceof ClassicSppTransport) {
+      try {
+        return await this.transport.listAdapters();
+      } catch {
+        return [];
+      }
+    }
+    return [];
+  }
+
   public async connect(
     onStatus?: (msg: string) => void,
-    options: { acceptAllDevices?: boolean } = {}
+    options: ObdConnectOptions = {}
   ): Promise<boolean> {
-    if (!this.isSupported()) {
-      throw new Error(
-        'This browser has no Web Bluetooth. Use Chrome or Edge on Android - Firefox and iOS Safari do not support it at all.'
-      );
-    }
-    if (!this.isSecureContext()) {
-      throw new Error('Web Bluetooth requires HTTPS. Open the published https:// address rather than a local or http:// one.');
-    }
-    if (!(await this.isAdapterAvailable())) {
-      throw new Error('No Bluetooth radio available. Switch Bluetooth on and try again.');
-    }
+    await this.transport.connect(onStatus, options);
 
-    try {
-      onStatus?.(
-        options.acceptAllDevices
-          ? 'Listing every nearby Bluetooth LE device...'
-          : 'Scanning for OBDLink MX+ adapter...'
-      );
+    onStatus?.('Initializing ISO 15765-4 CAN protocol...');
+    await this.initializeElm327();
 
-      // Web Bluetooth forbids combining filters with acceptAllDevices.
-      const request: RequestDeviceOptions = options.acceptAllDevices
-        ? { acceptAllDevices: true, optionalServices: OBDLINK_SERVICE_UUIDS }
-        : {
-            filters: [
-              { namePrefix: 'OBDLink' },
-              { namePrefix: 'MX+' },
-              { namePrefix: 'ScanTool' },
-              { namePrefix: 'OBD' },
-              { namePrefix: 'STN' },
-              { namePrefix: 'ELM' },
-              { namePrefix: 'Vgate' },
-              { namePrefix: 'VEEPEAK' },
-            ],
-            optionalServices: OBDLINK_SERVICE_UUIDS,
-          };
-
-      this.device = await navigator.bluetooth.requestDevice(request);
-
-      onStatus?.(`Connecting to ${this.device.name || 'OBDLink MX+'}...`);
-      
-      this.device.addEventListener('gattserverdisconnected', () => {
-        this.isPolling = false;
-        onStatus?.('OBDLink Bluetooth connection lost');
-      });
-
-      this.server = await this.device.gatt?.connect() || null;
-      if (!this.server) {
-        throw new Error('Failed to connect to GATT Server.');
-      }
-
-      onStatus?.('Discovering OBD-II Services...');
-
-      // Enumerate everything the device exposes rather than probing known UUIDs one by
-      // one, so an adapter using a serial service we have not seen before still works.
-      // Only services named in optionalServices are visible, which is why that list has
-      // to stay broad.
-      let services: BluetoothRemoteGATTService[] = [];
-      try {
-        services = await this.server.getPrimaryServices();
-      } catch {
-        for (const uuid of OBDLINK_SERVICE_UUIDS) {
-          try {
-            services.push(await this.server.getPrimaryService(uuid));
-          } catch {
-            // Not present on this device
-          }
-        }
-      }
-
-      if (!services.length) {
-        throw new Error(
-          'Connected, but the adapter exposes no readable BLE service. This usually means it is a Bluetooth Classic (SPP) adapter, which Web Bluetooth cannot use.'
-        );
-      }
-
-      // A serial link needs one characteristic to write commands and one that notifies
-      // with replies. Some adapters combine both into a single characteristic.
-      for (const service of services) {
-        let characteristics: BluetoothRemoteGATTCharacteristic[] = [];
-        try {
-          characteristics = await service.getCharacteristics();
-        } catch {
-          continue;
-        }
-
-        const notifier = characteristics.find((c) => c.properties.notify || c.properties.indicate);
-        const writer = characteristics.find(
-          (c) => c.properties.write || c.properties.writeWithoutResponse
-        );
-
-        if (notifier && (writer || notifier)) {
-          this.txCharacteristic = notifier;
-          this.rxCharacteristic = writer ?? notifier;
-          await notifier.startNotifications();
-          notifier.addEventListener('characteristicvaluechanged', this.handleNotification.bind(this));
-          break;
-        }
-      }
-
-      if (!this.txCharacteristic || !this.rxCharacteristic) {
-        throw new Error(
-          'Connected, but found no serial read/write characteristic on this device. It is probably not an OBD adapter, or it only speaks Bluetooth Classic.'
-        );
-      }
-
-      onStatus?.('Initializing 2013 Honda Civic ISO 15765-4 CAN Protocol...');
-      await this.initializeElm327();
-
-      onStatus?.('Connected & Streaming Telemetry');
-      this.startPollingLoop();
-      return true;
-    } catch (err: any) {
-      this.disconnect();
-      throw new Error(this.describeConnectError(err, options.acceptAllDevices === true));
-    }
+    onStatus?.('Connected & streaming telemetry');
+    this.startPollingLoop();
+    return true;
   }
 
-  /**
-   * Turns a Web Bluetooth DOMException into something that says what to do next.
-   *
-   * NotFoundError is the awkward one: the spec raises the identical error whether the
-   * picker found nothing or the user dismissed it, and the page is not allowed to see
-   * the list, so it genuinely cannot tell those apart. Rather than guess - the previous
-   * wording asserted "cancelled", which sent you looking in the wrong place - the message
-   * asks the one question that separates them. With no filters applied, an empty list
-   * means the scan itself never ran, because something is always advertising.
-   */
-  private describeConnectError(err: any, wasUnfiltered: boolean): string {
-    const name = err?.name ?? '';
-    const message = err?.message ?? String(err);
-
-    if (name === 'NotFoundError') {
-      if (wasUnfiltered) {
-        return (
-          'Picker closed with nothing selected. The browser cannot tell whether it found nothing or you dismissed it, so: ' +
-          'did the list show ANY device at all - earbuds, a TV, another phone? ' +
-          'If it was completely empty, Android is blocking the scan, not the adapter: grant Chrome the "Nearby devices" permission ' +
-          'and turn Location on. If other devices appeared but the adapter did not, it is not advertising over Bluetooth LE - ' +
-          'hold its Pair button until the LED flashes, and forget it in Android Bluetooth settings first.'
-        );
-      }
-      return (
-        'No adapter selected. Try "Show all nearby devices" - if other Bluetooth gear appears there but the adapter does not, ' +
-        'it is not advertising over LE. If nothing appears at all, Android is blocking the scan: Location on, and grant Chrome ' +
-        'the "Nearby devices" permission.'
-      );
-    }
-    if (name === 'SecurityError') {
-      return `Blocked by the browser: ${message}. Web Bluetooth needs an HTTPS page and a tap to start the scan.`;
-    }
-    if (name === 'NetworkError') {
-      return 'Connection dropped during pairing. Make sure the ignition is ON, the adapter LED is lit, and nothing else is connected to it.';
-    }
-    if (name === 'NotSupportedError') {
-      return 'This device or browser refused the connection. Web Bluetooth cannot use Bluetooth Classic (SPP) adapters - only Bluetooth LE.';
-    }
-    return message;
-  }
-
-  public disconnect(): void {
-    this.isPolling = false;
-    if (this.device?.gatt?.connected) {
-      this.device.gatt.disconnect();
-    }
-    this.device = null;
-    this.server = null;
-    this.rxCharacteristic = null;
-    this.txCharacteristic = null;
-  }
-
-  private handleNotification(event: Event): void {
-    const target = event.target as BluetoothRemoteGATTCharacteristic;
-    const value = target.value;
-    if (!value) return;
-
-    const decoder = new TextDecoder('utf-8');
-    const chunk = decoder.decode(value);
+  private handleIncoming(chunk: string): void {
     this.incomingBuffer += chunk;
 
-    // ELM327/STN terminates responses with '>' prompt
+    // ELM327/STN terminates every response with the '>' prompt.
     if (this.incomingBuffer.includes('>')) {
       const response = this.incomingBuffer.trim();
       this.incomingBuffer = '';
@@ -300,20 +129,21 @@ export class OBDLinkBluetoothManager {
     }
   }
 
+  public disconnect(): void {
+    this.isPolling = false;
+    this.incomingBuffer = '';
+    this.pendingResolver = null;
+    void this.transport.disconnect();
+  }
+
   public async sendCommand(cmd: string, timeoutMs: number = 600): Promise<string> {
-    if (!this.rxCharacteristic) {
-      throw new Error('Not connected to OBDLink adapter');
-    }
-
     const cleanCmd = cmd.trim() + '\r';
-    const encoder = new TextEncoder();
-    const data = encoder.encode(cleanCmd);
 
-    return new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.pendingResolver) {
           this.pendingResolver = null;
-          resolve(''); // Timeout fallback without crashing
+          resolve(''); // Timeout fallback without crashing the polling loop
         }
       }, timeoutMs);
 
@@ -322,13 +152,11 @@ export class OBDLinkBluetoothManager {
         resolve(resp);
       };
 
-      try {
-        await this.rxCharacteristic!.writeValue(data);
-      } catch (err) {
+      this.transport.write(cleanCmd).catch((err) => {
         clearTimeout(timer);
         this.pendingResolver = null;
         reject(err);
-      }
+      });
     });
   }
 

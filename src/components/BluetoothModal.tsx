@@ -6,6 +6,9 @@ interface BluetoothEnvironment {
   supported: boolean;
   secureContext: boolean;
   adapterAvailable: boolean;
+  transportKind: 'ble' | 'spp';
+  transportLabel: string;
+  pairedAdapters: { name: string; address: string }[];
 }
 
 interface BluetoothModalProps {
@@ -13,7 +16,7 @@ interface BluetoothModalProps {
   onClose: () => void;
   status: ConnectionStatus;
   statusMessage: string;
-  onConnect: (options?: { acceptAllDevices?: boolean }) => void;
+  onConnect: (options?: { acceptAllDevices?: boolean; address?: string }) => void;
   onDisconnect: () => void;
   onStartSim: () => void;
   checkEnvironment: () => Promise<BluetoothEnvironment>;
@@ -44,8 +47,14 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
 
   if (!isOpen) return null;
 
+  const isNative = env?.transportKind === 'spp';
+
   const blocker = !env
     ? null
+    : isNative
+    ? !env.adapterAvailable
+      ? 'Bluetooth is off, or this app has not been granted the Nearby devices permission.'
+      : null
     : !env.supported
     ? 'This browser has no Web Bluetooth. Use Chrome or Edge on Android — Firefox and iOS Safari cannot do this at all.'
     : !env.secureContext
@@ -138,9 +147,41 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
           </div>
         )}
 
-        {/* Escape hatch: a filtered picker that finds nothing looks the same whether the
+        {/* Which physical link this build speaks. The distinction is the whole reason the
+            native app exists, so it is stated rather than implied. */}
+        {env && (
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-[rgba(255,255,255,0.08)] bg-[#08090d] px-2.5 py-1.5 text-[11px]">
+            <span className="text-[#64748b] font-['Chakra_Petch'] uppercase tracking-wide">Link</span>
+            <span className={isNative ? 'text-[#00e676] font-bold' : 'text-[#94a3b8]'}>
+              {env.transportLabel}
+            </span>
+          </div>
+        )}
+
+        {/* Native: pick from adapters already paired in Android settings. */}
+        {isNative && status !== 'connected' && env && env.pairedAdapters.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[11px] text-[#64748b] font-['Chakra_Petch'] uppercase tracking-wide">
+              Paired adapters
+            </span>
+            {env.pairedAdapters.map((device) => (
+              <button
+                key={device.address}
+                onClick={() => onConnect({ address: device.address })}
+                className="flex items-center justify-between gap-2 w-full px-2.5 py-2 rounded-lg bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.12)] text-left transition-colors hover:bg-[rgba(255,255,255,0.1)]"
+              >
+                <span className="text-[12px] font-bold text-[#f8fafc] font-['Chakra_Petch']">
+                  {device.name}
+                </span>
+                <span className="text-[10px] text-[#64748b] tabular-nums">{device.address}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Browser only: a filtered picker that finds nothing looks the same whether the
             adapter is absent, silent, or just named unexpectedly. */}
-        {status !== 'connected' && (
+        {!isNative && status !== 'connected' && (
           <button
             onClick={() => onConnect({ acceptAllDevices: true })}
             className="flex items-center justify-center gap-1.5 w-full py-2 rounded-lg bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.12)] text-[#f8fafc] text-[12px] font-bold font-['Chakra_Petch'] transition-colors hover:bg-[rgba(255,255,255,0.1)]"
@@ -150,7 +191,28 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
           </button>
         )}
 
-        {/* Android instructions */}
+        {/* Native build: pairing lives in Android settings, so there is nothing to scan. */}
+        {isNative && (
+          <div className="telemetry-card-subtle flex flex-col gap-2 text-xs text-[#94a3b8]">
+            <div className="flex items-center gap-1.5 text-[#f8fafc] font-bold font-['Chakra_Petch'] text-[11px]">
+              <Info size={13} className="text-[#00d2ff]" />
+              Native Bluetooth Classic
+            </div>
+            <p className="text-[11px] leading-relaxed">
+              This build talks RFCOMM directly, which is what the OBDLink MX+ actually speaks —
+              no LE scanning involved. Pair the adapter once in{' '}
+              <strong className="text-[#f8fafc]">Android Settings → Bluetooth</strong>, turn the
+              ignition to <strong className="text-[#f8fafc]">ON / II</strong>, then pick it above.
+            </p>
+            <p className="text-[10px] leading-relaxed text-[#64748b]">
+              Nothing listed? Pair it in Android settings first. Connection refused? Close the
+              official OBDLink app — only one app can hold the adapter at a time.
+            </p>
+          </div>
+        )}
+
+        {/* Browser build: the LE troubleshooting path */}
+        {!isNative && (
         <div className="telemetry-card-subtle flex flex-col gap-2 text-xs text-[#94a3b8]">
           <div className="flex items-center gap-1.5 text-[#f8fafc] font-bold font-['Chakra_Petch'] text-[11px]">
             <Info size={13} className="text-[#00d2ff]" />
@@ -180,9 +242,11 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
           <p className="text-[10px] leading-relaxed text-[#64748b]">
             Still nothing? Install a BLE scanner (nRF Connect) and look for the adapter there. That
             app sees everything advertising over LE — if it cannot find it either, the adapter does
-            not speak Bluetooth LE on Android, and no browser can reach it.
+            not speak Bluetooth LE on Android, and no browser can reach it — that is what the
+            native Android build is for.
           </p>
         </div>
+        )}
 
         {/* Switch to Simulator */}
         <div className="flex items-center justify-between pt-1 border-t border-[rgba(255,255,255,0.06)]">
