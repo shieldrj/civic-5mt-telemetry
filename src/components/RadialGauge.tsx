@@ -182,7 +182,7 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
         </span>
         <div className="flex items-baseline gap-1 mt-[-2px]">
           <span
-            className={`font-extrabold tracking-tight text-[#f8fafc] font-['Chakra_Petch'] ${
+            className={`font-extrabold tracking-tight text-[#f8fafc] font-['Chakra_Petch'] tabular-nums ${
               isCompact ? 'text-xl' : 'text-2xl'
             }`}
             style={{ textShadow: `0 0 12px ${accentColor}50` }}

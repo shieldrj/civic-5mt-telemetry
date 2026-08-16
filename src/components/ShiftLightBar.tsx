@@ -36,17 +36,17 @@ export const ShiftLightBar: React.FC<ShiftLightBarProps> = ({
                 : 'bg-[#ff2a40]/20 text-[#ff2a40] border border-[#ff2a40]/40'
             }`}
           >
-            {shiftMode === 'eco' ? '🌱 Eco Mode' : '⚡ VTEC / Power'}
+            {shiftMode === 'eco' ? 'ECO MODE' : 'VTEC POWER'}
           </button>
         </div>
 
         <div className="flex items-center gap-2 font-['Chakra_Petch'] text-xs">
           {shouldShiftUp && (
-            <span className="animate-bounce text-[#00d2ff] font-bold flex items-center gap-1">
+            <span className="animate-pulse text-[#00d2ff] font-bold flex items-center gap-1">
               ▲ SHIFT UP
             </span>
           )}
-          <span className="text-[#94a3b8] font-semibold">{rpm} <span className="text-[10px] text-[#64748b]">RPM</span></span>
+          <span className="text-[#94a3b8] font-semibold tabular-nums">{rpm} <span className="text-[10px] text-[#64748b]">RPM</span></span>
         </div>
       </div>
 

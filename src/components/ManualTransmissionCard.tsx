@@ -29,7 +29,7 @@ export const ManualTransmissionCard: React.FC<ManualTransmissionCardProps> = ({ 
         </div>
 
         {isSlipping ? (
-          <div className="badge-pill badge-red animate-bounce">
+          <div className="badge-pill badge-red animate-pulse">
             <AlertOctagon size={12} />
             CLUTCH SLIP DETECTED
           </div>

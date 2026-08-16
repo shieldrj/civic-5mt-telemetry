@@ -8,7 +8,10 @@ import {
   Activity,
   Cpu,
   RefreshCw,
-  Car
+  Car,
+  Gauge,
+  ScanLine,
+  Droplet
 } from 'lucide-react';
 import { OBDLiveMetrics, TripAnalytics, OilLifeProfile, ConnectionStatus } from './types/obd';
 import { telemetryManager } from './services/telemetryManager';
@@ -179,43 +182,47 @@ export function App() {
         <div className="flex items-center gap-1.5 sm:gap-2">
           <button
             onClick={() => setActiveTab('cockpit')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
               activeTab === 'cockpit'
                 ? 'bg-[#ff2a40] text-white shadow-[0_0_10px_#ff2a40]'
                 : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[#121622]'
             }`}
           >
-            🏎️ Primary Cockpit
+            <Gauge size={13} />
+            Primary Cockpit
           </button>
           <button
             onClick={() => setActiveTab('dtc')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
               activeTab === 'dtc'
                 ? 'bg-[#ff2a40] text-white shadow-[0_0_10px_#ff2a40]'
                 : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[#121622]'
             }`}
           >
-            🔍 Code Scanner (DTC)
+            <ScanLine size={13} />
+            Code Scanner (DTC)
           </button>
           <button
             onClick={() => setActiveTab('oil_wear')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
               activeTab === 'oil_wear'
                 ? 'bg-[#ff2a40] text-white shadow-[0_0_10px_#ff2a40]'
                 : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[#121622]'
             }`}
           >
-            💧 Oil Life & Diagnostics
+            <Droplet size={13} />
+            Oil Life & Diagnostics
           </button>
           <button
             onClick={() => setActiveTab('bench')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
               activeTab === 'bench'
                 ? 'bg-[#ff2a40] text-white shadow-[0_0_10px_#ff2a40]'
                 : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[#121622]'
             }`}
           >
-            🕹️ ECU Bench / Simulator
+            <Cpu size={13} />
+            ECU Bench / Simulator
           </button>
         </div>
       </div>
