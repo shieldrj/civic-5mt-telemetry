@@ -25,66 +25,83 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
   accentColor = '#ff2a40',
   redlineStart,
   ticks = [],
-  size = 230,
+  size = 200,
 }) => {
-  const filterId = 'glow-' + title.replace(/\s+/g, '-').toLowerCase();
   const clampedValue = Math.max(min, Math.min(max, value));
   
-  // 240-degree sweep from bottom-left (210°) clockwise to bottom-right (450° / 90°)
-  // Angle convention with 0° at top (12 o'clock):
-  // 220° is bottom-left (~7:20), 0° / 360° is top (12:00), 140° / 500° is bottom-right (~4:40)
-  const startAngle = 215;
-  const endAngle = 505;
-  const totalSweep = endAngle - startAngle; // 290 degrees
+  // 260-degree sweep from 140° (bottom-left) to 400° (bottom-right)
+  const startAngle = 140;
+  const endAngle = 400;
+  const totalSweep = endAngle - startAngle; // 260°
 
-  const valueRatio = (clampedValue - min) / (max - min);
+  const valueRatio = Math.max(0, Math.min(1, (clampedValue - min) / (max - min)));
   const currentAngle = startAngle + valueRatio * totalSweep;
 
-  const center = size / 2;
-  const radius = size * 0.38;
-  const strokeWidth = 8;
+  const cx = 100;
+  const cy = 100;
+  const radius = 64;
+  const strokeWidth = 5;
 
-  // Convert angle (0° = Top/12 o'clock, clockwise) to Cartesian (x, y)
-  const angleToCoord = (cx: number, cy: number, r: number, angleDeg: number) => {
-    const rad = ((angleDeg - 90) * Math.PI) / 180.0;
+  const degToRad = (deg: number) => (deg * Math.PI) / 180;
+
+  const getCoord = (r: number, deg: number) => {
+    const rad = degToRad(deg);
     return {
       x: cx + r * Math.cos(rad),
       y: cy + r * Math.sin(rad),
     };
   };
 
-  // Draw clockwise SVG arc
   const createArc = (startDeg: number, endDeg: number, r: number) => {
-    const p1 = angleToCoord(center, center, r, startDeg);
-    const p2 = angleToCoord(center, center, r, endDeg);
+    const p1 = getCoord(r, startDeg);
+    const p2 = getCoord(r, endDeg);
     const largeArc = Math.abs(endDeg - startDeg) > 180 ? 1 : 0;
-    return `M ${p1.x} ${p1.y} A ${r} ${r} 0 ${largeArc} 1 ${p2.x} ${p2.y}`;
+    return `M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
   };
 
-  // Base needle points pointing straight up (0° / 12 o'clock)
-  const needleLength = radius * 0.90;
-  const isCompact = size < 200;
+  const gradientId = `gauge-grad-${title.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`;
+
+  // Formatted main value
+  const displayValue = typeof value === 'number'
+    ? (unit === '%' || unit === '°F' || value >= 100 ? Math.round(value) : value.toFixed(1))
+    : value;
 
   return (
-    <div className="relative flex flex-col items-center justify-center select-none" style={{ width: size, height: size }}>
-      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="overflow-visible">
+    <div
+      className="relative flex flex-col items-center justify-center select-none"
+      style={{ width: size, height: size }}
+    >
+      <svg
+        viewBox="0 0 200 200"
+        className="w-full h-full overflow-visible"
+      >
         <defs>
-          <filter id={filterId} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="3" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
-          </filter>
+          <linearGradient id={gradientId} x1="0%" y1="100%" x2="100%" y2="0%">
+            <stop offset="0%" stopColor={accentColor} stopOpacity="0.4" />
+            <stop offset="100%" stopColor={accentColor} stopOpacity="1" />
+          </linearGradient>
         </defs>
+
+        {/* Subtle Outer Dial Ring */}
+        <circle
+          cx={cx}
+          cy={cy}
+          r={92}
+          fill="none"
+          stroke="rgba(255, 255, 255, 0.03)"
+          strokeWidth="1"
+        />
 
         {/* Background Track Arc */}
         <path
           d={createArc(startAngle, endAngle, radius)}
           fill="none"
-          stroke="#141824"
+          stroke="#151924"
           strokeWidth={strokeWidth}
           strokeLinecap="round"
         />
 
-        {/* Redline zone if defined */}
+        {/* Redline Zone Track */}
         {redlineStart && redlineStart < max && (
           <path
             d={createArc(
@@ -93,53 +110,51 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
               radius
             )}
             fill="none"
-            stroke="rgba(255, 42, 64, 0.4)"
+            stroke="rgba(255, 42, 64, 0.35)"
             strokeWidth={strokeWidth}
             strokeLinecap="round"
           />
         )}
 
-        {/* Active Arc */}
+        {/* Active Value Arc */}
         {valueRatio > 0.005 && (
           <path
             d={createArc(startAngle, currentAngle, radius)}
             fill="none"
-            stroke={accentColor}
+            stroke={`url(#${gradientId})`}
             strokeWidth={strokeWidth}
             strokeLinecap="round"
-            filter={`url(#${filterId})`}
           />
         )}
 
-        {/* Ticks & Numeric Labels */}
+        {/* Clean Outer Ticks & Labels */}
         {ticks.map((t) => {
           const tRatio = (t - min) / (max - min);
           const tAngle = startAngle + tRatio * totalSweep;
-          const pOuter = angleToCoord(center, center, radius + (isCompact ? 8 : 11), tAngle);
-          const pInner = angleToCoord(center, center, radius + 3, tAngle);
-          const pText = angleToCoord(center, center, radius - (isCompact ? 11 : 15), tAngle);
+          const p1 = getCoord(radius + 4, tAngle);
+          const p2 = getCoord(radius + 10, tAngle);
+          const pText = getCoord(radius + 21, tAngle);
           const isRed = redlineStart && t >= redlineStart;
 
-          // Format tick display (e.g. 7000 -> 7k if large)
           const tickLabel = t >= 1000 ? `${t / 1000}k` : `${t}`;
 
           return (
             <g key={t}>
               <line
-                x1={pInner.x}
-                y1={pInner.y}
-                x2={pOuter.x}
-                y2={pOuter.y}
-                stroke={isRed ? '#ff2a40' : '#475569'}
-                strokeWidth={isRed ? 2 : 1.2}
+                x1={p1.x.toFixed(2)}
+                y1={p1.y.toFixed(2)}
+                x2={p2.x.toFixed(2)}
+                y2={p2.y.toFixed(2)}
+                stroke={isRed ? '#ff2a40' : 'rgba(255, 255, 255, 0.22)'}
+                strokeWidth={isRed ? '1.5' : '1'}
               />
               <text
-                x={pText.x}
-                y={pText.y + (isCompact ? 2.5 : 3.5)}
-                fill={isRed ? '#ff6b7b' : '#64748b'}
-                fontSize={isCompact ? "8" : "9"}
-                fontFamily="'Rajdhani', sans-serif"
-                fontWeight="700"
+                x={pText.x.toFixed(2)}
+                y={(pText.y + 3).toFixed(2)}
+                fill={isRed ? '#ff6b7b' : 'rgba(255, 255, 255, 0.4)'}
+                fontSize="8.5"
+                fontFamily="'Chakra Petch', monospace"
+                fontWeight="600"
                 textAnchor="middle"
               >
                 {tickLabel}
@@ -148,62 +163,64 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
           );
         })}
 
-        {/* Hardware Accelerated Smooth Rotating Needle */}
+        {/* Precision Needle: Minimalist indicator blade */}
         <g
           style={{
             transform: `rotate(${currentAngle}deg)`,
-            transformOrigin: `${center}px ${center}px`,
-            transition: 'transform 0.09s cubic-bezier(0.1, 0.9, 0.2, 1)',
+            transformOrigin: `${cx}px ${cy}px`,
+            transition: 'transform 0.08s cubic-bezier(0.1, 0.9, 0.2, 1)',
           }}
         >
-          <polygon
-            points={`${center},${center - needleLength} ${center - (isCompact ? 4.5 : 6)},${center} ${center + (isCompact ? 4.5 : 6)},${center}`}
+          <line
+            x1={cx}
+            y1={cy}
+            x2={cx + radius - 3}
+            y2={cy}
+            stroke={accentColor}
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+          <circle
+            cx={cx + radius - 3}
+            cy={cy}
+            r="2.25"
             fill={accentColor}
-            filter={`url(#${filterId})`}
           />
         </g>
 
-        {/* Center Cap */}
-        <circle cx={center} cy={center} r={isCompact ? 9 : 12} fill="#0d0f17" stroke="#252b3d" strokeWidth={isCompact ? 2 : 2.5} />
-        <circle cx={center} cy={center} r={isCompact ? 3.5 : 5} fill={accentColor} />
+        {/* Minimal Hub Center Cap */}
+        <circle
+          cx={cx}
+          cy={cy}
+          r={7}
+          fill="#0a0c12"
+          stroke="rgba(255, 255, 255, 0.15)"
+          strokeWidth="1.5"
+        />
+        <circle
+          cx={cx}
+          cy={cy}
+          r={2.5}
+          fill={accentColor}
+        />
       </svg>
 
-      {/* Digital Inset Readout - Placed clearly at bottom open section */}
-      <div
-        className="absolute flex flex-col items-center justify-center text-center pointer-events-none"
-        style={{ bottom: size * (isCompact ? 0.06 : 0.08) }}
-      >
-        <span
-          className={`font-bold uppercase tracking-wider text-[#64748b] font-['Chakra_Petch'] ${
-            isCompact ? 'text-[9px]' : 'text-[10px]'
-          }`}
-        >
+      {/* Floating Center Digital Readout */}
+      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center pt-8">
+        <span className="text-[8.5px] font-bold tracking-wider text-[#64748b] uppercase font-['Inter']">
           {title}
         </span>
-        <div className="flex items-baseline gap-1 mt-[-2px]">
-          <span
-            className={`font-extrabold tracking-tight text-[#f8fafc] font-['Chakra_Petch'] tabular-nums ${
-              isCompact ? 'text-xl' : 'text-2xl'
-            }`}
-            style={{ textShadow: `0 0 12px ${accentColor}50` }}
-          >
-            {typeof value === 'number' ? (unit === '%' || unit === '°F' || value >= 100 ? Math.round(value) : value.toFixed(1)) : value}
+        <div className="flex items-baseline justify-center gap-1 mt-[-2px]">
+          <span className="text-xl sm:text-2xl font-black text-[#f8fafc] font-['Chakra_Petch'] tabular-nums tracking-tight">
+            {displayValue}
           </span>
-          <span
-            className={`font-bold text-[#64748b] font-['Chakra_Petch'] ${
-              isCompact ? 'text-[9px]' : 'text-[10px]'
-            }`}
-          >
+          <span className="text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">
             {unit}
           </span>
         </div>
         {subValue !== undefined && (
-          <span
-            className={`text-[#475569] font-medium font-['Inter'] mt-[-2px] ${
-              isCompact ? 'text-[9px]' : 'text-[10px]'
-            }`}
-          >
-            {subLabel}: <strong className="text-[#94a3b8]">{subValue}</strong>
+          <span className="text-[8.5px] text-[#94a3b8] font-medium font-['Inter'] mt-[-1px]">
+            {subLabel ? `${subLabel}: ` : ''}<strong className="text-[#cbd5e1] font-semibold">{subValue}</strong>
           </span>
         )}
       </div>

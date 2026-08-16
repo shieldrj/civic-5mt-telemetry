@@ -10,15 +10,15 @@ interface MpgTelemetryCardProps {
 export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({ metrics, trip }) => {
   const isDfco = metrics.isDfcoActive;
   
-  // Calculate AFR color status (14.7 is optimal stoich)
+  // AFR status
   const afr = metrics.airFuelRatio;
-  let afrStatus = 'Optimal Stoich';
+  let afrStatus = 'Stoich (14.7)';
   let afrColor = 'text-[#00e676]';
-  if (afr < 13.0) {
+  if (afr < 13.2) {
     afrStatus = 'Rich (Power)';
     afrColor = 'text-[#ffaa00]';
-  } else if (afr > 16.0) {
-    afrStatus = 'Lean (Economy)';
+  } else if (afr > 15.8) {
+    afrStatus = 'Lean (Eco)';
     afrColor = 'text-[#00d2ff]';
   }
 
@@ -27,88 +27,87 @@ export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({ metrics, tri
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-[#ffaa00]/15 text-[#ffaa00] border border-[#ffaa00]/30">
-            <Fuel size={18} />
+          <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#ffaa00] border border-[rgba(255,255,255,0.08)]">
+            <Fuel size={16} />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-[#f8fafc] font-['Chakra_Petch'] tracking-wide">
+            <h3 className="text-xs font-bold text-[#f8fafc] font-['Chakra_Petch'] tracking-wide">
               PHYSICS MPG & FUEL FLOW
             </h3>
-            <p className="text-[10px] text-[#64748b] font-medium">MAF + Lambda + Fuel Trim Dynamics</p>
+            <p className="text-[10px] text-[#64748b]">MAF + Lambda + Fuel Trim Dynamics</p>
           </div>
         </div>
 
-        {/* DFCO Status Badge */}
         {isDfco ? (
           <div className="badge-pill badge-cyan animate-pulse">
-            <Zap size={12} />
+            <Zap size={11} />
             DFCO ACTIVE (0.00 GPH)
           </div>
         ) : (
           <div className="badge-pill badge-green">
-            <Activity size={12} />
+            <Activity size={11} />
             CLOSED LOOP
           </div>
         )}
       </div>
 
-      {/* Main Big MPG & Flow Split */}
-      <div className="grid grid-cols-2 gap-3 bg-[#090b10] border border-[#161a26] rounded-xl p-3.5 items-center">
-        {/* Instant MPG */}
+      {/* Main Split: Instant MPG & Flow Rate */}
+      <div className="grid grid-cols-2 gap-3 items-center telemetry-card-subtle">
+        {/* Instantaneous MPG */}
         <div className="flex flex-col">
-          <span className="text-[10px] uppercase font-bold text-[#64748b] tracking-wider font-['Chakra_Petch']">
+          <span className="text-[9px] uppercase font-bold text-[#64748b] tracking-wider font-['Chakra_Petch']">
             Instantaneous
           </span>
           <div className="flex items-baseline gap-1 mt-0.5">
             <span
-              className={`text-3xl font-extrabold font-['Chakra_Petch'] tracking-tight ${
-                isDfco ? 'text-[#00d2ff] glow-cyan' : metrics.instantMpg >= 35 ? 'text-[#00e676] glow-green' : 'text-[#f8fafc]'
+              className={`text-2xl sm:text-3xl font-black font-['Chakra_Petch'] tabular-nums tracking-tight ${
+                isDfco ? 'text-[#00d2ff]' : metrics.instantMpg >= 35 ? 'text-[#00e676]' : 'text-[#f8fafc]'
               }`}
             >
               {isDfco ? '99.9+' : metrics.instantMpg.toFixed(1)}
             </span>
-            <span className="text-xs font-bold text-[#64748b] font-['Chakra_Petch']">MPG</span>
+            <span className="text-[10px] font-bold text-[#64748b] font-['Chakra_Petch']">MPG</span>
           </div>
-          <span className="text-[10px] text-[#475569] font-medium">
-            30s Avg: <strong className="text-[#94a3b8]">{metrics.rolling30sMpg} MPG</strong>
+          <span className="text-[9px] text-[#94a3b8]">
+            30s Avg: <strong className="text-[#cbd5e1] font-['Chakra_Petch']">{metrics.rolling30sMpg} MPG</strong>
           </span>
         </div>
 
-        {/* Real-time Fuel Flow */}
-        <div className="flex flex-col border-l border-[#1a2030] pl-3">
-          <span className="text-[10px] uppercase font-bold text-[#64748b] tracking-wider font-['Chakra_Petch']">
+        {/* Burn Rate */}
+        <div className="flex flex-col border-l border-[rgba(255,255,255,0.06)] pl-3">
+          <span className="text-[9px] uppercase font-bold text-[#64748b] tracking-wider font-['Chakra_Petch']">
             Fuel Burn Rate
           </span>
           <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-2xl font-extrabold text-[#ffaa00] font-['Chakra_Petch']">
+            <span className="text-xl sm:text-2xl font-bold text-[#ffaa00] font-['Chakra_Petch'] tabular-nums">
               {metrics.fuelFlowGalPerHour.toFixed(2)}
             </span>
-            <span className="text-xs font-bold text-[#64748b] font-['Chakra_Petch']">GAL/HR</span>
+            <span className="text-[10px] font-bold text-[#64748b] font-['Chakra_Petch']">GAL/HR</span>
           </div>
-          <span className="text-[10px] text-[#475569] font-medium">
+          <span className="text-[9px] text-[#94a3b8]">
             ({metrics.fuelFlowLitersPerHour.toFixed(2)} L/hr)
           </span>
         </div>
       </div>
 
-      {/* Secondary Telemetry Grid: AFR & Idle Fuel Loss */}
+      {/* Secondary Row: AFR & Idle Loss */}
       <div className="grid grid-cols-2 gap-2 text-xs">
-        {/* Air-Fuel Ratio Monitor */}
-        <div className="bg-[#0b0e16] border border-[#161a26] rounded-lg p-2 flex flex-col justify-between">
-          <div className="flex items-center justify-between text-[10px] font-bold text-[#64748b] font-['Chakra_Petch']">
-            <span>AIR : FUEL RATIO</span>
+        {/* AFR */}
+        <div className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded-lg p-2 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">
+            <span>AIR:FUEL</span>
             <span className={afrColor}>{afrStatus}</span>
           </div>
           <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-base font-bold text-[#f8fafc] font-['Chakra_Petch']">
+            <span className="text-sm font-bold text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
               {afr.toFixed(2)} : 1
             </span>
-            <span className="text-[9px] text-[#64748b]">λ {metrics.equivalenceRatio.toFixed(3)}</span>
+            <span className="text-[8px] text-[#64748b]">λ {metrics.equivalenceRatio.toFixed(3)}</span>
           </div>
-          {/* Visual stoich bar */}
-          <div className="w-full bg-[#161a26] h-1.5 rounded-full mt-1.5 relative overflow-hidden">
+          {/* Micro stoich bar */}
+          <div className="w-full bg-[#161a26] h-1 rounded-full mt-1 overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-[#ffaa00] via-[#00e676] to-[#00d2ff] transition-all duration-150"
+              className="h-full bg-gradient-to-r from-[#ffaa00] via-[#00e676] to-[#00d2ff]"
               style={{
                 width: `${Math.min(100, Math.max(0, ((afr - 10) / (20 - 10)) * 100))}%`,
               }}
@@ -116,33 +115,33 @@ export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({ metrics, tri
           </div>
         </div>
 
-        {/* Idle Fuel Wastage Counter */}
-        <div className="bg-[#0b0e16] border border-[#161a26] rounded-lg p-2 flex flex-col justify-between">
-          <div className="flex items-center justify-between text-[10px] font-bold text-[#64748b] font-['Chakra_Petch']">
-            <span className="flex items-center gap-1">
-              <DollarSign size={10} className="text-[#ff2a40]" />
-              IDLE FUEL LOSS
+        {/* Idle Wastage */}
+        <div className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded-lg p-2 flex flex-col justify-between">
+          <div className="flex items-center justify-between text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">
+            <span className="flex items-center gap-0.5">
+              <DollarSign size={9} className="text-[#ff6b7b]" />
+              IDLE LOSS
             </span>
-            <span className="text-[#ff6b7b]">
+            <span className="text-[#ff6b7b] font-['Chakra_Petch']">
               ${trip.idleCostDollars.toFixed(2)}
             </span>
           </div>
           <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-base font-bold text-[#f8fafc] font-['Chakra_Petch']">
+            <span className="text-sm font-bold text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
               {(trip.idleFuelGallons * 1000).toFixed(0)}
             </span>
-            <span className="text-[9px] text-[#64748b]">mL wasted</span>
+            <span className="text-[8px] text-[#64748b]">mL wasted</span>
           </div>
-          <span className="text-[9px] text-[#475569]">
-            {Math.floor(trip.idleTimeSec / 60)}m {Math.round(trip.idleTimeSec % 60)}s stationary
+          <span className="text-[8px] text-[#64748b]">
+            {Math.floor(trip.idleTimeSec / 60)}m {Math.round(trip.idleTimeSec % 60)}s idle
           </span>
         </div>
       </div>
 
-      {/* Fuel Trims (STFT + LTFT) */}
-      <div className="flex items-center justify-between bg-[#08090d] border border-[#141722] rounded-lg px-2.5 py-1.5 text-[11px] font-['Chakra_Petch']">
-        <span className="text-[#64748b] flex items-center gap-1">
-          <TrendingUp size={12} />
+      {/* Fuel Trims */}
+      <div className="flex items-center justify-between px-1 text-[10px] font-['Chakra_Petch'] text-[#64748b]">
+        <span className="flex items-center gap-1">
+          <TrendingUp size={11} />
           ECU Fuel Trims:
         </span>
         <div className="flex items-center gap-3">

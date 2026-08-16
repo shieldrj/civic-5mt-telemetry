@@ -24,72 +24,72 @@ export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({ trip, onResetTri
   if (ecoScore < 40) ecoColor = 'text-[#ff2a40]';
 
   return (
-    <div className="telemetry-card flex flex-col gap-3">
+    <div className="telemetry-card flex flex-col gap-2.5">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-[#00e676]/15 text-[#00e676] border border-[#00e676]/30">
-            <Navigation size={18} />
+          <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#00e676] border border-[rgba(255,255,255,0.08)]">
+            <Navigation size={16} />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-[#f8fafc] font-['Chakra_Petch'] tracking-wide">
-              TRIP TELEMETRY & ECO SCORE
+            <h3 className="text-xs font-bold text-[#f8fafc] font-['Chakra_Petch'] tracking-wide">
+              TRIP TELEMETRY & EFFICIENCY
             </h3>
-            <p className="text-[10px] text-[#64748b] font-medium">Commute Efficiency & Distance</p>
+            <p className="text-[10px] text-[#64748b]">Drive Cycle Stats & Distance</p>
           </div>
         </div>
 
         <button
           onClick={onResetTrip}
-          className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#161a26] hover:bg-[#1f2638] text-[#94a3b8] hover:text-[#f8fafc] border border-[#252b3d] text-[11px] font-['Chakra_Petch'] transition-colors"
+          className="flex items-center gap-1 px-2 py-1 rounded-md bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)] text-[#94a3b8] hover:text-[#f8fafc] border border-[rgba(255,255,255,0.08)] text-[10px] font-['Chakra_Petch'] transition-colors"
         >
-          <RotateCcw size={12} />
+          <RotateCcw size={11} />
           Reset Trip
         </button>
       </div>
 
-      {/* Grid of Trip Metrics */}
+      {/* Grid of 4 Clean Tiles */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
         {/* Average MPG */}
-        <div className="bg-[#090b10] border border-[#161a26] rounded-xl p-3 flex flex-col">
-          <span className="text-[10px] uppercase font-bold text-[#64748b] font-['Chakra_Petch']">
+        <div className="telemetry-card-subtle flex flex-col">
+          <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch']">
             Trip Average
           </span>
           <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-2xl font-extrabold text-[#00e676] font-['Chakra_Petch']">
+            <span className="text-xl font-black text-[#00e676] font-['Chakra_Petch'] tabular-nums">
               {trip.avgMpg > 0 ? trip.avgMpg.toFixed(1) : '--'}
             </span>
-            <span className="text-xs font-bold text-[#64748b] font-['Chakra_Petch']">MPG</span>
+            <span className="text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">MPG</span>
           </div>
-          <span className="text-[9px] text-[#475569]">
+          <span className="text-[9px] text-[#64748b]">
             {trip.totalFuelUsedGallons.toFixed(2)} gal used
           </span>
         </div>
 
         {/* Distance */}
-        <div className="bg-[#090b10] border border-[#161a26] rounded-xl p-3 flex flex-col">
-          <span className="text-[10px] uppercase font-bold text-[#64748b] font-['Chakra_Petch']">
-            Trip Distance
+        <div className="telemetry-card-subtle flex flex-col">
+          <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch']">
+            Distance
           </span>
           <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-2xl font-extrabold text-[#f8fafc] font-['Chakra_Petch']">
+            <span className="text-xl font-black text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
               {trip.distanceMiles.toFixed(1)}
             </span>
-            <span className="text-xs font-bold text-[#64748b] font-['Chakra_Petch']">MI</span>
+            <span className="text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">MI</span>
           </div>
-          <span className="text-[9px] text-[#475569]">
-            Avg: {trip.avgSpeedMph.toFixed(0)} mph (Max: {trip.maxSpeedMph.toFixed(0)})
+          <span className="text-[9px] text-[#64748b]">
+            Avg {trip.avgSpeedMph.toFixed(0)} mph (Max {trip.maxSpeedMph.toFixed(0)})
           </span>
         </div>
 
-        {/* Trip Time & Idle */}
-        <div className="bg-[#090b10] border border-[#161a26] rounded-xl p-3 flex flex-col">
-          <span className="text-[10px] uppercase font-bold text-[#64748b] font-['Chakra_Petch'] flex items-center gap-1">
-            <Clock size={10} />
+        {/* Duration */}
+        <div className="telemetry-card-subtle flex flex-col">
+          <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch'] flex items-center gap-1">
+            <Clock size={9} />
             Duration
           </span>
           <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-2xl font-extrabold text-[#f8fafc] font-['Chakra_Petch']">
+            <span className="text-xl font-black text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
               {formatTime(trip.tripDurationSec)}
             </span>
           </div>
@@ -99,16 +99,16 @@ export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({ trip, onResetTri
         </div>
 
         {/* Eco Score */}
-        <div className="bg-[#090b10] border border-[#161a26] rounded-xl p-3 flex flex-col">
-          <span className="text-[10px] uppercase font-bold text-[#64748b] font-['Chakra_Petch'] flex items-center gap-1">
-            <Award size={10} className="text-[#00e676]" />
+        <div className="telemetry-card-subtle flex flex-col">
+          <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch'] flex items-center gap-1">
+            <Award size={9} className="text-[#00e676]" />
             Eco Score
           </span>
           <div className="flex items-baseline gap-1 mt-0.5">
-            <span className={`text-2xl font-extrabold font-['Chakra_Petch'] ${ecoColor}`}>
+            <span className={`text-xl font-black font-['Chakra_Petch'] tabular-nums ${ecoColor}`}>
               {ecoScore}
             </span>
-            <span className="text-xs font-bold text-[#64748b] font-['Chakra_Petch']">/ 100</span>
+            <span className="text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">/100</span>
           </div>
           <span className="text-[9px] text-[#00d2ff]">
             DFCO saved: +{(trip.coastingFuelSavedGallons * 1000).toFixed(0)} mL

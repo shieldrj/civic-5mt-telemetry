@@ -1,4 +1,5 @@
 import React from 'react';
+import { Zap, Sparkles } from 'lucide-react';
 
 interface ShiftLightBarProps {
   stage: number; // 0 to 5
@@ -15,73 +16,88 @@ export const ShiftLightBar: React.FC<ShiftLightBarProps> = ({
   shouldShiftUp,
   onToggleMode,
 }) => {
-  // 12 LED segments total
-  // In Power mode: 4 Green, 4 Amber, 3 Cyan/Blue, 1 Red / Flashing
-  // In Eco mode: 6 Green, 4 Amber, 2 Blue/Shift Prompt
-  const totalLeds = 12;
+  const totalLeds = 16;
   const activeLeds = Math.min(totalLeds, Math.round((stage / 5) * totalLeds));
 
   return (
-    <div className="w-full bg-[#0b0d14] border border-[#1b2030] rounded-xl p-3 flex flex-col gap-2 shadow-lg">
-      <div className="flex items-center justify-between px-1">
+    <div className="w-full bg-[#0e111a] border border-[rgba(255,255,255,0.08)] rounded-xl p-2.5 sm:p-3 flex flex-col gap-2 shadow-md">
+      {/* Top Header: Shift Coach & RPM Readout */}
+      <div className="flex items-center justify-between px-0.5">
         <div className="flex items-center gap-2">
-          <span className="text-[10px] font-bold tracking-widest text-[#64748b] uppercase font-['Chakra_Petch']">
-            Shift Coach
-          </span>
           <button
             onClick={onToggleMode}
-            className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase transition-colors font-['Chakra_Petch'] ${
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-bold uppercase transition-colors font-['Chakra_Petch'] ${
               shiftMode === 'eco'
-                ? 'bg-[#00e676]/20 text-[#00e676] border border-[#00e676]/40'
-                : 'bg-[#ff2a40]/20 text-[#ff2a40] border border-[#ff2a40]/40'
+                ? 'bg-[#00e676]/15 text-[#5aff9f] border border-[#00e676]/30 hover:bg-[#00e676]/25'
+                : 'bg-[#ff2a40]/15 text-[#ff6b7b] border border-[#ff2a40]/30 hover:bg-[#ff2a40]/25'
             }`}
           >
-            {shiftMode === 'eco' ? 'ECO MODE' : 'VTEC POWER'}
+            {shiftMode === 'eco' ? (
+              <>
+                <Sparkles size={11} className="text-[#00e676]" />
+                <span>ECO SHIFT</span>
+              </>
+            ) : (
+              <>
+                <Zap size={11} className="text-[#ff2a40]" />
+                <span>VTEC POWER</span>
+              </>
+            )}
           </button>
+          <span className="text-[10px] text-[#64748b] hidden sm:inline">
+            {shiftMode === 'eco' ? 'Target: 2,200–2,800 RPM' : 'Target: 6,500 RPM Redline'}
+          </span>
         </div>
 
         <div className="flex items-center gap-2 font-['Chakra_Petch'] text-xs">
           {shouldShiftUp && (
-            <span className="animate-pulse text-[#00d2ff] font-bold flex items-center gap-1">
+            <span className="text-[#00d2ff] font-bold text-xs flex items-center gap-1 animate-pulse">
               ▲ SHIFT UP
             </span>
           )}
-          <span className="text-[#94a3b8] font-semibold tabular-nums">{rpm} <span className="text-[10px] text-[#64748b]">RPM</span></span>
+          <div className="flex items-baseline gap-1 bg-[#08090d] px-2 py-0.5 rounded border border-[rgba(255,255,255,0.06)]">
+            <span className="text-[#f8fafc] font-bold tabular-nums text-sm">
+              {rpm}
+            </span>
+            <span className="text-[9px] text-[#64748b] font-semibold">RPM</span>
+          </div>
         </div>
       </div>
 
-      {/* LED segments bar */}
-      <div className={`grid grid-cols-12 gap-1.5 h-4 w-full p-1 bg-[#05060a] rounded-lg border border-[#161a26] ${
-        stage >= 5 ? 'animate-redline' : ''
-      }`}>
+      {/* LED Segmented Ribbon */}
+      <div
+        className={`grid grid-cols-16 gap-1 h-3 sm:h-3.5 w-full p-1 bg-[#08090d] rounded-lg border border-[rgba(255,255,255,0.06)] ${
+          stage >= 5 ? 'animate-redline' : ''
+        }`}
+      >
         {Array.from({ length: totalLeds }).map((_, index) => {
           const isActive = index < activeLeds;
-          let activeColor = '#00e676'; // Green
+          let segmentColor = '#00e676'; // Eco Green
 
           if (shiftMode === 'power') {
-            if (index >= 8) {
-              activeColor = '#ff2a40'; // Red
-            } else if (index >= 6) {
-              activeColor = '#00d2ff'; // Cyan
-            } else if (index >= 3) {
-              activeColor = '#ffaa00'; // Amber
+            if (index >= 12) {
+              segmentColor = '#ff2a40'; // Redline
+            } else if (index >= 9) {
+              segmentColor = '#00d2ff'; // VTEC Cam
+            } else if (index >= 5) {
+              segmentColor = '#ffaa00'; // Midband
             }
           } else {
             // Eco Mode
-            if (index >= 9) {
-              activeColor = '#ffaa00'; // Amber warning: revving high for eco
-            } else if (index >= 6) {
-              activeColor = '#00d2ff'; // Cyan shift prompt
+            if (index >= 12) {
+              segmentColor = '#ffaa00'; // Over-rev for eco
+            } else if (index >= 8) {
+              segmentColor = '#00d2ff'; // Optimal Shift Prompt
             }
           }
 
           return (
             <div
               key={index}
-              className="h-full rounded-sm transition-all duration-75"
+              className="h-full rounded-xs transition-colors duration-75"
               style={{
-                backgroundColor: isActive ? activeColor : '#121520',
-                boxShadow: isActive ? `0 0 8px ${activeColor}` : 'none',
+                backgroundColor: isActive ? segmentColor : '#131722',
+                opacity: isActive ? 1 : 0.4,
               }}
             />
           );

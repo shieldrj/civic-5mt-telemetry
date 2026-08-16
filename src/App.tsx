@@ -11,7 +11,8 @@ import {
   Car,
   Gauge,
   ScanLine,
-  Droplet
+  Droplet,
+  Layers
 } from 'lucide-react';
 import { OBDLiveMetrics, TripAnalytics, OilLifeProfile, ConnectionStatus } from './types/obd';
 import { telemetryManager } from './services/telemetryManager';
@@ -63,96 +64,95 @@ export function App() {
 
   if (!metrics || !trip || !oil) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-[#07080b] text-[#f8fafc]">
+      <div className="flex h-screen w-screen items-center justify-center bg-[#08090d] text-[#f8fafc]">
         <div className="flex items-center gap-3">
-          <RefreshCw className="animate-spin text-[#ff2a40]" size={28} />
-          <span className="font-['Chakra_Petch'] text-lg font-bold">Initializing Civic 5MT Telemetry...</span>
+          <RefreshCw className="animate-spin text-[#ff2a40]" size={24} />
+          <span className="font-['Chakra_Petch'] text-sm font-bold tracking-wider">
+            Initializing Civic 5MT Telemetry...
+          </span>
         </div>
       </div>
     );
   }
 
-  // Cold Engine Warning Flag (< 160°F)
+  // Engine temperature status
   const isColdEngine = metrics.coolantTempF < 160;
+  const isOverheating = metrics.coolantTempF > 220;
 
   return (
-    <div className="min-h-screen w-full bg-[#07080b] text-[#f8fafc] flex flex-col p-2 sm:p-4 max-w-7xl mx-auto gap-3.5 select-none">
-      {/* Top Application Bar */}
-      <header className="flex items-center justify-between bg-[#0e1118]/80 backdrop-blur-md border border-[#1f2537] rounded-2xl px-3.5 py-2.5 shadow-xl">
-        {/* Brand & Vehicle Details */}
+    <div className="min-h-screen w-full bg-[#08090d] text-[#f8fafc] flex flex-col p-2.5 sm:p-4 max-w-6xl mx-auto gap-3 select-none">
+      {/* Sleek Minimal Header */}
+      <header className="flex items-center justify-between bg-[#0e111a] border border-[rgba(255,255,255,0.08)] rounded-xl px-3 py-2 shadow-sm">
+        {/* Left: Vehicle Badge */}
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-[#ff2a40]/20 border border-[#ff2a40]/40 flex items-center justify-center text-[#ff2a40]">
-            <Car size={18} />
+          <div className="w-7 h-7 rounded-lg bg-[rgba(255,42,64,0.12)] border border-[rgba(255,42,64,0.3)] flex items-center justify-center text-[#ff2a40]">
+            <Car size={15} />
           </div>
           <div>
             <div className="flex items-center gap-1.5">
-              <h1 className="text-xs sm:text-sm font-extrabold font-['Chakra_Petch'] tracking-wider text-[#f8fafc]">
+              <h1 className="text-xs sm:text-sm font-bold font-['Chakra_Petch'] tracking-wide text-[#f8fafc]">
                 2013 CIVIC LX <span className="text-[#ff2a40]">5MT</span>
               </h1>
-              <span className="badge-pill badge-red text-[9px] py-0 px-1.5">R18Z1</span>
+              <span className="badge-pill badge-red text-[8px] py-0 px-1">R18Z1</span>
             </div>
-            <p className="text-[10px] text-[#64748b] hidden sm:block">1.8L SOHC i-VTEC • Vgate vLinker MC+</p>
+            <p className="text-[9px] text-[#64748b] hidden sm:block">1.8L i-VTEC • Vgate vLinker MC+</p>
           </div>
         </div>
 
-        {/* Engine Vital Badges */}
-        <div className="flex items-center gap-2 sm:gap-4 font-['Chakra_Petch'] text-xs">
-          {/* Coolant Temp */}
-          <div className={`flex items-center gap-1 px-2 py-1 rounded-lg border ${
-            isColdEngine ? 'bg-[#00d2ff]/10 text-[#00d2ff] border-[#00d2ff]/30' : 'bg-[#121622] text-[#94a3b8] border-[#1a2030]'
-          }`}>
-            <Thermometer size={14} className={isColdEngine ? 'text-[#00d2ff]' : 'text-[#00e676]'} />
-            <span className="font-bold">{metrics.coolantTempF}°F</span>
-            {isColdEngine && <span className="text-[9px] text-[#00d2ff] font-semibold hidden md:inline">COLD</span>}
-          </div>
-
-          {/* Intake Temp & Load */}
-          <div className="hidden md:flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#121622] text-[#94a3b8] border border-[#1a2030]">
-            <Wind size={13} className="text-[#64748b]" />
-            <span>IAT {metrics.intakeAirTempF}°F</span>
-          </div>
-
-          <div className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#121622] text-[#94a3b8] border border-[#1a2030]">
-            <Activity size={13} className="text-[#ffaa00]" />
-            <span>LOAD {Math.round(metrics.engineLoadPercent)}%</span>
-          </div>
-
-          {/* Quick DTC Status link */}
-          <button
-            onClick={() => setActiveTab('dtc')}
-            className="flex items-center gap-1 px-2 py-1 rounded-lg bg-[#121622] hover:bg-[#1a2030] text-[#94a3b8] hover:text-[#f8fafc] border border-[#1a2030] text-xs font-['Chakra_Petch'] transition-colors"
-            title="Open Diagnostic Trouble Code Scanner"
+        {/* Center: Live Engine Vitals */}
+        <div className="flex items-center gap-2 font-['Chakra_Petch'] text-xs">
+          {/* Coolant chip */}
+          <div
+            className={`flex items-center gap-1 px-2 py-0.5 rounded-md border text-[11px] ${
+              isColdEngine
+                ? 'bg-[#00d2ff]/10 text-[#70e4ff] border-[#00d2ff]/30'
+                : isOverheating
+                ? 'bg-[#ff2a40]/10 text-[#ff6b7b] border-[#ff2a40]/30'
+                : 'bg-[#08090d] text-[#94a3b8] border-[rgba(255,255,255,0.06)]'
+            }`}
           >
-            <span className="w-2 h-2 rounded-full bg-[#00e676]" />
-            <span className="hidden md:inline">OBD HEALTH:</span> <span>0 CODES</span>
-          </button>
+            <Thermometer size={12} className={isColdEngine ? 'text-[#00d2ff]' : isOverheating ? 'text-[#ff2a40]' : 'text-[#00e676]'} />
+            <span className="font-bold tabular-nums">{metrics.coolantTempF}°F</span>
+            {isColdEngine && <span className="text-[8px] text-[#00d2ff] font-semibold hidden sm:inline">COLD</span>}
+          </div>
+
+          {/* IAT & Load for tablet/desktop */}
+          <div className="hidden md:flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#08090d] text-[#94a3b8] border border-[rgba(255,255,255,0.06)] text-[11px]">
+            <Wind size={11} className="text-[#64748b]" />
+            <span className="tabular-nums">IAT {metrics.intakeAirTempF}°F</span>
+          </div>
+
+          <div className="hidden sm:flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#08090d] text-[#94a3b8] border border-[rgba(255,255,255,0.06)] text-[11px]">
+            <Activity size={11} className="text-[#ffaa00]" />
+            <span className="tabular-nums">LOAD {Math.round(metrics.engineLoadPercent)}%</span>
+          </div>
         </div>
 
-        {/* Action Controls: Hardware Connection & Fullscreen */}
+        {/* Right: OBD Status Pill & Fullscreen */}
         <div className="flex items-center gap-1.5">
           <button
             onClick={() => setIsBluetoothModalOpen(true)}
-            className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 rounded-xl border text-xs font-bold font-['Chakra_Petch'] transition-all ${
+            className={`flex items-center gap-1 px-2.5 py-1 rounded-lg border text-xs font-bold font-['Chakra_Petch'] transition-all ${
               status === 'connected'
-                ? 'bg-[#00e676]/15 text-[#00e676] border-[#00e676]/40 shadow-[0_0_12px_rgba(0,230,118,0.2)]'
+                ? 'bg-[#00e676]/15 text-[#5aff9f] border-[#00e676]/40'
                 : status === 'simulating'
-                ? 'bg-[#00d2ff]/15 text-[#00d2ff] border-[#00d2ff]/40'
-                : 'bg-[#161a26] text-[#94a3b8] border-[#252b3d]'
+                ? 'bg-[#00d2ff]/15 text-[#70e4ff] border-[#00d2ff]/40'
+                : 'bg-[#161a26] text-[#94a3b8] border-[rgba(255,255,255,0.08)]'
             }`}
           >
             {status === 'connected' ? (
               <>
-                <Bluetooth size={14} className="text-[#00e676]" />
+                <Bluetooth size={13} className="text-[#00e676]" />
                 <span className="hidden sm:inline">OBD LIVE</span>
               </>
             ) : status === 'simulating' ? (
               <>
-                <Cpu size={14} className="text-[#00d2ff]" />
+                <Cpu size={13} className="text-[#00d2ff]" />
                 <span className="hidden sm:inline">SIMULATOR</span>
               </>
             ) : (
               <>
-                <Bluetooth size={14} />
+                <Bluetooth size={13} />
                 <span>CONNECT</span>
               </>
             )}
@@ -160,15 +160,15 @@ export function App() {
 
           <button
             onClick={toggleFullscreen}
-            className="p-1.5 sm:p-2 rounded-xl bg-[#161a26] text-[#94a3b8] hover:text-[#f8fafc] border border-[#252b3d] transition-colors"
+            className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#94a3b8] hover:text-[#f8fafc] border border-[rgba(255,255,255,0.08)] transition-colors"
             title="Toggle Fullscreen"
           >
-            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
           </button>
         </div>
       </header>
 
-      {/* Top F1 Shift Light Bar */}
+      {/* Formula 1 / GT3 Shift Light Ribbon */}
       <ShiftLightBar
         stage={metrics.shiftLightStage}
         rpm={metrics.rpm}
@@ -177,81 +177,79 @@ export function App() {
         onToggleMode={toggleShiftMode}
       />
 
-      {/* View Switcher Tabs for Mobile/Desktop */}
-      <div className="flex items-center justify-between border-b border-[#1b2030] pb-1 overflow-x-auto">
-        <div className="flex items-center gap-1.5 sm:gap-2">
-          <button
-            onClick={() => setActiveTab('cockpit')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
-              activeTab === 'cockpit'
-                ? 'bg-[#ff2a40] text-white shadow-[0_0_10px_#ff2a40]'
-                : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[#121622]'
-            }`}
-          >
-            <Gauge size={13} />
-            Primary Cockpit
-          </button>
-          <button
-            onClick={() => setActiveTab('dtc')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
-              activeTab === 'dtc'
-                ? 'bg-[#ff2a40] text-white shadow-[0_0_10px_#ff2a40]'
-                : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[#121622]'
-            }`}
-          >
-            <ScanLine size={13} />
-            Code Scanner (DTC)
-          </button>
-          <button
-            onClick={() => setActiveTab('oil_wear')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
-              activeTab === 'oil_wear'
-                ? 'bg-[#ff2a40] text-white shadow-[0_0_10px_#ff2a40]'
-                : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[#121622]'
-            }`}
-          >
-            <Droplet size={13} />
-            Oil Life & Diagnostics
-          </button>
-          <button
-            onClick={() => setActiveTab('bench')}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
-              activeTab === 'bench'
-                ? 'bg-[#ff2a40] text-white shadow-[0_0_10px_#ff2a40]'
-                : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[#121622]'
-            }`}
-          >
-            <Cpu size={13} />
-            ECU Bench / Simulator
-          </button>
-        </div>
-      </div>
+      {/* Minimalist Segmented Navigation Tabs */}
+      <nav className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
+        <button
+          onClick={() => setActiveTab('cockpit')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
+            activeTab === 'cockpit'
+              ? 'bg-[#ff2a40] text-white shadow-xs'
+              : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[rgba(255,255,255,0.05)]'
+          }`}
+        >
+          <Gauge size={13} />
+          Cockpit
+        </button>
+        <button
+          onClick={() => setActiveTab('dtc')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
+            activeTab === 'dtc'
+              ? 'bg-[#ff2a40] text-white shadow-xs'
+              : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[rgba(255,255,255,0.05)]'
+          }`}
+        >
+          <ScanLine size={13} />
+          Code Scanner (DTC)
+        </button>
+        <button
+          onClick={() => setActiveTab('oil_wear')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
+            activeTab === 'oil_wear'
+              ? 'bg-[#ff2a40] text-white shadow-xs'
+              : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[rgba(255,255,255,0.05)]'
+          }`}
+        >
+          <Droplet size={13} />
+          Oil Diagnostics
+        </button>
+        <button
+          onClick={() => setActiveTab('bench')}
+          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold font-['Chakra_Petch'] whitespace-nowrap transition-all ${
+            activeTab === 'bench'
+              ? 'bg-[#ff2a40] text-white shadow-xs'
+              : 'text-[#94a3b8] hover:text-[#f8fafc] hover:bg-[rgba(255,255,255,0.05)]'
+          }`}
+        >
+          <Cpu size={13} />
+          ECU Bench / Simulator
+        </button>
+      </nav>
 
       {/* TAB 1: PRIMARY COCKPIT DASHBOARD */}
       {activeTab === 'cockpit' && (
-        <div className="flex flex-col gap-3.5">
-          {/* Main Radial Dial Cluster - Option A: Hero Coolant Top + Dual Companion Dials (Portrait Mobile) / 3 Across (Desktop) */}
-          <div className="flex flex-col md:grid md:grid-cols-3 gap-2.5 sm:gap-3 bg-[#0a0d14]/70 border border-[#1b2030] rounded-2xl p-3 sm:p-4 shadow-xl items-center justify-center">
-            {/* 1. Hero Center: Coolant Temperature (Large, Prominent Thermal Vital) */}
-            <div className="order-1 md:order-2 flex justify-center">
+        <main className="flex flex-col gap-3">
+          {/* Main Dial Cluster: Hero Coolant Temp on Top + Twin Dials Underneath on Mobile / 3 Across on Desktop */}
+          <section className="bg-[#0e111a] border border-[rgba(255,255,255,0.08)] rounded-2xl p-3 sm:p-4 shadow-sm flex flex-col md:grid md:grid-cols-3 items-center justify-center gap-2">
+            {/* 1. Hero Center: Engine Coolant Temperature */}
+            <div className="order-1 md:order-2 flex justify-center scale-105 my-0.5">
               <RadialGauge
                 value={metrics.coolantTempF}
                 min={100}
                 max={260}
                 title="COOLANT TEMP"
                 unit="°F"
-                subValue={`${metrics.coolantTempC}°C • ${metrics.coolantTempF < 160 ? 'COLD' : metrics.coolantTempF > 220 ? 'OVERHEAT' : 'OPTIMAL'}`}
-                subLabel="Engine Status"
-                accentColor={metrics.coolantTempF < 160 ? '#00d2ff' : metrics.coolantTempF > 220 ? '#ff2a40' : '#00e676'}
+                subValue={`${metrics.coolantTempC}°C • ${isColdEngine ? 'COLD' : isOverheating ? 'OVERHEAT' : 'OPTIMAL'}`}
+                subLabel="Status"
+                accentColor={isColdEngine ? '#00d2ff' : isOverheating ? '#ff2a40' : '#00e676'}
                 redlineStart={225}
                 ticks={[100, 140, 180, 220, 260]}
-                size={200}
+                size={175}
               />
             </div>
 
-            {/* Twin Companion Dials for Mobile: Lifetime MPG (Left) & Oil Life (Right) */}
+            {/* 2. Twin Companion Dials (2-column on mobile portrait, left/right on desktop) */}
             <div className="order-2 md:contents w-full grid grid-cols-2 gap-2 justify-items-center items-center">
-              {/* Lifetime Cumulative MPG */}
+              {/* Companion Left: Cumulative MPG */}
               <div className="flex justify-center">
                 <RadialGauge
                   value={metrics.lifetimeMpg}
@@ -260,63 +258,56 @@ export function App() {
                   title="LIFETIME MPG"
                   unit="MPG"
                   subValue={`${telemetryManager.getLifetimeStats().totalMiles.toFixed(0)} mi`}
-                  subLabel="Cumulative"
+                  subLabel="Total"
                   accentColor="#00e676"
                   ticks={[0, 15, 30, 45, 60]}
-                  size={155}
+                  size={140}
                 />
               </div>
 
-              {/* Engine Oil Life */}
+              {/* Companion Right: Oil Health */}
               <div className="flex justify-center">
                 <RadialGauge
                   value={oil.oilLifePercent}
                   min={0}
                   max={100}
-                  title="OIL LIFE"
+                  title="OIL HEALTH"
                   unit="%"
                   subValue={`~${oil.estimatedMilesRemaining.toLocaleString()} mi`}
-                  subLabel="Remaining"
+                  subLabel="Left"
                   accentColor={oil.oilLifePercent < 15 ? '#ff2a40' : oil.oilLifePercent < 40 ? '#ffaa00' : '#00e676'}
                   ticks={[0, 25, 50, 75, 100]}
-                  size={155}
+                  size={140}
                 />
               </div>
             </div>
-          </div>
+          </section>
 
           {/* Core Analytics Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <ManualTransmissionCard metrics={metrics} />
             <MpgTelemetryCard metrics={metrics} trip={trip} />
-            <div className="hidden lg:block">
-              <OilLifeCard
-                oilProfile={oil}
-                coolantTempF={metrics.coolantTempF}
-                onResetOil={() => telemetryManager.resetOilLife()}
-              />
-            </div>
-          </div>
+          </section>
 
           {/* Trip Analytics Bar */}
           <TripSummaryBar
             trip={trip}
             onResetTrip={() => telemetryManager.resetTrip()}
           />
-        </div>
+        </main>
       )}
 
       {/* TAB 2: DIAGNOSTIC DTC SCANNER */}
       {activeTab === 'dtc' && (
-        <div className="flex flex-col gap-3.5">
+        <main className="flex flex-col gap-3">
           <DtcScannerCard />
-        </div>
+        </main>
       )}
 
       {/* TAB 3: OIL LIFE & WEAR DIAGNOSTICS */}
       {activeTab === 'oil_wear' && (
-        <div className="flex flex-col gap-3.5">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+        <main className="flex flex-col gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <OilLifeCard
               oilProfile={oil}
               coolantTempF={metrics.coolantTempF}
@@ -326,45 +317,45 @@ export function App() {
           </div>
 
           {/* Deep Explanation of 2013 Civic Oil Degradation Model */}
-          <div className="telemetry-card flex flex-col gap-3 text-xs leading-relaxed text-[#94a3b8]">
-            <h3 className="text-sm font-bold font-['Chakra_Petch'] text-[#f8fafc] flex items-center gap-2">
-              <Activity size={16} className="text-[#ff2a40]" />
-              How the Deep Oil Life Algorithm Works
+          <section className="telemetry-card flex flex-col gap-2.5 text-xs text-[#94a3b8]">
+            <h3 className="text-xs font-bold font-['Chakra_Petch'] text-[#f8fafc] flex items-center gap-1.5">
+              <Layers size={14} className="text-[#ff2a40]" />
+              How the Deep Oil Life Algorithm Works (2013 Civic LX R18Z1)
             </h3>
-            <p>
-              Unlike generic dash odometers that only count distance, this custom model processes real-time engine telemetry from your <strong>2013 Civic LX R18Z1</strong>:
+            <p className="text-[11px] leading-relaxed">
+              Unlike generic dash odometers that only count distance, this custom model calculates oil additive depletion using real-time telemetry from your <strong>2013 Civic 5MT</strong>:
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
-              <div className="bg-[#090b10] border border-[#161a26] rounded-xl p-3">
+              <div className="telemetry-card-subtle flex flex-col gap-0.5">
                 <strong className="text-[#00e676] font-['Chakra_Petch']">1. Mechanical Revolutions (Cycles)</strong>
-                <p className="mt-1 text-[#64748b]">Counts actual crankshaft revolutions. 10 miles of stop-and-go 1st/2nd gear driving shears oil 3x faster than high gear cruising.</p>
+                <p className="text-[#64748b]">Crankshaft revolution counter. Stop-and-go 1st/2nd gear city driving shears oil 3x faster than 5th gear cruising.</p>
               </div>
-              <div className="bg-[#090b10] border border-[#161a26] rounded-xl p-3">
+              <div className="telemetry-card-subtle flex flex-col gap-0.5">
                 <strong className="text-[#00d2ff] font-['Chakra_Petch']">2. Cold-Start & Condensation</strong>
-                <p className="mt-1 text-[#64748b]">Engine starts below 160°F accumulate moisture and fuel blowby, accelerating additive depletion until fully warmed up.</p>
+                <p className="text-[#64748b]">Starts below 160°F accumulate moisture and fuel blowby, increasing additive depletion until warmed up.</p>
               </div>
-              <div className="bg-[#090b10] border border-[#161a26] rounded-xl p-3">
-                <strong className="text-[#ffaa00] font-['Chakra_Petch']">3. Short Trip Penalty</strong>
-                <p className="mt-1 text-[#64748b]">Trips ending under 15 minutes before reaching 185°F fail to vaporize unburned gasoline out of the crankcase.</p>
+              <div className="telemetry-card-subtle flex flex-col gap-0.5">
+                <strong className="text-[#ffaa00] font-['Chakra_Petch']">3. Short Trip Dilution</strong>
+                <p className="text-[#64748b]">Trips ending under 15 minutes before reaching 185°F fail to vaporize unburned gasoline out of the crankcase.</p>
               </div>
-              <div className="bg-[#090b10] border border-[#161a26] rounded-xl p-3">
-                <strong className="text-[#ff2a40] font-['Chakra_Petch']">4. High-RPM Thermal Shear</strong>
-                <p className="mt-1 text-[#64748b]">VTEC high-RPM pulls (&gt;4,500 RPM under load) calculate viscosity breakdown from elevated oil film temperatures.</p>
+              <div className="telemetry-card-subtle flex flex-col gap-0.5">
+                <strong className="text-[#ff2a40] font-['Chakra_Petch']">4. High-RPM Thermal Stress</strong>
+                <p className="text-[#64748b]">VTEC high-RPM pulls (&gt;4,500 RPM under load) calculate viscosity breakdown from elevated oil film heat.</p>
               </div>
             </div>
-          </div>
-        </div>
+          </section>
+        </main>
       )}
 
-      {/* TAB 3: ECU BENCH / SIMULATOR */}
+      {/* TAB 4: ECU BENCH / SIMULATOR */}
       {activeTab === 'bench' && (
-        <div className="flex flex-col gap-3.5">
+        <main className="flex flex-col gap-3">
           <SimulatorControls
             scenario={telemetryManager.simulator.scenario}
             onSelectScenario={(sc) => telemetryManager.startSimulation(sc)}
           />
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <ManualTransmissionCard metrics={metrics} />
             <MpgTelemetryCard metrics={metrics} trip={trip} />
           </div>
@@ -373,7 +364,7 @@ export function App() {
             trip={trip}
             onResetTrip={() => telemetryManager.resetTrip()}
           />
-        </div>
+        </main>
       )}
 
       {/* Bluetooth Connection Modal */}
@@ -389,4 +380,5 @@ export function App() {
     </div>
   );
 }
+
 export default App;

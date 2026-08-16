@@ -1,25 +1,31 @@
 @import "tailwindcss";
 
 :root {
-  --bg-dark: #07080b;
-  --bg-card: #0e1118;
-  --bg-card-hover: #141824;
-  --bg-card-border: #1f2537;
+  --bg-obsidian: #08090d;
+  --bg-surface: #0e111a;
+  --bg-surface-subtle: #131724;
+  --bg-surface-elevated: #181d2d;
+  
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-active: rgba(255, 255, 255, 0.16);
   
   --honda-red: #ff2a40;
-  --honda-red-glow: rgba(255, 42, 64, 0.4);
-  --amber-gold: #ffaa00;
-  --amber-glow: rgba(255, 170, 0, 0.35);
-  --eco-green: #00e676;
-  --eco-green-glow: rgba(0, 230, 118, 0.35);
-  --electric-cyan: #00d2ff;
-  --electric-cyan-glow: rgba(0, 210, 255, 0.35);
+  --honda-red-soft: rgba(255, 42, 64, 0.15);
+  
+  --eco-emerald: #00e676;
+  --eco-emerald-soft: rgba(0, 230, 118, 0.12);
+  
+  --amber-warm: #ffaa00;
+  --amber-warm-soft: rgba(255, 170, 0, 0.12);
+  
+  --cyan-vtec: #00d2ff;
+  --cyan-vtec-soft: rgba(0, 210, 255, 0.12);
   
   --text-primary: #f8fafc;
   --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-tertiary: #64748b;
+  --text-quaternary: #475569;
   
-  --font-display: 'Rajdhani', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-digital: 'Chakra Petch', monospace, sans-serif;
   --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --font-mono: 'Space Mono', monospace;
@@ -36,7 +42,7 @@ html, body, #root {
   width: 100%;
   height: 100%;
   min-height: 100vh;
-  background-color: var(--bg-dark);
+  background-color: var(--bg-obsidian);
   color: var(--text-primary);
   font-family: var(--font-body);
   overflow-x: hidden;
@@ -44,123 +50,100 @@ html, body, #root {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Carbon weave subtle background */
+/* Minimalist deep precision cockpit backdrop */
 body {
   background-image: 
-    radial-gradient(circle at 50% 0%, rgba(255, 42, 64, 0.08) 0%, transparent 60%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.015) 25%, transparent 25%),
-    linear-gradient(225deg, rgba(255, 255, 255, 0.015) 25%, transparent 25%),
-    linear-gradient(45deg, rgba(255, 255, 255, 0.015) 25%, transparent 25%),
-    linear-gradient(315deg, rgba(255, 255, 255, 0.015) 25%, transparent 25%);
-  background-position: center top, 10px 0, 10px 0, 0 0, 0 0;
-  background-size: 100% 100%, 20px 20px, 20px 20px, 20px 20px, 20px 20px;
+    radial-gradient(ellipse at 50% 0%, rgba(255, 42, 64, 0.04) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 100%, rgba(0, 210, 255, 0.03) 0%, transparent 50%);
+  background-attachment: fixed;
 }
 
-/* Glowing text utilities */
-.text-honda-red {
-  color: var(--honda-red);
-}
-.glow-red {
-  text-shadow: 0 0 12px var(--honda-red-glow);
-}
-.glow-green {
-  text-shadow: 0 0 12px var(--eco-green-glow);
-}
-.glow-amber {
-  text-shadow: 0 0 12px var(--amber-glow);
-}
-.glow-cyan {
-  text-shadow: 0 0 12px var(--electric-cyan-glow);
+/* Tabular numbers for stable data scanning while driving */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
 }
 
-/* Card base styling */
+/* Precision Telemetry Card - flat, minimal, zero visual bloat */
 .telemetry-card {
-  background: var(--bg-card);
-  border: 1px solid var(--bg-card-border);
-  border-radius: 16px;
-  padding: 16px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 14px;
+  padding: 14px;
   position: relative;
-  overflow: hidden;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
-  transition: border-color 0.2s ease, transform 0.2s ease;
+  transition: border-color 0.15s ease;
 }
 
-.telemetry-card::before {
-  content: '';
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 2px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+.telemetry-card-subtle {
+  background: var(--bg-surface-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+  padding: 10px;
 }
 
-/* Automotive Badges */
+/* Minimal Status Badges */
 .badge-pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 9999px;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 6px;
   font-family: var(--font-digital);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.5px;
   text-transform: uppercase;
+  line-height: 1;
 }
 
 .badge-red {
-  background: rgba(255, 42, 64, 0.15);
+  background: var(--honda-red-soft);
   color: #ff6b7b;
-  border: 1px solid rgba(255, 42, 64, 0.35);
+  border: 1px solid rgba(255, 42, 64, 0.3);
 }
 
 .badge-green {
-  background: rgba(0, 230, 118, 0.15);
+  background: var(--eco-emerald-soft);
   color: #5aff9f;
-  border: 1px solid rgba(0, 230, 118, 0.35);
+  border: 1px solid rgba(0, 230, 118, 0.3);
 }
 
 .badge-amber {
-  background: rgba(255, 170, 0, 0.15);
+  background: var(--amber-warm-soft);
   color: #ffc966;
-  border: 1px solid rgba(255, 170, 0, 0.35);
+  border: 1px solid rgba(255, 170, 0, 0.3);
 }
 
 .badge-cyan {
-  background: rgba(0, 210, 255, 0.15);
+  background: var(--cyan-vtec-soft);
   color: #70e4ff;
-  border: 1px solid rgba(0, 210, 255, 0.35);
+  border: 1px solid rgba(0, 210, 255, 0.3);
 }
 
-/* Custom Scrollbar for mobile/tablets */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-::-webkit-scrollbar-track {
-  background: var(--bg-dark);
-}
-::-webkit-scrollbar-thumb {
-  background: var(--bg-card-border);
-  border-radius: 3px;
+.badge-neutral {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
 }
 
-/* Pulsing and Flashing animations */
-@keyframes redline-flash {
-  0%, 100% { opacity: 1; filter: drop-shadow(0 0 16px #ff2a40); }
-  50% { opacity: 0.2; filter: none; }
+/* Redline strobe for high-RPM gear shift */
+@keyframes redline-strobe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
 }
 
 .animate-redline {
-  animation: redline-flash 0.15s infinite;
+  animation: redline-strobe 0.12s infinite;
 }
 
-@keyframes subtle-pulse {
-  0%, 100% { opacity: 0.9; }
-  50% { opacity: 0.5; }
+/* Smooth custom scrollbar for mobile overflow */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
 }
-
-.animate-pulse-slow {
-  animation: subtle-pulse 2s infinite ease-in-out;
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 4px;
 }
