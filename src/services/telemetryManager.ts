@@ -1,0 +1,331 @@
+import { OBDLiveMetrics, TripAnalytics, OilLifeProfile, ConnectionStatus } from '../types/obd';
+import { CIVIC_2013_SPECS } from './obd2/civicSpecs';
+import { FuelModelEngine } from './obd2/fuelModel';
+import { GearCalculatorEngine } from './obd2/gearCalculator';
+import { OilLifeEngine } from './obd2/oilLifeModel';
+import { DtcScannerEngine, DtcScanReport } from './obd2/dtcScanner';
+import { VLinkerBluetoothManager, RawObdData } from './bluetooth/vlinkerBluetooth';
+import { CivicSimulatorEngine, SimulatorScenario } from './simulator/civicSimulator';
+
+export class TelemetryManager {
+  private fuelModel: FuelModelEngine;
+  private gearCalculator: GearCalculatorEngine;
+  public oilLifeModel: OilLifeEngine;
+  public dtcScanner: DtcScannerEngine;
+  public bluetooth: VLinkerBluetoothManager;
+  public simulator: CivicSimulatorEngine;
+
+  private listeners: ((metrics: OBDLiveMetrics, trip: TripAnalytics, oil: OilLifeProfile, status: ConnectionStatus) => void)[] = [];
+  
+  public connectionStatus: ConnectionStatus = 'disconnected';
+  public statusMessage: string = 'Disconnected';
+  public shiftMode: 'eco' | 'power' = 'eco';
+  public gasPricePerGallon: number = CIVIC_2013_SPECS.gasPriceDefaultDollarsPerGallon;
+  public latestDtcReport: DtcScanReport | null = null;
+
+  private currentMetrics: OBDLiveMetrics;
+  private tripAnalytics: TripAnalytics;
+  private timerHandle: any = null;
+  private lastUpdateTimestamp: number = Date.now();
+
+  constructor() {
+    this.fuelModel = new FuelModelEngine();
+    this.gearCalculator = new GearCalculatorEngine();
+    this.oilLifeModel = new OilLifeEngine();
+    this.bluetooth = new VLinkerBluetoothManager();
+    this.dtcScanner = new DtcScannerEngine(this.bluetooth);
+    this.simulator = new CivicSimulatorEngine();
+
+    this.currentMetrics = this.getInitialMetrics();
+    this.tripAnalytics = this.getInitialTripAnalytics();
+
+    // Start in simulator mode by default so user immediately sees live reactive gauges on launch!
+    this.startSimulation();
+  }
+
+  public async runDtcScan(): Promise<DtcScanReport> {
+    const isSimulating = this.connectionStatus === 'simulating';
+    const report = await this.dtcScanner.performFullScan(isSimulating);
+    this.latestDtcReport = report;
+    this.notify();
+    return report;
+  }
+
+  public async clearDtcCodes(): Promise<boolean> {
+    const isSimulating = this.connectionStatus === 'simulating';
+    const success = await this.dtcScanner.clearAllCodes(isSimulating);
+    if (success) {
+      if (this.latestDtcReport) {
+        this.latestDtcReport = {
+          ...this.latestDtcReport,
+          milOn: false,
+          totalDtcCount: 0,
+          pendingCodes: [],
+          confirmedCodes: [],
+          permanentCodes: [],
+        };
+      }
+      this.notify();
+    }
+    return success;
+  }
+
+  private getInitialMetrics(): OBDLiveMetrics {
+    return {
+      rpm: 750,
+      speedKmh: 0,
+      speedMph: 0,
+      mafGramsPerSec: 2.4,
+      coolantTempC: 85,
+      coolantTempF: 185,
+      intakeAirTempC: 22,
+      intakeAirTempF: 72,
+      engineLoadPercent: 18,
+      throttlePosPercent: 12,
+      shortTermFuelTrim: 0,
+      longTermFuelTrim: 1.2,
+      timingAdvanceDeg: 12,
+      equivalenceRatio: 1.0,
+      instantMpg: 0,
+      isDfcoActive: false,
+      fuelFlowGalPerHour: 0.22,
+      fuelFlowLitersPerHour: 0.83,
+      airFuelRatio: 14.7,
+      rolling30sMpg: 32.5,
+      currentGear: 'N',
+      gearRatio: 0,
+      isClutchSlipping: false,
+      optimalShiftRpm: 2200,
+      shouldShiftUp: false,
+      shiftLightStage: 0,
+      timestamp: Date.now(),
+    };
+  }
+
+  private getInitialTripAnalytics(): TripAnalytics {
+    return {
+      tripStartTime: Date.now(),
+      tripDurationSec: 0,
+      distanceMiles: 0,
+      totalFuelUsedGallons: 0,
+      avgMpg: 0,
+      idleTimeSec: 0,
+      idleFuelGallons: 0,
+      idleCostDollars: 0,
+      coastingDfcoTimeSec: 0,
+      coastingFuelSavedGallons: 0,
+      maxSpeedMph: 0,
+      maxRpm: 750,
+      avgSpeedMph: 0,
+      ecoScore: 92,
+    };
+  }
+
+  public subscribe(callback: (metrics: OBDLiveMetrics, trip: TripAnalytics, oil: OilLifeProfile, status: ConnectionStatus) => void): () => void {
+    this.listeners.push(callback);
+    callback(this.currentMetrics, this.tripAnalytics, this.oilLifeModel.getProfile(), this.connectionStatus);
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== callback);
+    };
+  }
+
+  private notify(): void {
+    const oil = this.oilLifeModel.getProfile();
+    for (const listener of this.listeners) {
+      listener(this.currentMetrics, this.tripAnalytics, oil, this.connectionStatus);
+    }
+  }
+
+  public async connectBluetooth(): Promise<void> {
+    this.stopLoop();
+    this.connectionStatus = 'connecting';
+    this.statusMessage = 'Connecting to vLinker MC+...';
+    this.notify();
+
+    try {
+      await this.bluetooth.connect((msg) => {
+        this.statusMessage = msg;
+        this.notify();
+      });
+      this.connectionStatus = 'connected';
+      this.statusMessage = 'Connected via Bluetooth';
+      this.resetTrip();
+      this.oilLifeModel.registerEngineStart(this.bluetooth.latestData.coolantC);
+      this.startLoop();
+    } catch (err: any) {
+      this.connectionStatus = 'error';
+      this.statusMessage = err.message || 'Bluetooth connection failed';
+      this.notify();
+    }
+  }
+
+  public disconnect(): void {
+    this.bluetooth.disconnect();
+    this.connectionStatus = 'disconnected';
+    this.statusMessage = 'Disconnected';
+    this.oilLifeModel.registerEngineStop();
+    this.stopLoop();
+    this.notify();
+  }
+
+  public startSimulation(scenario: SimulatorScenario = 'city_commute'): void {
+    this.stopLoop();
+    this.simulator.scenario = scenario;
+    this.connectionStatus = 'simulating';
+    this.statusMessage = `Simulator Active (${scenario.replace('_', ' ').toUpperCase()})`;
+    this.startLoop();
+  }
+
+  private startLoop(): void {
+    this.lastUpdateTimestamp = Date.now();
+    if (this.timerHandle) clearInterval(this.timerHandle);
+    
+    // Run telemetry processing at 20Hz (50ms interval) for fluid gauge needles
+    this.timerHandle = setInterval(() => this.processUpdateStep(), 50);
+  }
+
+  private stopLoop(): void {
+    if (this.timerHandle) {
+      clearInterval(this.timerHandle);
+      this.timerHandle = null;
+    }
+  }
+
+  private processUpdateStep(): void {
+    const now = Date.now();
+    const dtSec = Math.max(0.01, (now - this.lastUpdateTimestamp) / 1000);
+    this.lastUpdateTimestamp = now;
+
+    let raw: RawObdData;
+    if (this.connectionStatus === 'simulating') {
+      raw = this.simulator.tick(dtSec);
+    } else if (this.connectionStatus === 'connected') {
+      raw = this.bluetooth.latestData;
+    } else {
+      return;
+    }
+
+    // 1. Speeds
+    const speedMph = parseFloat((raw.speedKmh * 0.621371).toFixed(1));
+    const coolantF = Math.round((raw.coolantC * 9) / 5 + 32);
+    const iatF = Math.round((raw.iatC * 9) / 5 + 32);
+
+    // 2. Gear & Manual Transmission Analysis
+    const gearResult = this.gearCalculator.analyzeGear(
+      raw.rpm,
+      raw.speedKmh,
+      raw.throttlePos,
+      this.shiftMode
+    );
+
+    // 3. Air-Fuel & Fuel Flow
+    const afr = this.fuelModel.calculateAirFuelRatio(raw.lambda, raw.stft, raw.ltft);
+    const isDfco = this.fuelModel.checkDfco(raw.throttlePos, raw.rpm, raw.speedKmh, gearResult.currentGear);
+    const fuelFlow = this.fuelModel.calculateFuelFlow(raw.maf, afr, isDfco);
+    
+    // 4. Instantaneous MPG & Rolling Window
+    const instantMpg = this.fuelModel.calculateInstantMpg(speedMph, fuelFlow.fuelFlowGalPerHour, isDfco);
+    const rollingMpg = this.fuelModel.updateRollingMpg(instantMpg);
+
+    // 5. Update Live Metrics
+    this.currentMetrics = {
+      rpm: raw.rpm,
+      speedKmh: raw.speedKmh,
+      speedMph,
+      mafGramsPerSec: raw.maf,
+      coolantTempC: raw.coolantC,
+      coolantTempF: coolantF,
+      intakeAirTempC: raw.iatC,
+      intakeAirTempF: iatF,
+      engineLoadPercent: raw.engineLoad,
+      throttlePosPercent: raw.throttlePos,
+      shortTermFuelTrim: raw.stft,
+      longTermFuelTrim: raw.ltft,
+      timingAdvanceDeg: raw.timingAdvance,
+      equivalenceRatio: raw.lambda,
+      instantMpg: parseFloat(instantMpg.toFixed(1)),
+      isDfcoActive: isDfco,
+      fuelFlowGalPerHour: parseFloat(fuelFlow.fuelFlowGalPerHour.toFixed(3)),
+      fuelFlowLitersPerHour: parseFloat(fuelFlow.fuelFlowLitersPerHour.toFixed(2)),
+      airFuelRatio: parseFloat(afr.toFixed(2)),
+      rolling30sMpg: parseFloat(rollingMpg.toFixed(1)),
+      currentGear: gearResult.currentGear,
+      gearRatio: parseFloat(gearResult.calculatedRatio.toFixed(2)),
+      isClutchSlipping: gearResult.isClutchSlipping,
+      optimalShiftRpm: gearResult.optimalShiftRpm,
+      shouldShiftUp: gearResult.shouldShiftUp,
+      shiftLightStage: gearResult.shiftLightStage,
+      timestamp: now,
+    };
+
+    // 6. Integrate Trip Statistics
+    this.updateTripAnalytics(dtSec, speedMph, fuelFlow.fuelFlowGalPerHour, isDfco, raw.rpm);
+
+    // 7. Record Engine Wear to Oil Life Model
+    this.oilLifeModel.recordTelemetryStep(raw.rpm, raw.coolantC, raw.engineLoad, speedMph, dtSec);
+
+    this.notify();
+  }
+
+  private updateTripAnalytics(
+    dtSec: number,
+    speedMph: number,
+    fuelFlowGph: number,
+    isDfco: boolean,
+    rpm: number
+  ): void {
+    if (rpm < 350) return; // Engine off
+
+    this.tripAnalytics.tripDurationSec += dtSec;
+    const stepMiles = (speedMph / 3600) * dtSec;
+    this.tripAnalytics.distanceMiles += stepMiles;
+
+    const stepFuelGal = (fuelFlowGph / 3600) * dtSec;
+    this.tripAnalytics.totalFuelUsedGallons += stepFuelGal;
+
+    // Idle fuel tracking
+    if (speedMph <= 1.0) {
+      this.tripAnalytics.idleTimeSec += dtSec;
+      this.tripAnalytics.idleFuelGallons += stepFuelGal;
+      this.tripAnalytics.idleCostDollars = parseFloat((this.tripAnalytics.idleFuelGallons * this.gasPricePerGallon).toFixed(2));
+    }
+
+    // DFCO fuel savings (compared to idling at 0.22 gal/hr while coasting)
+    if (isDfco) {
+      this.tripAnalytics.coastingDfcoTimeSec += dtSec;
+      const baselineIdleBurnRate = 0.22; // gal/hr
+      this.tripAnalytics.coastingFuelSavedGallons += (baselineIdleBurnRate / 3600) * dtSec;
+    }
+
+    // Max stats
+    this.tripAnalytics.maxSpeedMph = Math.max(this.tripAnalytics.maxSpeedMph, speedMph);
+    this.tripAnalytics.maxRpm = Math.max(this.tripAnalytics.maxRpm, rpm);
+
+    // Averages
+    if (this.tripAnalytics.totalFuelUsedGallons > 0.005) {
+      this.tripAnalytics.avgMpg = parseFloat((this.tripAnalytics.distanceMiles / this.tripAnalytics.totalFuelUsedGallons).toFixed(1));
+    }
+    if (this.tripAnalytics.tripDurationSec > 5) {
+      this.tripAnalytics.avgSpeedMph = parseFloat(((this.tripAnalytics.distanceMiles / this.tripAnalytics.tripDurationSec) * 3600).toFixed(1));
+    }
+
+    // Eco Score (0 - 100) based on average MPG and smoothness
+    const targetMpg = 34.0; // EPA highway rating for 2013 Civic 5MT is ~38 mpg / 32 combined
+    const mpgRatio = this.tripAnalytics.avgMpg > 0 ? Math.min(1.2, this.tripAnalytics.avgMpg / targetMpg) : 1.0;
+    const idlePenalty = Math.min(25, (this.tripAnalytics.idleTimeSec / Math.max(60, this.tripAnalytics.tripDurationSec)) * 40);
+    this.tripAnalytics.ecoScore = Math.max(10, Math.min(100, Math.round(mpgRatio * 100 - idlePenalty)));
+  }
+
+  public resetTrip(): void {
+    this.tripAnalytics = this.getInitialTripAnalytics();
+    this.notify();
+  }
+
+  public resetOilLife(): void {
+    this.oilLifeModel.resetOilLife();
+    this.notify();
+  }
+}
+
+// Global Singleton Instance
+export const telemetryManager = new TelemetryManager();

@@ -1,0 +1,364 @@
+/**
+ * Vgate vLinker MC+ Bluetooth Low Energy (BLE) Client & ELM327/STN2120 Parser
+ */
+
+export interface RawObdData {
+  rpm: number;
+  speedKmh: number;
+  maf: number;
+  coolantC: number;
+  iatC: number;
+  engineLoad: number;
+  throttlePos: number;
+  stft: number;
+  ltft: number;
+  timingAdvance: number;
+  lambda: number;
+}
+
+export const VLINKER_SERVICE_UUIDS = [
+  '0000fff0-0000-1000-8000-00805f9b34fb', // Standard vLinker BLE Service
+  '0000ffe0-0000-1000-8000-00805f9b34fb', // Alternate vLinker / CC2541 Service
+  '6e400001-b5a3-f393-e0a9-e50e24dcca9e', // Nordic UART Service
+  '000018f0-0000-1000-8000-00805f9b34fb',
+];
+
+export const VLINKER_RX_CHAR_UUIDS = [
+  '0000fff1-0000-1000-8000-00805f9b34fb',
+  '0000ffe1-0000-1000-8000-00805f9b34fb',
+  '6e400002-b5a3-f393-e0a9-e50e24dcca9e',
+];
+
+export const VLINKER_TX_CHAR_UUIDS = [
+  '0000fff2-0000-1000-8000-00805f9b34fb',
+  '0000ffe1-0000-1000-8000-00805f9b34fb',
+  '6e400003-b5a3-f393-e0a9-e50e24dcca9e',
+];
+
+export class VLinkerBluetoothManager {
+  private device: BluetoothDevice | null = null;
+  private server: BluetoothRemoteGATTServer | null = null;
+  private rxCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
+  private txCharacteristic: BluetoothRemoteGATTCharacteristic | null = null;
+  
+  private isPolling = false;
+  private incomingBuffer = '';
+  private pendingResolver: ((value: string) => void) | null = null;
+
+  public latestData: RawObdData = {
+    rpm: 0,
+    speedKmh: 0,
+    maf: 2.8,
+    coolantC: 85,
+    iatC: 22,
+    engineLoad: 20,
+    throttlePos: 14,
+    stft: 0,
+    ltft: 0,
+    timingAdvance: 10,
+    lambda: 1.0,
+  };
+
+  public isSupported(): boolean {
+    return typeof navigator !== 'undefined' && 'bluetooth' in navigator;
+  }
+
+  public async connect(onStatus?: (msg: string) => void): Promise<boolean> {
+    if (!this.isSupported()) {
+      throw new Error('Web Bluetooth API is not supported on this browser. Use Chrome on Android or enable experimental flags.');
+    }
+
+    try {
+      onStatus?.('Scanning for Vgate vLinker MC+ or OBD-II adapter...');
+      
+      // Request device with optional service filters
+      this.device = await navigator.bluetooth.requestDevice({
+        filters: [
+          { namePrefix: 'vLinker' },
+          { namePrefix: 'V-LINK' },
+          { namePrefix: 'OBD' },
+          { namePrefix: 'IOS-VLINK' },
+        ],
+        optionalServices: VLINKER_SERVICE_UUIDS,
+      });
+
+      onStatus?.(`Connecting to ${this.device.name || 'OBD Device'}...`);
+      
+      this.device.addEventListener('gattserverdisconnected', () => {
+        this.isPolling = false;
+        onStatus?.('Bluetooth connection lost');
+      });
+
+      this.server = await this.device.gatt?.connect() || null;
+      if (!this.server) {
+        throw new Error('Failed to connect to GATT Server.');
+      }
+
+      onStatus?.('Discovering OBD-II Services...');
+      
+      // Find matching service and characteristics
+      let foundService: BluetoothRemoteGATTService | null = null;
+      for (const uuid of VLINKER_SERVICE_UUIDS) {
+        try {
+          foundService = await this.server.getPrimaryService(uuid);
+          if (foundService) break;
+        } catch {
+          // Try next
+        }
+      }
+
+      if (!foundService) {
+        throw new Error('Could not find compatible OBD BLE service on device.');
+      }
+
+      // Find RX & TX characteristics
+      const characteristics = await foundService.getCharacteristics();
+      for (const char of characteristics) {
+        if (char.properties.notify || char.properties.indicate) {
+          this.txCharacteristic = char;
+          await char.startNotifications();
+          char.addEventListener('characteristicvaluechanged', this.handleNotification.bind(this));
+        }
+        if (char.properties.write || char.properties.writeWithoutResponse) {
+          this.rxCharacteristic = char;
+        }
+      }
+
+      if (!this.rxCharacteristic) {
+        // Some devices use single characteristic for both
+        this.rxCharacteristic = this.txCharacteristic;
+      }
+
+      onStatus?.('Initializing 2013 Honda Civic ISO 15765-4 CAN Protocol...');
+      await this.initializeElm327();
+
+      onStatus?.('Connected & Streaming Telemetry');
+      this.startPollingLoop();
+      return true;
+    } catch (err: any) {
+      this.disconnect();
+      throw err;
+    }
+  }
+
+  public disconnect(): void {
+    this.isPolling = false;
+    if (this.device?.gatt?.connected) {
+      this.device.gatt.disconnect();
+    }
+    this.device = null;
+    this.server = null;
+    this.rxCharacteristic = null;
+    this.txCharacteristic = null;
+  }
+
+  private handleNotification(event: Event): void {
+    const target = event.target as BluetoothRemoteGATTCharacteristic;
+    const value = target.value;
+    if (!value) return;
+
+    const decoder = new TextDecoder('utf-8');
+    const chunk = decoder.decode(value);
+    this.incomingBuffer += chunk;
+
+    // ELM327 terminates responses with '>' prompt
+    if (this.incomingBuffer.includes('>')) {
+      const response = this.incomingBuffer.trim();
+      this.incomingBuffer = '';
+      if (this.pendingResolver) {
+        const resolve = this.pendingResolver;
+        this.pendingResolver = null;
+        resolve(response);
+      }
+    }
+  }
+
+  public async sendCommand(cmd: string, timeoutMs: number = 600): Promise<string> {
+    if (!this.rxCharacteristic) {
+      throw new Error('Not connected to OBD adapter');
+    }
+
+    const cleanCmd = cmd.trim() + '\r';
+    const encoder = new TextEncoder();
+    const data = encoder.encode(cleanCmd);
+
+    return new Promise(async (resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.pendingResolver) {
+          this.pendingResolver = null;
+          resolve(''); // Timeout fallback without crashing
+        }
+      }, timeoutMs);
+
+      this.pendingResolver = (resp: string) => {
+        clearTimeout(timer);
+        resolve(resp);
+      };
+
+      try {
+        await this.rxCharacteristic!.writeValue(data);
+      } catch (err) {
+        clearTimeout(timer);
+        this.pendingResolver = null;
+        reject(err);
+      }
+    });
+  }
+
+  private async initializeElm327(): Promise<void> {
+    // Reset and configure ELM327 / STN protocol
+    await this.sendCommand('AT Z', 1000); // Reset
+    await this.sendCommand('AT E0');      // Echo off
+    await this.sendCommand('AT L0');      // Linefeeds off
+    await this.sendCommand('AT S0');      // Spaces off
+    await this.sendCommand('AT H0');      // Headers off
+    // ISO 15765-4 (CAN 11-bit 500k) is Protocol 6
+    await this.sendCommand('AT SP 6');
+  }
+
+  private async startPollingLoop(): Promise<void> {
+    this.isPolling = true;
+    let cycle = 0;
+
+    while (this.isPolling) {
+      try {
+        // High-frequency primary PIDs (polled every cycle: RPM, Speed, MAF, Throttle)
+        const rpmResp = await this.sendCommand('010C');
+        this.parseRpm(rpmResp);
+
+        const speedResp = await this.sendCommand('010D');
+        this.parseSpeed(speedResp);
+
+        const mafResp = await this.sendCommand('0110');
+        this.parseMaf(mafResp);
+
+        const throttleResp = await this.sendCommand('0111');
+        this.parseThrottle(throttleResp);
+
+        // Medium-frequency secondary PIDs (polled every 5-10 cycles)
+        if (cycle % 6 === 0) {
+          const coolantResp = await this.sendCommand('0105');
+          this.parseCoolant(coolantResp);
+
+          const loadResp = await this.sendCommand('0104');
+          this.parseLoad(loadResp);
+
+          const timingResp = await this.sendCommand('010E');
+          this.parseTiming(timingResp);
+        }
+
+        if (cycle % 12 === 0) {
+          const stftResp = await this.sendCommand('0106');
+          this.parseStft(stftResp);
+
+          const ltftResp = await this.sendCommand('0107');
+          this.parseLtft(ltftResp);
+
+          const lambdaResp = await this.sendCommand('0124');
+          this.parseLambda(lambdaResp);
+        }
+
+        cycle++;
+        // Low sleep to maximize refresh rate
+        await new Promise((r) => setTimeout(r, 20));
+      } catch (err) {
+        console.warn('OBD polling cycle warning:', err);
+        await new Promise((r) => setTimeout(r, 200));
+      }
+    }
+  }
+
+  // --- PID Parsers ---
+
+  private parseRpm(resp: string): void {
+    const hex = this.extractHexBytes(resp, '410C');
+    if (hex && hex.length >= 4) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      const b = parseInt(hex.substring(2, 4), 16);
+      this.latestData.rpm = Math.round(((a * 256) + b) / 4);
+    }
+  }
+
+  private parseSpeed(resp: string): void {
+    const hex = this.extractHexBytes(resp, '410D');
+    if (hex && hex.length >= 2) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      this.latestData.speedKmh = a;
+    }
+  }
+
+  private parseMaf(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4110');
+    if (hex && hex.length >= 4) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      const b = parseInt(hex.substring(2, 4), 16);
+      this.latestData.maf = parseFloat((((a * 256) + b) / 100).toFixed(2));
+    }
+  }
+
+  private parseThrottle(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4111');
+    if (hex && hex.length >= 2) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      this.latestData.throttlePos = parseFloat(((a * 100) / 255).toFixed(1));
+    }
+  }
+
+  private parseCoolant(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4105');
+    if (hex && hex.length >= 2) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      this.latestData.coolantC = a - 40;
+    }
+  }
+
+  private parseLoad(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4104');
+    if (hex && hex.length >= 2) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      this.latestData.engineLoad = parseFloat(((a * 100) / 255).toFixed(1));
+    }
+  }
+
+  private parseTiming(resp: string): void {
+    const hex = this.extractHexBytes(resp, '410E');
+    if (hex && hex.length >= 2) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      this.latestData.timingAdvance = parseFloat(((a / 2) - 64).toFixed(1));
+    }
+  }
+
+  private parseStft(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4106');
+    if (hex && hex.length >= 2) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      this.latestData.stft = parseFloat((((a - 128) * 100) / 128).toFixed(1));
+    }
+  }
+
+  private parseLtft(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4107');
+    if (hex && hex.length >= 2) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      this.latestData.ltft = parseFloat((((a - 128) * 100) / 128).toFixed(1));
+    }
+  }
+
+  private parseLambda(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4124');
+    if (hex && hex.length >= 4) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      const b = parseInt(hex.substring(2, 4), 16);
+      this.latestData.lambda = parseFloat((((a * 256) + b) / 32768).toFixed(3));
+    }
+  }
+
+  private extractHexBytes(rawResp: string, prefix: string): string | null {
+    const clean = rawResp.replace(/[\s\r\n>]/g, '').toUpperCase();
+    const idx = clean.indexOf(prefix);
+    if (idx !== -1) {
+      return clean.substring(idx + prefix.length);
+    }
+    return null;
+  }
+}
