@@ -19,6 +19,11 @@ export class CivicSimulatorEngine {
   private iatC: number = 24;
   private simulationTimeSec: number = 0;
 
+  // New telemetry channels
+  private batteryVoltage: number = 12.6; // Resting voltage before the sim "starts" the engine
+  private fuelLevelPercent: number = 68;
+  private ambientC: number = 18;
+
   // Autopilot script state
   private autoPhase: number = 0;
   private phaseTimerSec: number = 0;
@@ -110,6 +115,25 @@ export class CivicSimulatorEngine {
     const calculatedLoad = parseFloat(Math.min(100, Math.max(12, (this.throttlePos * 0.9) + (this.rpm / 6700) * 15)).toFixed(1));
     const timingAdvance = parseFloat((this.throttlePos > 50 ? 24.5 : 12.0 + (this.rpm / 500)).toFixed(1));
 
+    // Battery: cranking sag once the engine is idling-or-above, alternator charges it back up;
+    // drifts back down toward resting voltage if RPM drops to zero (engine "off").
+    const isEngineRunning = this.rpm > CIVIC_2013_SPECS.idleRpm - 50;
+    this.batteryVoltage = isEngineRunning
+      ? Math.min(14.4, this.batteryVoltage + 0.5 * dt)
+      : Math.max(12.4, this.batteryVoltage - 0.1 * dt);
+
+    // Fuel level slowly depletes with simulated burn (rough correlation to throttle/RPM)
+    const fuelBurnRate = 0.00006 * (1 + this.throttlePos / 100) * (this.rpm / 3000);
+    this.fuelLevelPercent = Math.max(0, this.fuelLevelPercent - fuelBurnRate * dt);
+
+    // Ambient air temp drifts slowly and independently of IAT (which heats from engine bay)
+    this.ambientC += Math.sin(this.simulationTimeSec * 0.02) * 0.05 * dt;
+
+    // O2 sensors: healthy-catalyst signature - pre-cat swings actively around the switch
+    // point, post-cat stays comparatively flat.
+    const o2Sensor1Voltage = parseFloat((0.45 + Math.sin(this.simulationTimeSec * 2.2) * 0.35).toFixed(3));
+    const o2Sensor2Voltage = 0.65;
+
     return {
       rpm: Math.round(this.rpm),
       speedKmh: parseFloat(this.speedKmh.toFixed(1)),
@@ -122,6 +146,12 @@ export class CivicSimulatorEngine {
       ltft,
       timingAdvance,
       lambda,
+      batteryVoltage: parseFloat(this.batteryVoltage.toFixed(2)),
+      fuelLevelPercent: parseFloat(this.fuelLevelPercent.toFixed(1)),
+      ambientC: Math.round(this.ambientC),
+      o2Sensor1Voltage,
+      o2Sensor2Voltage,
+      engineRuntimeSec: Math.round(this.simulationTimeSec),
     };
   }
 

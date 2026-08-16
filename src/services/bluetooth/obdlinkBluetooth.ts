@@ -14,6 +14,12 @@ export interface RawObdData {
   ltft: number;
   timingAdvance: number;
   lambda: number;
+  batteryVoltage: number;
+  fuelLevelPercent: number;
+  ambientC: number;
+  o2Sensor1Voltage: number;
+  o2Sensor2Voltage: number;
+  engineRuntimeSec: number;
 }
 
 export const OBDLINK_SERVICE_UUIDS = [
@@ -61,6 +67,12 @@ export class OBDLinkBluetoothManager {
     ltft: 0,
     timingAdvance: 10,
     lambda: 1.0,
+    batteryVoltage: 14.2,
+    fuelLevelPercent: 65,
+    ambientC: 22,
+    o2Sensor1Voltage: 0.45,
+    o2Sensor2Voltage: 0.65,
+    engineRuntimeSec: 0,
   };
 
   public isSupported(): boolean {
@@ -239,6 +251,14 @@ export class OBDLinkBluetoothManager {
         const throttleResp = await this.sendCommand('0111');
         this.parseThrottle(throttleResp);
 
+        // O2 sensor voltages oscillate rapidly (pre-cat especially) - a slow poll would
+        // alias them into a flat line, which defeats the point of showing a live trace.
+        const o2s1Resp = await this.sendCommand('0114');
+        this.parseO2Sensor1(o2s1Resp);
+
+        const o2s2Resp = await this.sendCommand('0115');
+        this.parseO2Sensor2(o2s2Resp);
+
         // Medium-frequency secondary PIDs (polled every 5-10 cycles)
         if (cycle % 6 === 0) {
           const coolantResp = await this.sendCommand('0105');
@@ -249,6 +269,12 @@ export class OBDLinkBluetoothManager {
 
           const timingResp = await this.sendCommand('010E');
           this.parseTiming(timingResp);
+
+          const batteryResp = await this.sendCommand('0142');
+          this.parseBatteryVoltage(batteryResp);
+
+          const ambientResp = await this.sendCommand('0146');
+          this.parseAmbientTemp(ambientResp);
         }
 
         if (cycle % 12 === 0) {
@@ -260,6 +286,13 @@ export class OBDLinkBluetoothManager {
 
           const lambdaResp = await this.sendCommand('0124');
           this.parseLambda(lambdaResp);
+
+          // Fuel level & engine runtime change slowly - the slowest tier is plenty.
+          const fuelLevelResp = await this.sendCommand('012F');
+          this.parseFuelLevel(fuelLevelResp);
+
+          const runtimeResp = await this.sendCommand('011F');
+          this.parseRuntime(runtimeResp);
         }
 
         cycle++;
@@ -354,6 +387,56 @@ export class OBDLinkBluetoothManager {
       const a = parseInt(hex.substring(0, 2), 16);
       const b = parseInt(hex.substring(2, 4), 16);
       this.latestData.lambda = parseFloat((((a * 256) + b) / 32768).toFixed(3));
+    }
+  }
+
+  private parseBatteryVoltage(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4142');
+    if (hex && hex.length >= 4) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      const b = parseInt(hex.substring(2, 4), 16);
+      this.latestData.batteryVoltage = parseFloat((((a * 256) + b) / 1000).toFixed(2));
+    }
+  }
+
+  private parseFuelLevel(resp: string): void {
+    const hex = this.extractHexBytes(resp, '412F');
+    if (hex && hex.length >= 2) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      this.latestData.fuelLevelPercent = parseFloat(((a * 100) / 255).toFixed(1));
+    }
+  }
+
+  private parseAmbientTemp(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4146');
+    if (hex && hex.length >= 2) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      this.latestData.ambientC = a - 40;
+    }
+  }
+
+  private parseO2Sensor1(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4114');
+    if (hex && hex.length >= 2) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      this.latestData.o2Sensor1Voltage = parseFloat((a / 200).toFixed(3));
+    }
+  }
+
+  private parseO2Sensor2(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4115');
+    if (hex && hex.length >= 2) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      this.latestData.o2Sensor2Voltage = parseFloat((a / 200).toFixed(3));
+    }
+  }
+
+  private parseRuntime(resp: string): void {
+    const hex = this.extractHexBytes(resp, '411F');
+    if (hex && hex.length >= 4) {
+      const a = parseInt(hex.substring(0, 2), 16);
+      const b = parseInt(hex.substring(2, 4), 16);
+      this.latestData.engineRuntimeSec = (a * 256) + b;
     }
   }
 

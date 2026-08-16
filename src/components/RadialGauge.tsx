@@ -191,34 +191,41 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
         </g>
       </svg>
 
-      {/* Center Digital Readout (Unobstructed, Maximum Scale & Contrast) */}
+      {/* Center Digital Readout (Unobstructed, Maximum Scale & Contrast).
+          Font sizes are derived from `size` rather than fixed, because the cockpit sizes
+          these gauges from the viewport height to guarantee it fits without scrolling -
+          fixed type would look oversized on a short screen and lost on a tall one. */}
       <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center px-4">
         {/* Title */}
-        <span className={`font-bold tracking-widest text-[#94a3b8] uppercase font-['Inter'] ${
-          isHero ? 'text-[11px] mb-0.5' : 'text-[9.5px]'
-        }`}>
+        <span
+          className="font-bold tracking-widest text-[#94a3b8] uppercase font-['Inter'] leading-none"
+          style={{ fontSize: Math.max(10, size * 0.052), marginBottom: size * 0.02 }}
+        >
           {title}
         </span>
 
         {/* Hero Number & Unit */}
         <div className="flex items-baseline justify-center gap-1">
-          <span className={`font-black text-[#ffffff] font-['Chakra_Petch'] tabular-nums tracking-tight leading-none ${
-            isHero ? 'text-4xl sm:text-5xl' : 'text-3xl sm:text-4xl'
-          }`}>
+          <span
+            className="font-black text-[#ffffff] font-['Chakra_Petch'] tabular-nums tracking-tight leading-none"
+            style={{ fontSize: Math.max(30, size * 0.21) }}
+          >
             {displayValue}
           </span>
-          <span className={`font-extrabold text-[#94a3b8] font-['Chakra_Petch'] ${
-            isHero ? 'text-sm' : 'text-xs'
-          }`}>
+          <span
+            className="font-extrabold text-[#94a3b8] font-['Chakra_Petch'] leading-none"
+            style={{ fontSize: Math.max(11, size * 0.058) }}
+          >
             {unit}
           </span>
         </div>
 
         {/* Status / Sub-label */}
         {subValue !== undefined && (
-          <div className={`font-semibold font-['Inter'] mt-1 px-2 py-0.5 rounded-md bg-[#121622] border border-[rgba(255,255,255,0.06)] ${
-            isHero ? 'text-[10px] text-[#cbd5e1]' : 'text-[9px] text-[#94a3b8]'
-          }`}>
+          <div
+            className="font-semibold font-['Inter'] px-2 py-0.5 rounded-md bg-[#121622] border border-[rgba(255,255,255,0.06)] text-[#cbd5e1] leading-tight"
+            style={{ fontSize: Math.max(10, size * 0.05), marginTop: size * 0.035 }}
+          >
             {subLabel ? <span className="text-[#64748b] mr-1">{subLabel}:</span> : null}
             <strong className="text-[#f8fafc] font-bold">{subValue}</strong>
           </div>

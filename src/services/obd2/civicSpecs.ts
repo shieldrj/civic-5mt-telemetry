@@ -40,6 +40,8 @@ export const CIVIC_2013_SPECS = {
   gasolineDensityGramsPerLiter: 736.5,
   stoichiometricAfr: 14.7, // Standard unleaded gasoline
   gasPriceDefaultDollarsPerGallon: 3.45,
+  fuelTankCapacityGallons: 13.2, // 2013 Civic LX sedan factory tank spec
+  epaCombinedMpgDefault: 32, // Fallback multiplier for range-to-empty before a rolling MPG sample exists
   
   // Shift Point Tuning
   ecoShiftPoints: {

@@ -14,7 +14,14 @@ export interface OBDLiveMetrics {
   longTermFuelTrim: number;     // PID 0107 (%)
   timingAdvanceDeg: number;     // PID 010E (°)
   equivalenceRatio: number;     // PID 0124 (Lambda, default 1.0)
-  
+  batteryVoltage: number;       // PID 0142 (Control module / charging voltage, V)
+  fuelLevelPercent: number;     // PID 012F (%)
+  ambientAirTempC: number;      // PID 0146 (°C)
+  ambientAirTempF: number;      // Calculated (°F)
+  o2Sensor1Voltage: number;     // PID 0114 (Bank 1 Sensor 1, pre-catalyst, V)
+  o2Sensor2Voltage: number;     // PID 0115 (Bank 1 Sensor 2, post-catalyst, V)
+  engineRuntimeSec: number;     // PID 011F (ECU-reported runtime since engine start, sec)
+
   // Custom Computed / Physics Fuel Metrics
   instantMpg: number;           // Calculated MPG (0 - 99.9 or Infinity on DFCO)
   isDfcoActive: boolean;        // Deceleration Fuel Cut-Off (Engine braking in gear)
@@ -23,7 +30,8 @@ export interface OBDLiveMetrics {
   airFuelRatio: number;         // Actual Air:Fuel ratio (e.g. 14.7)
   rolling30sMpg: number;        // Smooth 30s rolling window
   lifetimeMpg: number;           // Cumulative lifetime MPG (persisted)
-  
+  fuelRangeMiles: number;        // Estimated miles-to-empty from fuel level + rolling MPG
+
   // Manual Transmission Dynamics
   currentGear: 1 | 2 | 3 | 4 | 5 | 'N' | 'CLUTCH';
   gearRatio: number;            // Current computed engine/wheel ratio

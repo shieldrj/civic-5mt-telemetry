@@ -130,6 +130,21 @@ export class FuelModelEngine {
   }
 
   /**
+   * Estimates remaining range in miles from tank fuel level and the current rolling MPG.
+   * Falls back to the EPA combined rating before a real rolling MPG sample has built up
+   * (e.g. right at startup), so the readout doesn't show 0 or blow up on a near-zero divisor.
+   */
+  public calculateFuelRange(
+    fuelLevelPercent: number,
+    tankCapacityGallons: number,
+    rollingMpg: number
+  ): number {
+    const gallonsRemaining = (Math.max(0, Math.min(100, fuelLevelPercent)) / 100) * tankCapacityGallons;
+    const effectiveMpg = rollingMpg > 1 ? rollingMpg : CIVIC_2013_SPECS.epaCombinedMpgDefault;
+    return Math.max(0, gallonsRemaining * effectiveMpg);
+  }
+
+  /**
    * Speed-Density estimation fallback if MAF sensor is disconnected or faulty.
    * Uses MAP (Manifold Absolute Pressure), IAT (Intake Air Temp), RPM, and Civic R18 Volumetric Efficiency.
    */

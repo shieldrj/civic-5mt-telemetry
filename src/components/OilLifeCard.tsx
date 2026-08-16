@@ -26,8 +26,10 @@ export const OilLifeCard: React.FC<OilLifeCardProps> = ({
     badgeClass = 'badge-amber';
   }
 
-  // Circular progress math
-  const radius = 38;
+  // Circular progress math - sized for legibility on a large high-density phone screen
+  const ringSize = 108;
+  const ringCenter = ringSize / 2;
+  const radius = 46;
   const circumference = 2 * Math.PI * radius;
   const strokeDashoffset = circumference - (percent / 100) * circumference;
 
@@ -60,21 +62,21 @@ export const OilLifeCard: React.FC<OilLifeCardProps> = ({
       <div className="grid grid-cols-2 gap-3 items-center telemetry-card-subtle">
         {/* Left: Circular Health Ring */}
         <div className="relative flex items-center justify-center">
-          <svg width={88} height={88} className="transform -rotate-90">
+          <svg width={ringSize} height={ringSize} className="transform -rotate-90">
             <circle
-              cx={44}
-              cy={44}
+              cx={ringCenter}
+              cy={ringCenter}
               r={radius}
               stroke="#161a26"
-              strokeWidth={6}
+              strokeWidth={7}
               fill="transparent"
             />
             <circle
-              cx={44}
-              cy={44}
+              cx={ringCenter}
+              cy={ringCenter}
               r={radius}
               stroke={statusColor}
-              strokeWidth={6}
+              strokeWidth={7}
               fill="transparent"
               strokeDasharray={circumference}
               strokeDashoffset={strokeDashoffset}
@@ -84,7 +86,7 @@ export const OilLifeCard: React.FC<OilLifeCardProps> = ({
           </svg>
           <div className="absolute flex flex-col items-center justify-center text-center">
             <span
-              className="text-xl font-black font-['Chakra_Petch'] tabular-nums"
+              className="text-2xl font-black font-['Chakra_Petch'] tabular-nums"
               style={{ color: statusColor }}
             >
               {Math.round(percent)}%

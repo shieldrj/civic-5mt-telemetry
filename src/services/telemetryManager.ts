@@ -89,6 +89,13 @@ export class TelemetryManager {
       longTermFuelTrim: 1.2,
       timingAdvanceDeg: 12,
       equivalenceRatio: 1.0,
+      batteryVoltage: 14.2,
+      fuelLevelPercent: 65,
+      ambientAirTempC: 22,
+      ambientAirTempF: 72,
+      o2Sensor1Voltage: 0.45,
+      o2Sensor2Voltage: 0.65,
+      engineRuntimeSec: 0,
       instantMpg: 0,
       isDfcoActive: false,
       fuelFlowGalPerHour: 0.22,
@@ -96,6 +103,7 @@ export class TelemetryManager {
       airFuelRatio: 14.7,
       rolling30sMpg: 32.5,
       lifetimeMpg: this.lifetimeStats?.lifetimeMpg ?? 0,
+      fuelRangeMiles: 275,
       currentGear: 'N',
       gearRatio: 0,
       isClutchSlipping: false,
@@ -214,6 +222,7 @@ export class TelemetryManager {
     const speedMph = parseFloat(speedMphRaw.toFixed(1));
     const coolantF = Math.round((raw.coolantC * 9) / 5 + 32);
     const iatF = Math.round((raw.iatC * 9) / 5 + 32);
+    const ambientF = Math.round((raw.ambientC * 9) / 5 + 32);
 
     // 2. Gear & Manual Transmission Analysis
     const gearResult = this.gearCalculator.analyzeGear(
@@ -231,6 +240,11 @@ export class TelemetryManager {
     // 4. Instantaneous MPG & Rolling Window
     const instantMpg = this.fuelModel.calculateInstantMpg(speedMph, fuelFlow.fuelFlowGalPerHour, isDfco);
     const rollingMpg = this.fuelModel.updateRollingMpg(instantMpg);
+    const fuelRangeMiles = this.fuelModel.calculateFuelRange(
+      raw.fuelLevelPercent,
+      CIVIC_2013_SPECS.fuelTankCapacityGallons,
+      rollingMpg
+    );
 
     // 5. Update Live Metrics
     this.currentMetrics = {
@@ -248,6 +262,13 @@ export class TelemetryManager {
       longTermFuelTrim: raw.ltft,
       timingAdvanceDeg: raw.timingAdvance,
       equivalenceRatio: raw.lambda,
+      batteryVoltage: parseFloat(raw.batteryVoltage.toFixed(2)),
+      fuelLevelPercent: parseFloat(raw.fuelLevelPercent.toFixed(1)),
+      ambientAirTempC: raw.ambientC,
+      ambientAirTempF: ambientF,
+      o2Sensor1Voltage: parseFloat(raw.o2Sensor1Voltage.toFixed(3)),
+      o2Sensor2Voltage: parseFloat(raw.o2Sensor2Voltage.toFixed(3)),
+      engineRuntimeSec: raw.engineRuntimeSec,
       instantMpg: parseFloat(instantMpg.toFixed(1)),
       isDfcoActive: isDfco,
       fuelFlowGalPerHour: parseFloat(fuelFlow.fuelFlowGalPerHour.toFixed(3)),
@@ -255,6 +276,7 @@ export class TelemetryManager {
       airFuelRatio: parseFloat(afr.toFixed(2)),
       rolling30sMpg: parseFloat(rollingMpg.toFixed(1)),
       lifetimeMpg: parseFloat(this.lifetimeStats.lifetimeMpg.toFixed(1)),
+      fuelRangeMiles: Math.round(fuelRangeMiles),
       currentGear: gearResult.currentGear,
       gearRatio: parseFloat(gearResult.calculatedRatio.toFixed(2)),
       isClutchSlipping: gearResult.isClutchSlipping,

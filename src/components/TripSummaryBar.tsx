@@ -1,13 +1,14 @@
 import React from 'react';
-import { Navigation, Clock, RotateCcw, Award } from 'lucide-react';
+import { Navigation, Clock, RotateCcw, Award, Timer } from 'lucide-react';
 import { TripAnalytics } from '../types/obd';
 
 interface TripSummaryBarProps {
   trip: TripAnalytics;
   onResetTrip: () => void;
+  engineRuntimeSec?: number;
 }
 
-export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({ trip, onResetTrip }) => {
+export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({ trip, onResetTrip, engineRuntimeSec }) => {
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
@@ -114,6 +115,24 @@ export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({ trip, onResetTri
             DFCO saved: +{(trip.coastingFuelSavedGallons * 1000).toFixed(0)} mL
           </span>
         </div>
+
+        {/* Engine Runtime (ECU-reported, independent of the app's own trip timer) */}
+        {engineRuntimeSec !== undefined && (
+          <div className="telemetry-card-subtle flex flex-col">
+            <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch'] flex items-center gap-1">
+              <Timer size={9} />
+              Engine Runtime
+            </span>
+            <div className="flex items-baseline gap-1 mt-0.5">
+              <span className="text-xl font-black text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
+                {formatTime(engineRuntimeSec)}
+              </span>
+            </div>
+            <span className="text-[9px] text-[#64748b]">
+              Since last start (ECU PID 011F)
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );

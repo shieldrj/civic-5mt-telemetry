@@ -1,5 +1,5 @@
 import React from 'react';
-import { Fuel, DollarSign, Activity, Zap, TrendingUp } from 'lucide-react';
+import { Fuel, DollarSign, Activity, Zap, TrendingUp, Waves } from 'lucide-react';
 import { OBDLiveMetrics, TripAnalytics } from '../types/obd';
 
 interface MpgTelemetryCardProps {
@@ -60,7 +60,7 @@ export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({ metrics, tri
           </span>
           <div className="flex items-baseline gap-1 mt-0.5">
             <span
-              className={`text-2xl sm:text-3xl font-black font-['Chakra_Petch'] tabular-nums tracking-tight ${
+              className={`text-3xl font-black font-['Chakra_Petch'] tabular-nums tracking-tight ${
                 isDfco ? 'text-[#00d2ff]' : metrics.instantMpg >= 35 ? 'text-[#00e676]' : 'text-[#f8fafc]'
               }`}
             >
@@ -79,7 +79,7 @@ export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({ metrics, tri
             Fuel Burn Rate
           </span>
           <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-xl sm:text-2xl font-bold text-[#ffaa00] font-['Chakra_Petch'] tabular-nums">
+            <span className="text-2xl font-bold text-[#ffaa00] font-['Chakra_Petch'] tabular-nums">
               {metrics.fuelFlowGalPerHour.toFixed(2)}
             </span>
             <span className="text-[10px] font-bold text-[#64748b] font-['Chakra_Petch']">GAL/HR</span>
@@ -156,6 +156,50 @@ export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({ metrics, tri
             </strong>
           </span>
         </div>
+      </div>
+
+      {/* Oxygen Sensors - Catalyst Health Trace */}
+      <div className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded-lg p-2.5 flex flex-col gap-2">
+        <div className="flex items-center gap-1.5 text-[11px] font-bold text-[#94a3b8] font-['Chakra_Petch'] uppercase tracking-wider">
+          <Waves size={13} className="text-[#00d2ff]" />
+          Oxygen Sensors (Catalyst Health)
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            { label: 'O2 S1 · Pre-Cat', volts: metrics.o2Sensor1Voltage, color: '#00d2ff' },
+            { label: 'O2 S2 · Post-Cat', volts: metrics.o2Sensor2Voltage, color: '#ff2a40' },
+          ].map((sensor) => (
+            <div key={sensor.label} className="flex flex-col gap-1">
+              <div className="flex items-center justify-between text-[11px] text-[#94a3b8]">
+                <span>{sensor.label}</span>
+                <span className="font-bold text-[#f8fafc] font-['Chakra_Petch'] tabular-nums text-[13px]">
+                  {sensor.volts.toFixed(2)}V
+                </span>
+              </div>
+              {/* Scaled 0 - 1.0V: a narrowband sensor only swings ~0.1-0.9V of the PID's
+                  1.275V full scale, so scaling to full scale would flatten the trace. */}
+              <div className="relative w-full bg-[#161a26] h-2 rounded-full overflow-hidden">
+                <div
+                  className="h-full transition-all duration-150"
+                  style={{
+                    width: `${Math.max(0, Math.min(100, (sensor.volts / 1.0) * 100))}%`,
+                    backgroundColor: sensor.color,
+                  }}
+                />
+                {/* 0.45V stoichiometric switch point */}
+                <div className="absolute inset-y-0 left-[45%] w-px bg-[rgba(255,255,255,0.45)]" />
+              </div>
+              <span className="text-[10px] text-[#64748b] font-['Chakra_Petch']">
+                {sensor.volts >= 0.55 ? 'RICH' : sensor.volts <= 0.35 ? 'LEAN' : 'SWITCHING'}
+              </span>
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-[#94a3b8] leading-relaxed">
+          Healthy: pre-cat swings actively across the 0.45V line, post-cat stays comparatively
+          steady. A post-cat trace that starts mirroring the pre-cat swing is the live signature
+          behind code P0420 (Catalyst System Efficiency).
+        </p>
       </div>
     </div>
   );

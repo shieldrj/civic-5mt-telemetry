@@ -70,13 +70,13 @@ export const ManualTransmissionCard: React.FC<ManualTransmissionCardProps> = ({ 
         </div>
 
         {/* Right: 5-Speed Shift Gate Selector */}
-        <div className="flex items-center justify-end gap-1">
+        <div className="flex items-center justify-end gap-1.5">
           {gears.map((g) => {
             const isCurrent = gear === g;
             return (
               <div
                 key={g}
-                className={`w-7 h-9 rounded-md flex flex-col items-center justify-center font-['Chakra_Petch'] font-bold text-xs transition-all ${
+                className={`w-8 h-10 rounded-md flex flex-col items-center justify-center font-['Chakra_Petch'] font-bold text-sm transition-all ${
                   isCurrent
                     ? 'bg-[#ff2a40] text-white border border-[#ff4b5c]'
                     : 'bg-[#08090d] text-[#64748b] border border-[rgba(255,255,255,0.06)]'

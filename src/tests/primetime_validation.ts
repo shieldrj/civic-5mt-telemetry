@@ -3,6 +3,7 @@ import { GearCalculatorEngine } from '../services/obd2/gearCalculator';
 import { FuelModelEngine } from '../services/obd2/fuelModel';
 import { OilLifeEngine } from '../services/obd2/oilLifeModel';
 import { HONDA_DTC_DATABASE } from '../services/obd2/dtcSpecs';
+import { OBDLinkBluetoothManager } from '../services/bluetooth/obdlinkBluetooth';
 
 // Polyfill localStorage for Node test runner
 if (typeof globalThis.localStorage === 'undefined') {
@@ -123,6 +124,28 @@ assert(HONDA_DTC_DATABASE['P0133'] !== undefined, 'P0133 Upstream O2 Sensor slow
 assert(HONDA_DTC_DATABASE['P0420'] !== undefined, 'P0420 Catalyst System Efficiency code verified');
 assert(HONDA_DTC_DATABASE['P0301'] !== undefined, 'P0301 Cylinder 1 Misfire code verified');
 assert(HONDA_DTC_DATABASE['P0171'] !== undefined, 'P0171 Fuel System Too Lean code verified');
+
+// 5. NEW PID PLAUSIBILITY & FUEL RANGE CALC
+console.log('\n--- 5. Battery / Fuel Level / O2 Sensor PIDs & Range-to-Empty ---');
+const btManager = new OBDLinkBluetoothManager();
+const defaults = btManager.latestData;
+
+assert(defaults.batteryVoltage > 9 && defaults.batteryVoltage < 16, `Battery voltage default in plausible range (${defaults.batteryVoltage}V)`);
+assert(defaults.fuelLevelPercent >= 0 && defaults.fuelLevelPercent <= 100, `Fuel level default in valid % range (${defaults.fuelLevelPercent}%)`);
+// PID 0114/0115 byte A is A/200, so full scale is 0 - 1.275V (not 1.0V - a narrowband
+// sensor only *uses* roughly 0.1-0.9V of that range in practice).
+assert(defaults.o2Sensor1Voltage >= 0 && defaults.o2Sensor1Voltage <= 1.275, `O2 Sensor 1 (pre-cat) default within PID full scale (${defaults.o2Sensor1Voltage}V)`);
+assert(defaults.o2Sensor2Voltage >= 0 && defaults.o2Sensor2Voltage <= 1.275, `O2 Sensor 2 (post-cat) default within PID full scale (${defaults.o2Sensor2Voltage}V)`);
+assert(defaults.engineRuntimeSec >= 0, `Engine runtime default non-negative (${defaults.engineRuntimeSec}s)`);
+
+// Fuel range: 50% of a 13.2gal tank at 30 MPG -> 6.6 gal * 30 mpg = 198 miles
+const range = fuelModel.calculateFuelRange(50, CIVIC_2013_SPECS.fuelTankCapacityGallons, 30);
+assert(Math.abs(range - 198) < 1, `Fuel range calculated correctly (Got: ${range.toFixed(1)} mi, expected ~198 mi)`);
+
+// Fuel range falls back to the EPA combined default when no rolling MPG sample exists yet (0 MPG)
+const rangeFallback = fuelModel.calculateFuelRange(100, CIVIC_2013_SPECS.fuelTankCapacityGallons, 0);
+const expectedFallback = CIVIC_2013_SPECS.fuelTankCapacityGallons * CIVIC_2013_SPECS.epaCombinedMpgDefault;
+assert(Math.abs(rangeFallback - expectedFallback) < 1, `Fuel range falls back to EPA combined MPG before a rolling sample exists (Got: ${rangeFallback.toFixed(1)} mi)`);
 
 console.log('\n==================================================');
 console.log(`🏁 TEST RESULTS: ${passed} PASSED, ${failed} FAILED`);
