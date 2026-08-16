@@ -365,16 +365,8 @@ export const DtcScannerCard: React.FC = () => {
       {/* I/M Emission Readiness Monitors */}
       {report && (
         <div className="telemetry-card-subtle p-2.5 flex flex-col gap-1.5">
-          <div className="flex items-center justify-between text-xs font-['Chakra_Petch']">
-            <span className="text-[#64748b] uppercase font-bold flex items-center gap-1.5 text-[10px]">
-              <ShieldCheck size={12} className="text-[#00e676]" />
-              Emissions I/M Readiness Monitors:
-            </span>
-            <span className="text-[9px] text-[#00e676]">All 8 Passed</span>
-          </div>
-
-          <div className="grid grid-cols-4 sm:grid-cols-8 gap-1 text-[9px] font-['Chakra_Petch']">
-            {[
+          {(() => {
+            const monitorList = [
               { name: 'MISFIRE', status: report.monitors.misfire },
               { name: 'FUEL SYS', status: report.monitors.fuelSystem },
               { name: 'COMP', status: report.monitors.comprehensive },
@@ -383,16 +375,54 @@ export const DtcScannerCard: React.FC = () => {
               { name: 'O2 SENS', status: report.monitors.o2Sensor },
               { name: 'O2 HTR', status: report.monitors.o2Heater },
               { name: 'EGR/VVT', status: report.monitors.egrVvt },
-            ].map((m) => (
-              <div
-                key={m.name}
-                className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded p-1 flex flex-col items-center text-center"
-              >
-                <span className="text-[#64748b] text-[8px]">{m.name}</span>
-                <span className="text-[#00e676] font-bold mt-0.5">{m.status}</span>
-              </div>
-            ))}
-          </div>
+            ];
+            const ready = monitorList.filter((m) => m.status === 'Ready').length;
+            const notReady = monitorList.filter((m) => m.status === 'Not Ready').length;
+            const na = monitorList.filter((m) => m.status === 'N/A').length;
+
+            return (
+              <>
+                <div className="flex items-center justify-between gap-2 font-['Chakra_Petch']">
+                  <span className="text-[#64748b] uppercase font-bold flex items-center gap-1.5 text-[11px]">
+                    <ShieldCheck size={13} className={notReady > 0 ? 'text-[#ffaa00]' : 'text-[#00e676]'} />
+                    Emissions I/M Readiness
+                  </span>
+                  {/* Reports what the ECU actually returned. This used to read
+                      "All 8 Passed" unconditionally, which is the answer someone
+                      would rely on right before a smog test. */}
+                  <span className="text-[11px] text-right">
+                    <span className="text-[#00e676] font-bold">{ready} ready</span>
+                    {notReady > 0 && (
+                      <span className="text-[#ffaa00] font-bold"> · {notReady} not ready</span>
+                    )}
+                    {na > 0 && <span className="text-[#64748b]"> · {na} n/a</span>}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-4 sm:grid-cols-8 gap-1 text-[10px] font-['Chakra_Petch']">
+                  {monitorList.map((m) => (
+                    <div
+                      key={m.name}
+                      className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded p-1.5 flex flex-col items-center text-center"
+                    >
+                      <span className="text-[#64748b] text-[9px]">{m.name}</span>
+                      <span
+                        className={`font-bold mt-0.5 ${
+                          m.status === 'Ready'
+                            ? 'text-[#00e676]'
+                            : m.status === 'Not Ready'
+                            ? 'text-[#ffaa00]'
+                            : 'text-[#475569]'
+                        }`}
+                      >
+                        {m.status}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </>
+            );
+          })()}
         </div>
       )}
 

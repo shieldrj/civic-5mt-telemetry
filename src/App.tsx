@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Bluetooth,
   Maximize2,
@@ -72,7 +72,7 @@ export function App() {
     height: typeof window !== 'undefined' ? window.innerHeight : 900,
   }));
   const touchStart = useRef<{ x: number; y: number } | null>(null);
-  const cockpitRef = useRef<HTMLElement>(null);
+  const cockpitObserver = useRef<ResizeObserver | null>(null);
   const [cockpitBox, setCockpitBox] = useState({ width: 0, height: 0 });
 
   // The cockpit is sized from the live viewport height so it always fits without
@@ -91,16 +91,26 @@ export function App() {
   // Measure the space the cockpit actually gets rather than estimating the chrome around
   // it. The container is flex-1 with min-h-0, so its height is fixed by its siblings and
   // never by the gauges inside it - sizing the gauges from it cannot feed back on itself.
-  useEffect(() => {
-    const el = cockpitRef.current;
-    if (!el) return;
+  //
+  // This has to be a callback ref, not an effect. Telemetry starts as null, so the first
+  // commit is always the loading screen and any effect firing then sees a null ref. An
+  // effect keyed on the tab would not re-run when the telemetry arrives, so the observer
+  // never attached and the gauges were stuck on the fallback estimate until you happened
+  // to switch tabs. A callback ref runs when the node itself mounts, which is the event
+  // that actually matters here.
+  const cockpitRef = useCallback((node: HTMLElement | null) => {
+    cockpitObserver.current?.disconnect();
+    if (!node) {
+      cockpitObserver.current = null;
+      return;
+    }
     const observer = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
       setCockpitBox({ width, height });
     });
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [activeTab]);
+    observer.observe(node);
+    cockpitObserver.current = observer;
+  }, []);
 
   // Swipe left/right anywhere to move between tabs. Guarded on the horizontal
   // delta dominating, so it never hijacks a vertical scroll on the deeper tabs.

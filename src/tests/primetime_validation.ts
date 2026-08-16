@@ -4,6 +4,7 @@ import { FuelModelEngine } from '../services/obd2/fuelModel';
 import { OilLifeEngine } from '../services/obd2/oilLifeModel';
 import { HONDA_DTC_DATABASE } from '../services/obd2/dtcSpecs';
 import { OBDLinkBluetoothManager } from '../services/bluetooth/obdlinkBluetooth';
+import { decodeReadinessMonitors, UNKNOWN_MONITORS } from '../services/obd2/dtcScanner';
 
 // Polyfill localStorage for Node test runner
 if (typeof globalThis.localStorage === 'undefined') {
@@ -146,6 +147,44 @@ assert(Math.abs(range - 198) < 1, `Fuel range calculated correctly (Got: ${range
 const rangeFallback = fuelModel.calculateFuelRange(100, CIVIC_2013_SPECS.fuelTankCapacityGallons, 0);
 const expectedFallback = CIVIC_2013_SPECS.fuelTankCapacityGallons * CIVIC_2013_SPECS.epaCombinedMpgDefault;
 assert(Math.abs(rangeFallback - expectedFallback) < 1, `Fuel range falls back to EPA combined MPG before a rolling sample exists (Got: ${rangeFallback.toFixed(1)} mi)`);
+
+// 6. READINESS MONITOR DECODING (Mode 01 PID 01 bytes B/C/D)
+console.log('\n--- 6. Emissions Readiness Monitor Decoding ---');
+
+// Byte B: bits 0-2 supported (misfire, fuel, comprehensive), bits 4-6 incomplete.
+// Byte C: supported spark-ignition monitors. Byte D: the matching incomplete bits.
+// 0x07 = all three common tests supported, none incomplete -> all Ready.
+const allReady = decodeReadinessMonitors(0x07, 0xe5, 0x00);
+assert(allReady.misfire === 'Ready', `Misfire reads Ready when supported and complete (${allReady.misfire})`);
+assert(allReady.fuelSystem === 'Ready', `Fuel system reads Ready when supported and complete (${allReady.fuelSystem})`);
+assert(allReady.catalyst === 'Ready', `Catalyst reads Ready when supported and complete (${allReady.catalyst})`);
+
+// Same supported set, but every spark-ignition test still incomplete.
+const notReady = decodeReadinessMonitors(0x77, 0xe5, 0xe5);
+assert(notReady.misfire === 'Not Ready', `Misfire reads Not Ready while its test is incomplete (${notReady.misfire})`);
+assert(notReady.catalyst === 'Not Ready', `Catalyst reads Not Ready while its test is incomplete (${notReady.catalyst})`);
+assert(notReady.o2Sensor === 'Not Ready', `O2 sensor reads Not Ready while its test is incomplete (${notReady.o2Sensor})`);
+
+// An engine that does not support a monitor must report N/A, never Ready - the whole
+// point of the fix. 0x00 supported means nothing is available to test.
+const unsupported = decodeReadinessMonitors(0x00, 0x00, 0x00);
+const unsupportedValues = Object.values(unsupported);
+assert(
+  unsupportedValues.every((v) => v === 'N/A'),
+  `Unsupported monitors report N/A rather than Ready (${[...new Set(unsupportedValues)].join(', ')})`
+);
+
+// Secondary air is commonly absent on this engine: C bit3 clear -> N/A even though
+// the neighbouring catalyst monitor is supported and complete.
+const mixed = decodeReadinessMonitors(0x07, 0x05, 0x00);
+assert(mixed.catalyst === 'Ready', `Supported catalyst still reads Ready in a mixed set (${mixed.catalyst})`);
+assert(mixed.evap === 'Ready', `Supported evap still reads Ready in a mixed set (${mixed.evap})`);
+assert(mixed.o2Sensor === 'N/A', `Unsupported O2 monitor reads N/A in a mixed set (${mixed.o2Sensor})`);
+
+assert(
+  Object.values(UNKNOWN_MONITORS).every((v) => v === 'N/A'),
+  'Unreadable ECU reply falls back to all-N/A, never all-Ready'
+);
 
 console.log('\n==================================================');
 console.log(`🏁 TEST RESULTS: ${passed} PASSED, ${failed} FAILED`);
