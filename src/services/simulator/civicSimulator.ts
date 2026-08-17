@@ -16,7 +16,6 @@ export class CivicSimulatorEngine {
   private rpm: number = CIVIC_2013_SPECS.idleRpm;
   private speedKmh: number = 0;
   private coolantTempC: number = 45; // Starts cool to demonstrate cold start tracker
-  private iatC: number = 24;
   private simulationTimeSec: number = 0;
 
   // New telemetry channels
@@ -139,7 +138,6 @@ export class CivicSimulatorEngine {
       speedKmh: parseFloat(this.speedKmh.toFixed(1)),
       maf: calculatedMaf,
       coolantC: Math.round(this.coolantTempC),
-      iatC: this.iatC,
       engineLoad: calculatedLoad,
       throttlePos: parseFloat(this.throttlePos.toFixed(1)),
       stft,

@@ -5,18 +5,62 @@
  * are identical whether the bytes travel over Bluetooth LE in a browser or Bluetooth
  * Classic RFCOMM in the native app. See transport.ts for why that split exists.
  */
-import { ObdTransport, ObdConnectOptions } from './transport';
+import { ObdTransport, ObdConnectOptions, ObdTransportError } from './transport';
 import { WebBluetoothTransport, OBDLINK_SERVICE_UUIDS } from './webBluetoothTransport';
 import { ClassicSppTransport, isNativePlatform } from './classicSppTransport';
+import {
+  BANK_MARKER_PIDS,
+  PIDS_IN_USE,
+  decodePidValue,
+  pidCommand,
+  pidLabel,
+} from '../obd2/pidCatalog';
 
 export { OBDLINK_SERVICE_UUIDS };
+
+/** One PID the car reported it supports, with whatever it answered when asked. */
+export interface PidProbeResult {
+  pid: number;
+  cmd: string;
+  name: string;
+  raw: string;
+  /** Decoded reading, or null when the catalogue has no formula - `raw` still holds the hex. */
+  value: string | null;
+  isBankMarker: boolean;
+  /** Whether a gauge already consumes this PID. */
+  inUse: boolean;
+}
+
+/**
+ * Command timeouts.
+ *
+ * These are not arbitrary. A reply that arrives after its own command has timed out is
+ * indistinguishable, on a stream with no request IDs, from the next command's reply - so a
+ * timeout that fires early does not merely lose one answer, it shifts every later answer
+ * one command out of step and the parsers stop recognising anything. Generous is cheap;
+ * early is silently fatal. See drainLine() for the other half of that defence.
+ */
+/** AT Z reboots the STN chip in the MX+, which takes appreciably longer than an ELM327 clone. */
+const RESET_TIMEOUT_MS = 6000;
+/** Configuration ATs answer from RAM and are quick, but not free over RFCOMM. */
+const AT_INIT_TIMEOUT_MS = 2500;
+/** The first real request has to bring the CAN bus up, which is the slowest thing here. */
+const BUS_PROBE_TIMEOUT_MS = 6000;
+/** Steady-state PID polling, once the bus is known good. */
+const PID_TIMEOUT_MS = 1200;
+
+/** One command and whatever came back, for the on-screen adapter log. */
+export interface ProtocolLogEntry {
+  at: number;
+  cmd: string;
+  resp: string;
+}
 
 export interface RawObdData {
   rpm: number;
   speedKmh: number;
   maf: number;
   coolantC: number;
-  iatC: number;
   engineLoad: number;
   throttlePos: number;
   stft: number;
@@ -37,12 +81,44 @@ export class OBDLinkBluetoothManager {
   private incomingBuffer = '';
   private pendingResolver: ((value: string) => void) | null = null;
 
+  /**
+   * Set when a command times out. The next command must not be sent until the line has
+   * fallen quiet, or the late reply lands on it and every answer from then on is off by one.
+   */
+  private needsDrain = false;
+
+  /**
+   * Total bytes seen, ever. drainLine() watches this rather than the buffer length because
+   * handleIncoming() empties the buffer on every '>' - including replies nobody is waiting
+   * for, which are exactly the ones being drained.
+   */
+  private bytesReceived = 0;
+
+  private readonly logEntries: ProtocolLogEntry[] = [];
+  private logListener: ((entries: ProtocolLogEntry[]) => void) | null = null;
+  /**
+   * Logging is verbose for the handshake and the first full poll cycle, then drops to
+   * failures only. The first cycle is the part worth seeing: it shows every PID's actual
+   * reply once, which is what says whether a gauge is stuck because the car said nothing
+   * or because the reply was not understood. Failures-only hid exactly that - a PID
+   * answering NO DATA is a non-empty reply, so nothing was recorded at all.
+   */
+  private verboseLog = true;
+
+  /** PIDs the car reported via 0100/0120/0140. Empty means "unknown, poll everything". */
+  private readonly supportedPids = new Set<number>();
+
+  /** Commands already recorded once, so steady-state polling stops adding log lines. */
+  private readonly loggedOnce = new Set<string>();
+
+  /** Tail of the command queue. See sendCommand for why every caller shares one line. */
+  private commandChain: Promise<void> = Promise.resolve();
+
   public latestData: RawObdData = {
     rpm: 0,
     speedKmh: 0,
     maf: 2.8,
     coolantC: 85,
-    iatC: 22,
     engineLoad: 20,
     throttlePos: 14,
     stft: 0,
@@ -104,18 +180,26 @@ export class OBDLinkBluetoothManager {
     onStatus?: (msg: string) => void,
     options: ObdConnectOptions = {}
   ): Promise<boolean> {
+    this.logEntries.length = 0;
+    this.loggedOnce.clear();
+    this.verboseLog = true;
+    this.needsDrain = false;
+    this.incomingBuffer = '';
+
     await this.transport.connect(onStatus, options);
 
     onStatus?.('Initializing ISO 15765-4 CAN protocol...');
-    await this.initializeElm327();
+    await this.initializeElm327(onStatus);
 
     onStatus?.('Connected & streaming telemetry');
+    this.verboseLog = false; // Polling now records each PID once - see sendCommand
     this.startPollingLoop();
     return true;
   }
 
   private handleIncoming(chunk: string): void {
     this.incomingBuffer += chunk;
+    this.bytesReceived += chunk.length;
 
     // ELM327/STN terminates every response with the '>' prompt.
     if (this.incomingBuffer.includes('>')) {
@@ -125,8 +209,47 @@ export class OBDLinkBluetoothManager {
         const resolve = this.pendingResolver;
         this.pendingResolver = null;
         resolve(response);
+      } else {
+        // Nobody is waiting: this is a late reply to a command that already timed out.
+        // Dropping it here is the point - drainLine() is what stops the next command
+        // being sent until these have stopped arriving.
+        this.log('(late)', response);
       }
     }
+  }
+
+  /**
+   * Waits for the adapter to stop talking, then discards whatever it said.
+   *
+   * Called after a timeout. Without it, the reply the adapter was still composing arrives
+   * mid-way through the next command and satisfies its resolver, leaving every subsequent
+   * response one command behind - which parses as nothing at all, so the gauges sit on
+   * their defaults and the app reports a healthy connection.
+   */
+  private async drainLine(quietMs = 250, maxMs = 4000): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < maxMs) {
+      const before = this.bytesReceived;
+      await new Promise((r) => setTimeout(r, quietMs));
+      if (this.bytesReceived === before) break;
+    }
+    this.incomingBuffer = '';
+    this.needsDrain = false;
+  }
+
+  /** Recent exchanges, oldest first, for the connection screen. */
+  public getProtocolLog(): ProtocolLogEntry[] {
+    return [...this.logEntries];
+  }
+
+  public setLogListener(listener: ((entries: ProtocolLogEntry[]) => void) | null): void {
+    this.logListener = listener;
+  }
+
+  private log(cmd: string, resp: string): void {
+    this.logEntries.push({ at: Date.now(), cmd, resp: resp || '(no reply)' });
+    if (this.logEntries.length > 60) this.logEntries.shift();
+    this.logListener?.(this.getProtocolLog());
   }
 
   public disconnect(): void {
@@ -136,13 +259,43 @@ export class OBDLinkBluetoothManager {
     void this.transport.disconnect();
   }
 
-  public async sendCommand(cmd: string, timeoutMs: number = 600): Promise<string> {
-    const cleanCmd = cmd.trim() + '\r';
+  /**
+   * Queues a command behind every command already issued, and resolves with its reply.
+   *
+   * The queue is the point. An ELM327 has one command in flight at a time and no way to
+   * label which reply belongs to which request - so two callers writing at once do not
+   * merely interleave, they permanently swap replies, and the adapter aborts the
+   * half-written one with STOPPED. That is exactly what happened: the DTC scanner shares
+   * this instance with the polling loop, its 0101 collided with a PID request mid-reply,
+   * and every gauge froze on its last good value while the connection still looked healthy.
+   *
+   * Serialising here rather than in the callers means a future third caller cannot
+   * reintroduce it by forgetting.
+   */
+  public sendCommand(cmd: string, timeoutMs: number = PID_TIMEOUT_MS): Promise<string> {
+    const run = this.commandChain.then(() => this.executeCommand(cmd, timeoutMs));
+    // Swallow failures for the chain's own purposes only - `run` still rejects for the
+    // caller. Without this a single rejected command would stall every command behind it.
+    this.commandChain = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
 
-    return new Promise((resolve, reject) => {
+  private async executeCommand(cmd: string, timeoutMs: number): Promise<string> {
+    // A previous command timed out, so its reply may still be in flight. Let it land and
+    // throw it away before putting a new command on the wire.
+    if (this.needsDrain) await this.drainLine();
+
+    const cleanCmd = cmd.trim() + '\r';
+    this.incomingBuffer = '';
+
+    const response = await new Promise<string>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.pendingResolver) {
           this.pendingResolver = null;
+          this.needsDrain = true;
           resolve(''); // Timeout fallback without crashing the polling loop
         }
       }, timeoutMs);
@@ -158,17 +311,177 @@ export class OBDLinkBluetoothManager {
         reject(err);
       });
     });
+
+    // Polling runs six-plus commands a second, so logging all of it would bury the
+    // handshake within seconds. Each PID is instead recorded once, the first time it is
+    // asked: that is a complete picture of what this car answers, in about sixteen lines,
+    // and it does not grow. Timeouts are always recorded, whenever they happen.
+    if (this.verboseLog || !response || !this.loggedOnce.has(cmd)) {
+      this.loggedOnce.add(cmd);
+      this.log(cmd, response);
+    }
+    return response;
   }
 
-  private async initializeElm327(): Promise<void> {
+  private async initializeElm327(onStatus?: (msg: string) => void): Promise<void> {
     // Reset and configure ELM327 / STN protocol
-    await this.sendCommand('AT Z', 1000); // Reset
-    await this.sendCommand('AT E0');      // Echo off
-    await this.sendCommand('AT L0');      // Linefeeds off
-    await this.sendCommand('AT S0');      // Spaces off
-    await this.sendCommand('AT H0');      // Headers off
-    // ISO 15765-4 (CAN 11-bit 500k) is Protocol 6
-    await this.sendCommand('AT SP 6');
+    const banner = await this.sendCommand('AT Z', RESET_TIMEOUT_MS);
+    if (!banner) {
+      throw new ObdTransportError(
+        'The adapter accepted a Bluetooth connection but never answered the reset command. ' +
+          'That is usually another app still holding the link — close the OBDLink app ' +
+          'completely (swipe it away, do not just background it) and try again.'
+      );
+    }
+
+    await this.sendCommand('AT E0', AT_INIT_TIMEOUT_MS); // Echo off
+    await this.sendCommand('AT L0', AT_INIT_TIMEOUT_MS); // Linefeeds off
+    await this.sendCommand('AT S0', AT_INIT_TIMEOUT_MS); // Spaces off
+    await this.sendCommand('AT H0', AT_INIT_TIMEOUT_MS); // Headers off
+
+    // Protocol 7 is ISO 15765-4 CAN with 29-bit IDs. This car answers on 7, not the 6
+    // (11-bit) you would expect of a 2013 Civic - measured, via AT DPN reporting A7 after
+    // an auto-detect. Protocol 6 returns NO DATA here, so 7 is tried first and 6 second.
+    onStatus?.('Waking the CAN bus...');
+    for (const proto of ['7', '6']) {
+      await this.sendCommand(`AT SP ${proto}`, AT_INIT_TIMEOUT_MS);
+      if (await this.probeBus()) {
+        await this.loadSupportedPids();
+        return;
+      }
+    }
+
+    // Neither fixed protocol answered. Auto-detect is slower, but if the car replies to it
+    // the log says which protocol worked and the list above can be corrected properly.
+    onStatus?.('Fixed protocols got no answer — trying auto-detect...');
+    await this.sendCommand('AT SP 0', AT_INIT_TIMEOUT_MS);
+    if (await this.probeBus()) {
+      await this.sendCommand('AT DPN', AT_INIT_TIMEOUT_MS); // Logs the protocol that worked
+      await this.loadSupportedPids();
+      return;
+    }
+
+    throw new ObdTransportError(
+      'The adapter is connected and answering, but the car is not. Turn the ignition to ' +
+        'ON / II — the ECU powers down otherwise, and the adapter stays awake on its own, ' +
+        'which is why it still pairs. Check the adapter log below for what it replied.'
+    );
+  }
+
+  /**
+   * Reads the three supported-PID bitmaps so polling can skip what this car does not have.
+   *
+   * Worth the three extra commands: a 2013 Civic LX has no PID 14 (O2 sensor 1), and asking
+   * for it every cycle costs a real round-trip to be told NO DATA. An empty set here means
+   * the bitmaps could not be read, and everything is polled as before rather than nothing.
+   */
+  private async loadSupportedPids(): Promise<void> {
+    this.supportedPids.clear();
+    // Every bank, not just the first three. Each is only asked for if the previous one set
+    // its continuation bit, so a car that stops at 0x20 still costs exactly two commands.
+    for (const [base, cmd] of [
+      [0x00, '0100'],
+      [0x20, '0120'],
+      [0x40, '0140'],
+      [0x60, '0160'],
+      [0x80, '0180'],
+      [0xa0, '01A0'],
+      [0xc0, '01C0'],
+    ] as const) {
+      const hex = this.extractHexBytes(
+        await this.sendCommand(cmd, AT_INIT_TIMEOUT_MS),
+        `41${cmd.slice(2)}`
+      );
+      if (!hex || hex.length < 8) break;
+      const mask = parseInt(hex.substring(0, 8), 16);
+      for (let bit = 0; bit < 32; bit++) {
+        if (mask & (0x80000000 >>> bit)) this.supportedPids.add(base + bit + 1);
+      }
+      if (!this.supportedPids.has(base + 0x20)) break; // Bit 32 says whether the next bank exists
+    }
+  }
+
+  /**
+   * Enumerates every PID the car reports, then reads each one so the value can be shown
+   * alongside it. This is the measurement that replaces guessing what a 2013 Civic exposes.
+   *
+   * Runs through the same command queue as everything else, so the gauges keep their data -
+   * they simply share the line and slow down while this is running.
+   */
+  public async discoverPids(
+    onProgress?: (done: number, total: number) => void
+  ): Promise<PidProbeResult[]> {
+    // Always re-read rather than trusting the set cached at connect: this screen exists to
+    // report what the car says now, and a stale list would defeat the point of it.
+    await this.loadSupportedPids();
+
+    const pids = [...this.supportedPids].sort((a, b) => a - b);
+    const results: PidProbeResult[] = [];
+
+    for (const pid of pids) {
+      const cmd = pidCommand(pid);
+
+      // The bank markers are support bitmaps, not readings. Listing them as sensors with a
+      // decoded value would be nonsense, but hiding them loses the fact that they answered.
+      if (BANK_MARKER_PIDS.has(pid)) {
+        results.push({
+          pid,
+          cmd,
+          name: `Support map for PIDs ${(pid + 1).toString(16).toUpperCase()}–${(pid + 0x20)
+            .toString(16)
+            .toUpperCase()}`,
+          raw: '',
+          value: null,
+          isBankMarker: true,
+          inUse: false,
+        });
+        onProgress?.(results.length, pids.length);
+        continue;
+      }
+
+      const raw = await this.sendCommand(cmd, 1500);
+      const payload = this.extractHexBytes(raw, `41${cmd.slice(2)}`);
+      results.push({
+        pid,
+        cmd,
+        name: pidLabel(pid),
+        raw: raw.replace(/[\r\n]+/g, ' ').trim(),
+        value: payload ? decodePidValue(pid, payload) : null,
+        isBankMarker: false,
+        inUse: PIDS_IN_USE.has(pid),
+      });
+      onProgress?.(results.length, pids.length);
+    }
+
+    return results;
+  }
+
+  /** False only when the bitmaps were read and positively say the car lacks this PID. */
+  private isPidSupported(cmd: string): boolean {
+    if (!this.supportedPids.size) return true;
+    return this.supportedPids.has(parseInt(cmd.slice(2), 16));
+  }
+
+  /**
+   * One PID request. Skips PIDs the car reported it does not have, and returns '' for them
+   * so the parsers leave the previous value alone.
+   */
+  private async pollPid(cmd: string): Promise<string> {
+    if (!this.isPidSupported(cmd)) return '';
+    return this.sendCommand(cmd);
+  }
+
+  /**
+   * Asks the ECU which PIDs it supports. Cheapest possible proof that the bus is actually
+   * up, and the one thing the old handshake never did - it set a protocol and went straight
+   * to polling, so a bus that never came up looked identical to a working one.
+   */
+  private async probeBus(): Promise<boolean> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const resp = await this.sendCommand('0100', BUS_PROBE_TIMEOUT_MS);
+      if (resp.replace(/[\s\r\n>]/g, '').toUpperCase().includes('4100')) return true;
+    }
+    return false;
   }
 
   private async startPollingLoop(): Promise<void> {
@@ -178,59 +491,59 @@ export class OBDLinkBluetoothManager {
     while (this.isPolling) {
       try {
         // High-frequency primary PIDs (polled every cycle: RPM, Speed, MAF, Throttle)
-        const rpmResp = await this.sendCommand('010C');
+        const rpmResp = await this.pollPid('010C');
         this.parseRpm(rpmResp);
 
-        const speedResp = await this.sendCommand('010D');
+        const speedResp = await this.pollPid('010D');
         this.parseSpeed(speedResp);
 
-        const mafResp = await this.sendCommand('0110');
+        const mafResp = await this.pollPid('0110');
         this.parseMaf(mafResp);
 
-        const throttleResp = await this.sendCommand('0111');
+        const throttleResp = await this.pollPid('0111');
         this.parseThrottle(throttleResp);
 
         // O2 sensor voltages oscillate rapidly (pre-cat especially) - a slow poll would
         // alias them into a flat line, which defeats the point of showing a live trace.
-        const o2s1Resp = await this.sendCommand('0114');
+        const o2s1Resp = await this.pollPid('0114');
         this.parseO2Sensor1(o2s1Resp);
 
-        const o2s2Resp = await this.sendCommand('0115');
+        const o2s2Resp = await this.pollPid('0115');
         this.parseO2Sensor2(o2s2Resp);
 
         // Medium-frequency secondary PIDs (polled every 5-10 cycles)
         if (cycle % 6 === 0) {
-          const coolantResp = await this.sendCommand('0105');
+          const coolantResp = await this.pollPid('0105');
           this.parseCoolant(coolantResp);
 
-          const loadResp = await this.sendCommand('0104');
+          const loadResp = await this.pollPid('0104');
           this.parseLoad(loadResp);
 
-          const timingResp = await this.sendCommand('010E');
+          const timingResp = await this.pollPid('010E');
           this.parseTiming(timingResp);
 
-          const batteryResp = await this.sendCommand('0142');
+          const batteryResp = await this.pollPid('0142');
           this.parseBatteryVoltage(batteryResp);
 
-          const ambientResp = await this.sendCommand('0146');
+          const ambientResp = await this.pollPid('0146');
           this.parseAmbientTemp(ambientResp);
         }
 
         if (cycle % 12 === 0) {
-          const stftResp = await this.sendCommand('0106');
+          const stftResp = await this.pollPid('0106');
           this.parseStft(stftResp);
 
-          const ltftResp = await this.sendCommand('0107');
+          const ltftResp = await this.pollPid('0107');
           this.parseLtft(ltftResp);
 
-          const lambdaResp = await this.sendCommand('0124');
+          const lambdaResp = await this.pollPid('0124');
           this.parseLambda(lambdaResp);
 
           // Fuel level & engine runtime change slowly - the slowest tier is plenty.
-          const fuelLevelResp = await this.sendCommand('012F');
+          const fuelLevelResp = await this.pollPid('012F');
           this.parseFuelLevel(fuelLevelResp);
 
-          const runtimeResp = await this.sendCommand('011F');
+          const runtimeResp = await this.pollPid('011F');
           this.parseRuntime(runtimeResp);
         }
 

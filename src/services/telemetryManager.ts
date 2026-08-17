@@ -100,8 +100,6 @@ export class TelemetryManager {
       mafGramsPerSec: 2.4,
       coolantTempC: 85,
       coolantTempF: 185,
-      intakeAirTempC: 22,
-      intakeAirTempF: 72,
       engineLoadPercent: 18,
       throttlePosPercent: 12,
       shortTermFuelTrim: 0,
@@ -187,7 +185,34 @@ export class TelemetryManager {
     };
   }
 
-  public async connectBluetooth(options: { acceptAllDevices?: boolean } = {}): Promise<void> {
+  /**
+   * Enumerates and reads every PID the car supports. Refuses unless a real adapter is
+   * connected - the simulator would happily invent a complete list, which is exactly the
+   * confident-but-fictional answer this screen exists to eliminate.
+   */
+  public async runPidDiscovery(onProgress?: (done: number, total: number) => void) {
+    if (this.connectionStatus !== 'connected') {
+      throw new Error(
+        'Connect to the adapter first — this reads the list from the car itself, so the simulator cannot answer it.'
+      );
+    }
+    return this.bluetooth.discoverPids(onProgress);
+  }
+
+  /** Recent adapter exchanges, for the connection screen's log panel. */
+  public getProtocolLog() {
+    return this.bluetooth.getProtocolLog();
+  }
+
+  public setProtocolLogListener(listener: (() => void) | null): void {
+    this.bluetooth.setLogListener(listener ? () => listener() : null);
+  }
+
+  // `address` picks a specific paired adapter and is passed straight through to the SPP
+  // transport. It was missing from this signature while the modal was already sending it.
+  public async connectBluetooth(
+    options: { acceptAllDevices?: boolean; address?: string } = {}
+  ): Promise<void> {
     this.stopLoop();
     this.connectionStatus = 'connecting';
     this.statusMessage = 'Connecting to OBDLink MX+...';
@@ -270,7 +295,6 @@ export class TelemetryManager {
     const speedMphRaw = raw.speedKmh * 0.621371;
     const speedMph = parseFloat(speedMphRaw.toFixed(1));
     const coolantF = Math.round((raw.coolantC * 9) / 5 + 32);
-    const iatF = Math.round((raw.iatC * 9) / 5 + 32);
     const ambientF = Math.round((raw.ambientC * 9) / 5 + 32);
 
     // 2. Gear & Manual Transmission Analysis
@@ -303,8 +327,6 @@ export class TelemetryManager {
       mafGramsPerSec: raw.maf,
       coolantTempC: raw.coolantC,
       coolantTempF: coolantF,
-      intakeAirTempC: raw.iatC,
-      intakeAirTempF: iatF,
       engineLoadPercent: raw.engineLoad,
       throttlePosPercent: raw.throttlePos,
       shortTermFuelTrim: raw.stft,

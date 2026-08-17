@@ -6,8 +6,6 @@ export interface OBDLiveMetrics {
   mafGramsPerSec: number;       // PID 0110 (g/s)
   coolantTempC: number;         // PID 0105 (°C)
   coolantTempF: number;         // Calculated (°F)
-  intakeAirTempC: number;       // PID 010F (°C)
-  intakeAirTempF: number;       // Calculated (°F)
   engineLoadPercent: number;    // PID 0104 (%)
   throttlePosPercent: number;   // PID 0111 (%)
   shortTermFuelTrim: number;    // PID 0106 (%)

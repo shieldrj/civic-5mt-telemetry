@@ -4,7 +4,6 @@ import {
   Maximize2,
   Minimize2,
   Thermometer,
-  Wind,
   Activity,
   Cpu,
   RefreshCw,
@@ -28,6 +27,7 @@ import { TripSummaryBar } from './components/TripSummaryBar';
 import { SimulatorControls } from './components/SimulatorControls';
 import { BluetoothModal } from './components/BluetoothModal';
 import { DtcScannerCard } from './components/DtcScannerCard';
+import { PidDiscoveryCard } from './components/PidDiscoveryCard';
 
 type TabId = 'cockpit' | 'fuel_physics' | 'trip' | 'oil_wear' | 'dtc' | 'bench';
 
@@ -188,20 +188,17 @@ export function App() {
   // figure stays visibly provisional until there is a meaningful sample behind it.
   const hasLifetimeData = metrics.lifetimeMiles >= 0.1 && metrics.lifetimeMpg > 0;
 
+  // Coolant is deliberately absent here: it is the hero dial immediately below, and showing
+  // it twice cost a slot without adding a reading. Intake air temp is gone for a harder
+  // reason - PID 010F was never polled, so that tile displayed a constant 72° that came
+  // from an initialiser rather than the car. See the removal of iatC in RawObdData.
   const vitals: { icon: typeof Thermometer; label: string; value: string; tone: VitalTone }[] = [
-    {
-      icon: Thermometer,
-      label: 'COOLANT',
-      value: `${metrics.coolantTempF}°`,
-      tone: isColdEngine ? 'cyan' : isOverheating ? 'red' : 'green',
-    },
     {
       icon: BatteryCharging,
       label: 'BATTERY',
       value: `${metrics.batteryVoltage.toFixed(1)}V`,
       tone: isBatteryLow ? 'red' : isBatteryHigh ? 'amber' : 'green',
     },
-    { icon: Wind, label: 'INTAKE', value: `${metrics.intakeAirTempF}°`, tone: 'neutral' },
     { icon: Sun, label: 'OUTSIDE', value: `${metrics.ambientAirTempF}°`, tone: 'neutral' },
     {
       icon: Activity,
@@ -309,7 +306,7 @@ export function App() {
       {/* Live Engine Vitals - every value stays visible at phone width.
           These used to be pills inside the header behind sm:/md: breakpoints, which
           never fire on a phone in portrait, so most of them simply never rendered. */}
-      <div className={`grid grid-cols-5 gap-1.5 shrink-0 ${isShortViewport ? 'hidden' : ''}`}>
+      <div className={`grid grid-cols-3 gap-1.5 shrink-0 ${isShortViewport ? 'hidden' : ''}`}>
         {vitals.map((vital) => (
           <div
             key={vital.label}
@@ -523,6 +520,7 @@ export function App() {
       {activeTab === 'dtc' && (
         <main className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pb-1">
           <DtcScannerCard />
+          <PidDiscoveryCard />
         </main>
       )}
 
@@ -577,6 +575,8 @@ export function App() {
         statusMessage={telemetryManager.statusMessage}
         onConnect={(options) => telemetryManager.connectBluetooth(options)}
         checkEnvironment={() => telemetryManager.getBluetoothEnvironment()}
+        getProtocolLog={() => telemetryManager.getProtocolLog()}
+        setProtocolLogListener={(fn) => telemetryManager.setProtocolLogListener(fn)}
         onDisconnect={() => telemetryManager.disconnect()}
         onStartSim={() => telemetryManager.startSimulation()}
       />

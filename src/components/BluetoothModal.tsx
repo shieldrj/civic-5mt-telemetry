@@ -11,6 +11,12 @@ interface BluetoothEnvironment {
   pairedAdapters: { name: string; address: string }[];
 }
 
+interface ProtocolLogEntry {
+  at: number;
+  cmd: string;
+  resp: string;
+}
+
 interface BluetoothModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -20,6 +26,8 @@ interface BluetoothModalProps {
   onDisconnect: () => void;
   onStartSim: () => void;
   checkEnvironment: () => Promise<BluetoothEnvironment>;
+  getProtocolLog: () => ProtocolLogEntry[];
+  setProtocolLogListener: (listener: (() => void) | null) => void;
 }
 
 export const BluetoothModal: React.FC<BluetoothModalProps> = ({
@@ -31,8 +39,11 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
   onDisconnect,
   onStartSim,
   checkEnvironment,
+  getProtocolLog,
+  setProtocolLogListener,
 }) => {
   const [env, setEnv] = useState<BluetoothEnvironment | null>(null);
+  const [log, setLog] = useState<ProtocolLogEntry[]>([]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -44,6 +55,14 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
       cancelled = true;
     };
   }, [isOpen, checkEnvironment]);
+
+  // The handshake is the part that fails silently, so it is shown rather than summarised.
+  useEffect(() => {
+    if (!isOpen) return;
+    setLog(getProtocolLog());
+    setProtocolLogListener(() => setLog(getProtocolLog()));
+    return () => setProtocolLogListener(null);
+  }, [isOpen, getProtocolLog, setProtocolLogListener]);
 
   if (!isOpen) return null;
 
@@ -246,6 +265,30 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
             native Android build is for.
           </p>
         </div>
+        )}
+
+        {/* What the adapter actually said. Without this, a handshake that fails part-way
+            is indistinguishable from one that worked - the gauges simply never move. */}
+        {log.length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[11px] text-[#64748b] font-['Chakra_Petch'] uppercase tracking-wide">
+              Adapter log
+            </span>
+            <div className="max-h-36 overflow-y-auto rounded-lg border border-[rgba(255,255,255,0.08)] bg-[#08090d] p-2 font-mono text-[10px] leading-relaxed">
+              {log.map((entry, i) => (
+                <div key={i} className="flex gap-1.5">
+                  <span className="text-[#00d2ff] shrink-0">{entry.cmd}</span>
+                  <span
+                    className={
+                      entry.resp === '(no reply)' ? 'text-[#ff6b7b]' : 'text-[#94a3b8] break-all'
+                    }
+                  >
+                    {entry.resp.replace(/\r/g, ' ')}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
         )}
 
         {/* Switch to Simulator */}
