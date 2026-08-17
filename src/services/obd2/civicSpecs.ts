@@ -122,6 +122,13 @@ export const CIVIC_2013_SPECS = {
   gasPriceDefaultDollarsPerGallon: 3.45,
   fuelTankCapacityGallons: 13.2, // 2013 Civic LX sedan factory tank spec
   epaCombinedMpgDefault: 32, // Fallback multiplier for range-to-empty before a rolling MPG sample exists
+
+  // The telemetry loop's period. Exported as a spec rather than left as a literal in
+  // telemetryManager because the rolling-MPG window is measured in samples, not seconds -
+  // it has to divide by this to mean anything. They disagreed before: the buffer was sized
+  // 600 with a comment claiming 30 seconds at 20Hz, while the loop has always run at 80ms,
+  // making the "30 second" average a 48 second one.
+  telemetryTickMs: 80,
   
   // Shift Point Tuning
   ecoShiftPoints: {

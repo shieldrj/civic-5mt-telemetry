@@ -1,13 +1,61 @@
 import React from 'react';
-import { Fuel, DollarSign, Activity, Zap, TrendingUp, Waves } from 'lucide-react';
 import { OBDLiveMetrics, TripAnalytics } from '../types/obd';
 import { FUEL_BLENDS, FuelBlendId, FuelBlendProperties } from '../services/obd2/civicSpecs';
+
+/*
+ * The fuel tab, restructured to match the cockpit.
+ *
+ * It was five nested boxes deep in places, every heading was shouted in caps, and the
+ * selected fuel blend was a solid red fill - the loudest block of colour in the app, on a
+ * setting you change roughly once a year. The figures underneath were always good; they
+ * were just buried.
+ */
 
 interface MpgTelemetryCardProps {
   metrics: OBDLiveMetrics;
   trip: TripAnalytics;
   activeBlend: FuelBlendProperties;
   onSelectFuelBlend: (id: FuelBlendId) => void;
+}
+
+const INK = '#eef0f2';
+const INK_2 = '#9aa1a9';
+const INK_3 = '#6b727a';
+const WARN = '#c8952e';
+
+/** A section heading. Sentence case, hairline above, nothing else. */
+function Section({ title, aside, children }: { title: string; aside?: string; children: React.ReactNode }) {
+  return (
+    <section className="flex flex-col gap-3 pt-4" style={{ borderTop: '1px solid var(--hairline)' }}>
+      <div className="flex items-baseline justify-between gap-3">
+        <h3 style={{ fontSize: 14, fontWeight: 500, letterSpacing: '-0.01em', color: INK }}>
+          {title}
+        </h3>
+        {aside && (
+          <span className="tabular-nums" style={{ fontSize: 11.5, color: INK_3 }}>
+            {aside}
+          </span>
+        )}
+      </div>
+      {children}
+    </section>
+  );
+}
+
+function Row({ label, value, note }: { label: string; value: React.ReactNode; note?: string }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="t-key">{label}</span>
+      <span className="t-value" style={{ color: INK }}>
+        {value}
+        {note && (
+          <span className="ml-2.5" style={{ fontSize: 11.5, color: INK_3, letterSpacing: 0 }}>
+            {note}
+          </span>
+        )}
+      </span>
+    </div>
+  );
 }
 
 export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({
@@ -18,228 +66,190 @@ export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({
 }) => {
   const isDfco = metrics.isDfcoActive;
 
-  // AFR status, judged against the blend rather than a fixed 14.7. Stoichiometry moves
-  // with the fuel, so comparing an E10 mixture to gasoline's ratio would read every
-  // perfectly normal cruise as rich.
+  // AFR judged against the blend rather than a fixed 14.7. Stoichiometry moves with the
+  // fuel, so comparing an E10 mixture to gasoline's ratio reads every normal cruise as rich.
   const afr = metrics.airFuelRatio;
   const lambda = afr / activeBlend.stoichAfr;
-  let afrStatus = `Stoich (${activeBlend.stoichAfr.toFixed(2)})`;
-  let afrColor = 'text-[#00e676]';
-  if (lambda < 0.97) {
-    afrStatus = 'Rich (Power)';
-    afrColor = 'text-[#ffaa00]';
-  } else if (lambda > 1.03) {
-    afrStatus = 'Lean (Eco)';
-    afrColor = 'text-[#00d2ff]';
-  }
+  const afrStatus = lambda < 0.97 ? 'Rich' : lambda > 1.03 ? 'Lean' : 'Stoichiometric';
+
+  const idleMinutes = Math.floor(trip.idleTimeSec / 60);
+  const idleSeconds = Math.round(trip.idleTimeSec % 60);
 
   return (
-    <div className="telemetry-card flex flex-col justify-between gap-3">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#ffaa00] border border-[rgba(255,255,255,0.08)]">
-            <Fuel size={16} />
-          </div>
-          <div>
-            <h3 className="text-xs font-bold text-[#f8fafc] font-['Chakra_Petch'] tracking-wide">
-              PHYSICS MPG & FUEL FLOW
-            </h3>
-            <p className="text-[10px] text-[#64748b]">MAF + Lambda + Fuel Trim Dynamics</p>
-          </div>
-        </div>
-
-        {isDfco ? (
-          <div className="badge-pill badge-cyan animate-pulse">
-            <Zap size={11} />
-            DFCO ACTIVE (0.00 GPH)
-          </div>
-        ) : (
-          <div className="badge-pill badge-green">
-            <Activity size={11} />
-            CLOSED LOOP
-          </div>
-        )}
-      </div>
-
-      {/* Main Split: Instant MPG & Flow Rate */}
-      <div className="grid grid-cols-2 gap-3 items-center telemetry-card-subtle">
-        {/* Instantaneous MPG */}
-        <div className="flex flex-col">
-          <span className="text-[9px] uppercase font-bold text-[#64748b] tracking-wider font-['Chakra_Petch']">
-            Instantaneous
-          </span>
-          <div className="flex items-baseline gap-1 mt-0.5">
+    <div className="flex flex-col gap-5">
+      {/* The two live figures, given the room they deserve. These were a two-column grid
+          inside a filled sub-card inside the main card. */}
+      <div className="grid grid-cols-2 gap-4">
+        <div className="flex flex-col gap-1">
+          <span className="t-label">Instant</span>
+          <div className="flex items-baseline gap-1.5">
             <span
-              className={`text-3xl font-black font-['Chakra_Petch'] tabular-nums tracking-tight ${
-                isDfco ? 'text-[#00d2ff]' : metrics.instantMpg >= 35 ? 'text-[#00e676]' : 'text-[#f8fafc]'
-              }`}
+              className="t-hero tabular-nums"
+              style={{ fontSize: 40, color: isDfco ? INK_2 : INK }}
             >
-              {isDfco ? '99.9+' : metrics.instantMpg.toFixed(1)}
+              {isDfco ? '—' : metrics.displayMpg.toFixed(1)}
             </span>
-            <span className="text-[10px] font-bold text-[#64748b] font-['Chakra_Petch']">MPG</span>
+            {!isDfco && (
+              <span className="t-hero t-unit" style={{ fontSize: 13 }}>
+                mpg
+              </span>
+            )}
           </div>
-          <span className="text-[9px] text-[#94a3b8]">
-            30s Avg: <strong className="text-[#cbd5e1] font-['Chakra_Petch']">{metrics.rolling30sMpg} MPG</strong>
+          <span style={{ fontSize: 11.5, color: INK_3 }}>
+            {isDfco ? 'Coasting — no fuel' : `${metrics.rolling30sMpg.toFixed(1)} over 30s`}
           </span>
         </div>
 
-        {/* Burn Rate */}
-        <div className="flex flex-col border-l border-[rgba(255,255,255,0.06)] pl-3">
-          <span className="text-[9px] uppercase font-bold text-[#64748b] tracking-wider font-['Chakra_Petch']">
-            Fuel Burn Rate
-          </span>
-          <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-2xl font-bold text-[#ffaa00] font-['Chakra_Petch'] tabular-nums">
+        <div className="flex flex-col gap-1">
+          <span className="t-label">Burn rate</span>
+          <div className="flex items-baseline gap-1.5">
+            <span className="t-hero tabular-nums" style={{ fontSize: 40 }}>
               {metrics.fuelFlowGalPerHour.toFixed(2)}
             </span>
-            <span className="text-[10px] font-bold text-[#64748b] font-['Chakra_Petch']">GAL/HR</span>
+            <span className="t-hero t-unit" style={{ fontSize: 13 }}>
+              gal/hr
+            </span>
           </div>
-          <span className="text-[9px] text-[#94a3b8]">
-            ({metrics.fuelFlowLitersPerHour.toFixed(2)} L/hr)
+          <span className="tabular-nums" style={{ fontSize: 11.5, color: INK_3 }}>
+            {metrics.fuelFlowLitersPerHour.toFixed(2)} L/hr
           </span>
         </div>
       </div>
 
-      {/* Secondary Row: AFR & Idle Loss */}
-      <div className="grid grid-cols-2 gap-2 text-xs">
-        {/* AFR */}
-        <div className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded-lg p-2 flex flex-col justify-between">
-          <div className="flex items-center justify-between text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">
-            <span>AIR:FUEL</span>
-            <span className={afrColor}>{afrStatus}</span>
-          </div>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-sm font-bold text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
-              {afr.toFixed(2)} : 1
+      <Section title="Combustion" aside={isDfco ? 'Fuel cut' : 'Closed loop'}>
+        <Row
+          label="Air to fuel"
+          value={
+            <span className="tabular-nums">
+              {afr.toFixed(2)}
+              <span className="t-label ml-1" style={{ letterSpacing: '0.1em' }}>
+                : 1
+              </span>
             </span>
-            <span className="text-[8px] text-[#64748b]">λ {metrics.equivalenceRatio.toFixed(3)}</span>
-          </div>
-          {/* Micro stoich bar */}
-          <div className="w-full bg-[#161a26] h-1 rounded-full mt-1 overflow-hidden">
-            <div
-              className="h-full bg-gradient-to-r from-[#ffaa00] via-[#00e676] to-[#00d2ff]"
-              style={{
-                width: `${Math.min(100, Math.max(0, ((afr - 10) / (20 - 10)) * 100))}%`,
-              }}
-            />
-          </div>
+          }
+          note={`${afrStatus} · λ ${metrics.equivalenceRatio.toFixed(3)}`}
+        />
+        {/* Where this mixture sits between 10:1 and 20:1. A hairline marks the blend's
+            own stoichiometric point, so "rich" and "lean" are read off the scale rather
+            than from a colour. */}
+        <div className="meter relative">
+          <i
+            style={{
+              width: `${Math.min(100, Math.max(0, ((afr - 10) / 10) * 100))}%`,
+              backgroundColor: lambda < 0.97 || lambda > 1.03 ? WARN : INK,
+            }}
+          />
+          <span
+            className="absolute inset-y-0 w-px"
+            style={{
+              left: `${((activeBlend.stoichAfr - 10) / 10) * 100}%`,
+              background: 'rgba(255,255,255,0.45)',
+            }}
+          />
         </div>
 
-        {/* Idle Wastage */}
-        <div className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded-lg p-2 flex flex-col justify-between">
-          <div className="flex items-center justify-between text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">
-            <span className="flex items-center gap-0.5">
-              <DollarSign size={9} className="text-[#ff6b7b]" />
-              IDLE LOSS
+        <Row
+          label="ECU fuel trims"
+          value={
+            <span className="tabular-nums" style={{ fontSize: 13, color: INK_2 }}>
+              Short {metrics.shortTermFuelTrim > 0 ? '+' : ''}
+              {metrics.shortTermFuelTrim}% &nbsp; Long {metrics.longTermFuelTrim > 0 ? '+' : ''}
+              {metrics.longTermFuelTrim}%
             </span>
-            <span className="text-[#ff6b7b] font-['Chakra_Petch']">
-              ${trip.idleCostDollars.toFixed(2)}
-            </span>
-          </div>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-sm font-bold text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
+          }
+        />
+      </Section>
+
+      <Section title="Idling" aside={`${idleMinutes}m ${idleSeconds}s this trip`}>
+        <Row
+          label="Fuel burned at a standstill"
+          value={
+            <span className="tabular-nums">
               {(trip.idleFuelGallons * 1000).toFixed(0)}
+              <span className="t-label ml-1" style={{ letterSpacing: '0.1em' }}>
+                mL
+              </span>
             </span>
-            <span className="text-[8px] text-[#64748b]">mL wasted</span>
-          </div>
-          <span className="text-[8px] text-[#64748b]">
-            {Math.floor(trip.idleTimeSec / 60)}m {Math.round(trip.idleTimeSec % 60)}s idle
-          </span>
-        </div>
-      </div>
+          }
+          note={`$${trip.idleCostDollars.toFixed(2)}`}
+        />
+      </Section>
 
-      {/* Fuel Trims */}
-      <div className="flex items-center justify-between px-1 text-[10px] font-['Chakra_Petch'] text-[#64748b]">
-        <span className="flex items-center gap-1">
-          <TrendingUp size={11} />
-          ECU Fuel Trims:
-        </span>
-        <div className="flex items-center gap-3">
-          <span>
-            STFT: <strong className={metrics.shortTermFuelTrim >= 0 ? 'text-[#00e676]' : 'text-[#ffaa00]'}>
-              {metrics.shortTermFuelTrim > 0 ? `+${metrics.shortTermFuelTrim}` : metrics.shortTermFuelTrim}%
-            </strong>
-          </span>
-          <span>
-            LTFT: <strong className={metrics.longTermFuelTrim >= 0 ? 'text-[#00e676]' : 'text-[#ffaa00]'}>
-              {metrics.longTermFuelTrim > 0 ? `+${metrics.longTermFuelTrim}` : metrics.longTermFuelTrim}%
-            </strong>
-          </span>
+      <Section
+        title="Fuel in the tank"
+        aside={`${activeBlend.stoichAfr.toFixed(2)}:1 · ${activeBlend.densityGramsPerLiter.toFixed(0)} g/L`}
+      >
+        <p style={{ fontSize: 12.5, color: INK_3, lineHeight: 1.55 }}>
+          Sets the stoichiometric ratio and density behind every fuel figure on this screen.
+        </p>
+        {/* Selected is a hairline underline and white text, not a filled block. */}
+        <div className="grid grid-cols-3 gap-6 pt-1">
+          {(Object.keys(FUEL_BLENDS) as FuelBlendId[]).map((id) => {
+            const isActive = activeBlend.id === id;
+            return (
+              <button
+                key={id}
+                onClick={() => onSelectFuelBlend(id)}
+                className="pb-2 transition-colors"
+                style={{
+                  fontSize: 13,
+                  fontWeight: 400,
+                  letterSpacing: '0.02em',
+                  color: isActive ? INK : INK_3,
+                  borderBottom: `1px solid ${isActive ? 'var(--accent)' : 'var(--hairline)'}`,
+                }}
+                aria-pressed={isActive}
+              >
+                {id}
+              </button>
+            );
+          })}
         </div>
-      </div>
+      </Section>
 
-      {/* Fuel blend - drives the stoichiometric ratio and density every fuel figure
-          on this screen depends on, so it is set here rather than buried in a menu. */}
-      <div className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded-lg p-2.5 flex flex-col gap-2">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[11px] font-bold text-[#94a3b8] font-['Chakra_Petch'] uppercase tracking-wider">
-            Fuel In Tank
-          </span>
-          <span className="text-[11px] text-[#64748b] tabular-nums">
-            {activeBlend.stoichAfr.toFixed(2)}:1 &bull; {activeBlend.densityGramsPerLiter.toFixed(0)} g/L
-          </span>
-        </div>
-        <div className="grid grid-cols-3 gap-1.5">
-          {(Object.keys(FUEL_BLENDS) as FuelBlendId[]).map((id) => (
-            <button
-              key={id}
-              onClick={() => onSelectFuelBlend(id)}
-              className={`py-1.5 rounded-md text-[12px] font-bold font-['Chakra_Petch'] border transition-all ${
-                activeBlend.id === id
-                  ? 'bg-[#ff2a40] text-white border-[#ff4b5c]'
-                  : 'bg-[#0e111a] text-[#94a3b8] border-[rgba(255,255,255,0.08)]'
-              }`}
-            >
-              {id}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Oxygen Sensors - Catalyst Health Trace */}
-      <div className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded-lg p-2.5 flex flex-col gap-2">
-        <div className="flex items-center gap-1.5 text-[11px] font-bold text-[#94a3b8] font-['Chakra_Petch'] uppercase tracking-wider">
-          <Waves size={13} className="text-[#00d2ff]" />
-          Oxygen Sensors (Catalyst Health)
-        </div>
-        <div className="grid grid-cols-2 gap-3">
+      <Section title="Oxygen sensors">
+        <div className="flex flex-col gap-4">
           {[
-            { label: 'O2 S1 · Pre-Cat', volts: metrics.o2Sensor1Voltage, color: '#00d2ff' },
-            { label: 'O2 S2 · Post-Cat', volts: metrics.o2Sensor2Voltage, color: '#ff2a40' },
+            { label: 'Pre-catalyst', volts: metrics.o2Sensor1Voltage },
+            { label: 'Post-catalyst', volts: metrics.o2Sensor2Voltage },
           ].map((sensor) => (
-            <div key={sensor.label} className="flex flex-col gap-1">
-              <div className="flex items-center justify-between text-[11px] text-[#94a3b8]">
-                <span>{sensor.label}</span>
-                <span className="font-bold text-[#f8fafc] font-['Chakra_Petch'] tabular-nums text-[13px]">
-                  {sensor.volts.toFixed(2)}V
+            <div key={sensor.label} className="flex flex-col gap-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="t-key">{sensor.label}</span>
+                <span className="t-value tabular-nums">
+                  {sensor.volts.toFixed(2)}
+                  <span className="t-label ml-1" style={{ letterSpacing: '0.1em' }}>
+                    V
+                  </span>
+                  <span className="ml-2.5" style={{ fontSize: 11.5, color: INK_3, letterSpacing: 0 }}>
+                    {sensor.volts >= 0.55 ? 'Rich' : sensor.volts <= 0.35 ? 'Lean' : 'Switching'}
+                  </span>
                 </span>
               </div>
-              {/* Scaled 0 - 1.0V: a narrowband sensor only swings ~0.1-0.9V of the PID's
-                  1.275V full scale, so scaling to full scale would flatten the trace. */}
-              <div className="relative w-full bg-[#161a26] h-2 rounded-full overflow-hidden">
-                <div
-                  className="h-full transition-all duration-150"
+              {/* Scaled 0-1.0V: a narrowband sensor only swings ~0.1-0.9V of the PID's
+                  1.275V full scale, so scaling to full scale would flatten the trace.
+                  The hairline is the 0.45V stoichiometric switch point. */}
+              <div className="meter relative">
+                <i
                   style={{
-                    width: `${Math.max(0, Math.min(100, (sensor.volts / 1.0) * 100))}%`,
-                    backgroundColor: sensor.color,
+                    width: `${Math.max(0, Math.min(100, sensor.volts * 100))}%`,
+                    transition: 'width 150ms linear',
                   }}
                 />
-                {/* 0.45V stoichiometric switch point */}
-                <div className="absolute inset-y-0 left-[45%] w-px bg-[rgba(255,255,255,0.45)]" />
+                <span
+                  className="absolute inset-y-0 left-[45%] w-px"
+                  style={{ background: 'rgba(255,255,255,0.45)' }}
+                />
               </div>
-              <span className="text-[10px] text-[#64748b] font-['Chakra_Petch']">
-                {sensor.volts >= 0.55 ? 'RICH' : sensor.volts <= 0.35 ? 'LEAN' : 'SWITCHING'}
-              </span>
             </div>
           ))}
         </div>
-        <p className="text-[11px] text-[#94a3b8] leading-relaxed">
-          Healthy: pre-cat swings actively across the 0.45V line, post-cat stays comparatively
-          steady. A post-cat trace that starts mirroring the pre-cat swing is the live signature
-          behind code P0420 (Catalyst System Efficiency).
+        <p style={{ fontSize: 12.5, color: INK_3, lineHeight: 1.6 }}>
+          A healthy pre-catalyst sensor swings actively across the 0.45 V line while the
+          post-catalyst one stays comparatively steady. A post-catalyst trace that starts
+          mirroring the pre-catalyst swing is the live signature behind code P0420.
         </p>
-      </div>
+      </Section>
     </div>
   );
 };

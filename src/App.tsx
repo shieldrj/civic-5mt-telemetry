@@ -1,23 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  Bluetooth,
-  Maximize2,
-  Minimize2,
-  Thermometer,
-  Wind,
-  Activity,
-  Cpu,
-  RefreshCw,
-  Car,
-  Gauge,
-  ScanLine,
-  Droplet,
-  Fuel,
-  Navigation,
-  Layers,
-  BatteryCharging,
-  Sun
-} from 'lucide-react';
+import { Gauge, Fuel, Navigation, Droplet, ScanLine, Cpu, Maximize2, Minimize2 } from 'lucide-react';
 import { OBDLiveMetrics, TripAnalytics, OilLifeProfile, ConnectionStatus } from './types/obd';
 import { telemetryManager } from './services/telemetryManager';
 import { ShiftLightBar } from './components/ShiftLightBar';
@@ -28,35 +10,67 @@ import { TripSummaryBar } from './components/TripSummaryBar';
 import { SimulatorControls } from './components/SimulatorControls';
 import { BluetoothModal } from './components/BluetoothModal';
 import { DtcScannerCard } from './components/DtcScannerCard';
+import { PidDiscoveryCard } from './components/PidDiscoveryCard';
 
 type TabId = 'cockpit' | 'fuel_physics' | 'trip' | 'oil_wear' | 'dtc' | 'bench';
 
 const TABS: { id: TabId; label: string; icon: typeof Gauge }[] = [
-  { id: 'cockpit', label: 'Cockpit', icon: Gauge },
+  { id: 'cockpit', label: 'Drive', icon: Gauge },
   { id: 'fuel_physics', label: 'Fuel', icon: Fuel },
   { id: 'trip', label: 'Trip', icon: Navigation },
-  { id: 'oil_wear', label: 'Oil Life', icon: Droplet },
+  { id: 'oil_wear', label: 'Oil', icon: Droplet },
   { id: 'dtc', label: 'Codes', icon: ScanLine },
   { id: 'bench', label: 'Sim', icon: Cpu },
 ];
 
-type VitalTone = 'red' | 'amber' | 'green' | 'cyan' | 'neutral';
+const INK = '#eef0f2';
+const INK_2 = '#9aa1a9';
+const INK_3 = '#6b727a';
+const WARN = '#c8952e';
+const ALERT = '#d8453b';
 
-const VITAL_TONES: Record<VitalTone, string> = {
-  red: 'bg-[#ff2a40]/10 text-[#ff6b7b] border-[#ff2a40]/30',
-  amber: 'bg-[#ffaa00]/10 text-[#ffc966] border-[#ffaa00]/30',
-  green: 'bg-[#0e111a] text-[#f8fafc] border-[rgba(255,255,255,0.08)]',
-  cyan: 'bg-[#00d2ff]/10 text-[#70e4ff] border-[#00d2ff]/30',
-  neutral: 'bg-[#0e111a] text-[#f8fafc] border-[rgba(255,255,255,0.08)]',
-};
+/** The instant-MPG dial's scale. A 2013 Civic cruises in the low 40s and rarely holds
+ *  above 55, so 60 puts normal driving across the readable middle of the sweep rather
+ *  than bunched at one end. */
+const MPG_SCALE_MAX = 60;
 
-const VITAL_ICON_TONES: Record<VitalTone, string> = {
-  red: 'text-[#ff2a40]',
-  amber: 'text-[#ffaa00]',
-  green: 'text-[#00e676]',
-  cyan: 'text-[#00d2ff]',
-  neutral: 'text-[#64748b]',
-};
+/**
+ * A row of the cockpit's value list. Replaces the bordered, filled tiles - a hairline and
+ * a baseline are enough to group these, and they were carrying five different accent
+ * colours between them for values that were almost always normal.
+ */
+function StatRow({
+  label,
+  value,
+  unit,
+  note,
+  tone = INK,
+}: {
+  label: string;
+  value: string;
+  unit?: string;
+  note?: string;
+  tone?: string;
+}) {
+  return (
+    <div className="stat-row">
+      <span className="t-key shrink-0">{label}</span>
+      <span className="t-value text-right" style={{ color: tone }}>
+        {value}
+        {unit && (
+          <span className="t-label ml-1" style={{ letterSpacing: '0.1em', color: INK_3 }}>
+            {unit}
+          </span>
+        )}
+        {note && (
+          <span className="ml-2.5" style={{ fontSize: 11.5, color: INK_3, letterSpacing: 0 }}>
+            {note}
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
 
 export function App() {
   const [metrics, setMetrics] = useState<OBDLiveMetrics | null>(null);
@@ -73,14 +87,11 @@ export function App() {
     height: typeof window !== 'undefined' ? window.innerHeight : 900,
   }));
   const touchStart = useRef<{ x: number; y: number } | null>(null);
-  const cockpitObserver = useRef<ResizeObserver | null>(null);
-  const [cockpitBox, setCockpitBox] = useState({ width: 0, height: 0 });
+  const heroObserver = useRef<ResizeObserver | null>(null);
+  const [heroBox, setHeroBox] = useState({ width: 0, height: 0 });
 
-  // The cockpit is sized from the live viewport height so it always fits without
-  // scrolling - on any phone, in either orientation, with or without browser chrome.
   useEffect(() => {
-    const onResize = () =>
-      setViewport({ width: window.innerWidth, height: window.innerHeight });
+    const onResize = () => setViewport({ width: window.innerWidth, height: window.innerHeight });
     window.addEventListener('resize', onResize);
     window.addEventListener('orientationchange', onResize);
     return () => {
@@ -89,32 +100,31 @@ export function App() {
     };
   }, []);
 
-  // Measure the space the cockpit actually gets rather than estimating the chrome around
-  // it. The container is flex-1 with min-h-0, so its height is fixed by its siblings and
-  // never by the gauges inside it - sizing the gauges from it cannot feed back on itself.
+  // Measure the space the dial actually gets rather than estimating the chrome around it.
+  // The hero is flex-1 with min-h-0 between two fixed-height siblings, so its height is
+  // set by them and never by the gauge inside it - sizing the gauge from it cannot feed
+  // back on itself.
   //
-  // This has to be a callback ref, not an effect. Telemetry starts as null, so the first
+  // This has to be a callback ref, not an effect. Telemetry starts null, so the first
   // commit is always the loading screen and any effect firing then sees a null ref. An
-  // effect keyed on the tab would not re-run when the telemetry arrives, so the observer
-  // never attached and the gauges were stuck on the fallback estimate until you happened
-  // to switch tabs. A callback ref runs when the node itself mounts, which is the event
-  // that actually matters here.
-  const cockpitRef = useCallback((node: HTMLElement | null) => {
-    cockpitObserver.current?.disconnect();
+  // effect keyed on the tab would not re-run when telemetry arrives, so the observer never
+  // attached and the dial was stuck on the fallback estimate until you switched tabs.
+  const heroRef = useCallback((node: HTMLElement | null) => {
+    heroObserver.current?.disconnect();
     if (!node) {
-      cockpitObserver.current = null;
+      heroObserver.current = null;
       return;
     }
     const observer = new ResizeObserver(([entry]) => {
       const { width, height } = entry.contentRect;
-      setCockpitBox({ width, height });
+      setHeroBox({ width, height });
     });
     observer.observe(node);
-    cockpitObserver.current = observer;
+    heroObserver.current = observer;
   }, []);
 
-  // Swipe left/right anywhere to move between tabs. Guarded on the horizontal
-  // delta dominating, so it never hijacks a vertical scroll on the deeper tabs.
+  // Swipe left/right anywhere to move between tabs. Guarded on the horizontal delta
+  // dominating, so it never hijacks a vertical scroll on the deeper tabs.
   const goToAdjacentTab = (direction: 1 | -1) => {
     const index = TABS.findIndex((t) => t.id === activeTab);
     const next = index + direction;
@@ -165,22 +175,17 @@ export function App() {
 
   if (!metrics || !trip || !oil) {
     return (
-      <div className="flex h-screen w-screen items-center justify-center bg-[#08090d] text-[#f8fafc]">
-        <div className="flex items-center gap-3">
-          <RefreshCw className="animate-spin text-[#ff2a40]" size={24} />
-          <span className="font-['Chakra_Petch'] text-sm font-bold tracking-wider">
-            Initializing Civic 5MT Telemetry...
-          </span>
-        </div>
+      <div
+        className="flex h-screen w-screen items-center justify-center"
+        style={{ background: 'var(--ground)' }}
+      >
+        <span className="t-label">Connecting</span>
       </div>
     );
   }
 
-  // Engine temperature status
   const isColdEngine = metrics.coolantTempF < 160;
   const isOverheating = metrics.coolantTempF > 220;
-
-  // Charging system status (control module / battery voltage)
   const isBatteryLow = metrics.batteryVoltage < 12.0;
   const isBatteryHigh = metrics.batteryVoltage > 15.0;
 
@@ -188,272 +193,223 @@ export function App() {
   // figure stays visibly provisional until there is a meaningful sample behind it.
   const hasLifetimeData = metrics.lifetimeMiles >= 0.1 && metrics.lifetimeMpg > 0;
 
-  const vitals: { icon: typeof Thermometer; label: string; value: string; tone: VitalTone }[] = [
-    {
-      icon: Thermometer,
-      label: 'COOLANT',
-      value: `${metrics.coolantTempF}°`,
-      tone: isColdEngine ? 'cyan' : isOverheating ? 'red' : 'green',
-    },
-    {
-      icon: BatteryCharging,
-      label: 'BATTERY',
-      value: `${metrics.batteryVoltage.toFixed(1)}V`,
-      tone: isBatteryLow ? 'red' : isBatteryHigh ? 'amber' : 'green',
-    },
-    { icon: Wind, label: 'INTAKE', value: `${metrics.intakeAirTempF}°`, tone: 'neutral' },
-    { icon: Sun, label: 'OUTSIDE', value: `${metrics.ambientAirTempF}°`, tone: 'neutral' },
-    {
-      icon: Activity,
-      label: 'LOAD',
-      value: `${Math.round(metrics.engineLoadPercent)}%`,
-      tone: 'amber',
-    },
-  ];
-
-  // A phone in landscape is too short to carry the secondary strips and still leave room
-  // for a readable dial, so they step aside there - the values stay on the other tabs.
+  // A phone in landscape is too short to carry the value list and still leave room for a
+  // readable dial, so it steps aside there - every figure stays on the other tabs.
   const isShortViewport = viewport.height < 500;
 
-  // Space inside the cockpit, once the fuel bar, the gap and the card padding are taken.
-  // Falls back to a viewport estimate for the first paint, before the observer reports.
-  const measuredHeight = cockpitBox.height || Math.max(160, viewport.height - 400);
-  const measuredWidth = cockpitBox.width || Math.min(viewport.width, 1024) - 20;
-  const contentHeight = Math.max(120, measuredHeight - (isShortViewport ? 24 : 88));
-  const contentWidth = Math.max(200, measuredWidth - 24);
+  const measuredHeight = heroBox.height || Math.max(160, viewport.height - 420);
+  const measuredWidth = heroBox.width || Math.min(viewport.width, 1024) - 24;
+  // Fill the width it is given. Capped at 380 rather than 340 because on a tall phone the
+  // hero box is far taller than it is wide, so width is what binds - and a dial floating
+  // in a column of empty space reads as unfinished rather than as restraint.
+  const gaugeSize = Math.round(Math.max(140, Math.min(measuredWidth, measuredHeight, 380)));
 
-  // At md and up the three dials sit in one row, so the hero only has to fit the height
-  // once; stacked below that, the hero and a twin have to share it.
-  const isRowLayout = viewport.width >= 768;
-  const heroGaugeSize = Math.round(
-    isRowLayout
-      ? Math.min(contentWidth / 3 - 16, 344, contentHeight)
-      : Math.min(contentWidth, 344, contentHeight * 0.62)
-  );
-  const twinGaugeSize = Math.round(
-    isRowLayout
-      ? heroGaugeSize * 0.74
-      : Math.min((contentWidth - 12) / 2, 200, contentHeight * 0.33)
-  );
+  // The dial shows one of three things, and only one of them is a number. Standing still
+  // instant MPG is zero because the car is not moving, and on a closed throttle it is the
+  // 99.9 cap because the injectors are off; drawing either as a figure is what made the
+  // old readout impossible to trust. See FuelModelEngine.updateDisplayMpg.
+  const mpgState = metrics.mpgDisplayState;
+  const mpgOverride =
+    mpgState === 'idle' ? '—' : mpgState === 'coasting' ? '—' : undefined;
+  const mpgArcValue =
+    mpgState === 'idle' ? 0 : mpgState === 'coasting' ? MPG_SCALE_MAX : metrics.displayMpg;
+  const mpgNote =
+    mpgState === 'idle'
+      ? 'Stopped'
+      : mpgState === 'coasting'
+      ? 'Coasting — no fuel'
+      : `${metrics.rolling30sMpg.toFixed(1)} over 30s`;
+
+  const statusLabel =
+    status === 'connected'
+      ? 'Live'
+      : status === 'simulating'
+      ? 'Simulated'
+      : status === 'connecting'
+      ? 'Connecting'
+      : status === 'error'
+      ? 'Error'
+      : 'Not connected';
+  const statusTone = status === 'error' ? ALERT : status === 'connected' ? INK : INK_3;
 
   return (
     <div
-      className="h-screen w-full bg-[#08090d] text-[#f8fafc] flex flex-col px-2.5 sm:px-4 max-w-5xl mx-auto gap-2 select-none overflow-hidden"
+      className="h-screen w-full flex flex-col px-4 sm:px-6 max-w-3xl mx-auto gap-4 select-none overflow-hidden"
+      style={{
+        background: 'var(--ground)',
+        color: INK,
+        // Clears the punch-hole camera / status bar up top and the gesture-nav pill below,
+        // on top of the app's own baseline padding.
+        paddingTop: 'calc(0.875rem + env(safe-area-inset-top, 0px))',
+        paddingBottom: 'calc(0.5rem + env(safe-area-inset-bottom, 0px))',
+      }}
       onTouchStart={handleTouchStart}
       onTouchEnd={handleTouchEnd}
-      style={{
-        // Clears the punch-hole camera / status bar up top and the gesture-nav pill down
-        // below on a phone this large, on top of the app's own baseline padding.
-        paddingTop: 'calc(0.625rem + env(safe-area-inset-top, 0px))',
-        paddingBottom: 'calc(0.625rem + env(safe-area-inset-bottom, 0px))',
-      }}
     >
-      {/* Sleek Minimal Header Bar */}
-      <header className="flex items-center justify-between bg-[#0e111a] border border-[rgba(255,255,255,0.08)] rounded-xl px-3 py-2.5 shadow-sm shrink-0">
-        {/* Left: Vehicle Badge */}
-        <div className="flex items-center gap-2.5">
-          <div className="w-9 h-9 rounded-lg bg-[rgba(255,42,64,0.12)] border border-[rgba(255,42,64,0.3)] flex items-center justify-center text-[#ff2a40] shrink-0">
-            <Car size={18} />
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <h1 className="text-sm font-bold font-['Chakra_Petch'] tracking-wide text-[#f8fafc]">
-                2013 CIVIC LX <span className="text-[#ff2a40]">5MT</span>
-              </h1>
-              <span className="badge-pill badge-red text-[10px] py-0 px-1.5">R18Z1</span>
-            </div>
-            <p className="text-[11px] text-[#64748b]">1.8L i-VTEC • OBDLink MX+</p>
-          </div>
+      {/* Header. The old one was a bordered bar carrying a red icon tile, a model badge, an
+          engine-code pill and a filled status capsule - five boxes for information that
+          never changes. It is now two lines of text and a status word. */}
+      <header className="flex items-start justify-between gap-3 shrink-0">
+        <div className="min-w-0">
+          <h1 style={{ fontSize: 17, fontWeight: 500, letterSpacing: '-0.015em', lineHeight: 1.1 }}>
+            Civic
+          </h1>
+          <p style={{ fontSize: 11, color: INK_3, marginTop: 3, letterSpacing: '0.02em' }}>
+            2013 LX &middot; 5-speed manual
+          </p>
         </div>
 
-        {/* Right: OBD Status & Fullscreen */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-3 shrink-0">
           <button
             onClick={() => setIsBluetoothModalOpen(true)}
-            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg border text-[13px] font-bold font-['Chakra_Petch'] transition-all ${
-              status === 'connected'
-                ? 'bg-[#00e676]/15 text-[#5aff9f] border-[#00e676]/40'
-                : status === 'simulating'
-                ? 'bg-[#00d2ff]/15 text-[#70e4ff] border-[#00d2ff]/40'
-                : 'bg-[#161a26] text-[#94a3b8] border-[rgba(255,255,255,0.08)]'
-            }`}
+            className="flex items-center gap-2 transition-colors"
+            style={{ fontSize: 11, color: statusTone, letterSpacing: '0.02em' }}
           >
-            {status === 'connected' ? (
-              <>
-                <Bluetooth size={15} className="text-[#00e676]" />
-                LIVE
-              </>
-            ) : status === 'simulating' ? (
-              <>
-                <Cpu size={15} className="text-[#00d2ff]" />
-                SIM
-              </>
-            ) : (
-              <>
-                <Bluetooth size={15} />
-                CONNECT
-              </>
-            )}
+            <span
+              className="block rounded-full"
+              style={{ width: 5, height: 5, background: statusTone }}
+            />
+            {statusLabel}
           </button>
 
           <button
             onClick={toggleFullscreen}
-            className="p-2 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#94a3b8] hover:text-[#f8fafc] border border-[rgba(255,255,255,0.08)] transition-colors"
-            title="Toggle Fullscreen"
+            style={{ color: INK_3 }}
+            className="transition-colors"
+            title="Toggle fullscreen"
+            aria-label="Toggle fullscreen"
           >
-            {isFullscreen ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
           </button>
         </div>
       </header>
 
-      {/* Live Engine Vitals - every value stays visible at phone width.
-          These used to be pills inside the header behind sm:/md: breakpoints, which
-          never fire on a phone in portrait, so most of them simply never rendered. */}
-      <div className={`grid grid-cols-5 gap-1.5 shrink-0 ${isShortViewport ? 'hidden' : ''}`}>
-        {vitals.map((vital) => (
-          <div
-            key={vital.label}
-            className={`flex flex-col items-center justify-center gap-0.5 py-2 rounded-lg border ${VITAL_TONES[vital.tone]}`}
-          >
-            <vital.icon size={14} className={VITAL_ICON_TONES[vital.tone]} />
-            <span className="text-[15px] font-bold font-['Chakra_Petch'] tabular-nums leading-none">
-              {vital.value}
-            </span>
-            <span className="text-[10px] font-semibold text-[#64748b] tracking-wide leading-none">
-              {vital.label}
-            </span>
-          </div>
-        ))}
-      </div>
-
-      {/* Formula 1 Shift Tachometer Ribbon with Active Gear */}
-      <div className="shrink-0">
-        <ShiftLightBar
-          stage={metrics.shiftLightStage}
-          rpm={metrics.rpm}
-          shiftMode={shiftMode}
-          shouldShiftUp={metrics.shouldShiftUp}
-          onToggleMode={toggleShiftMode}
-          currentGear={metrics.currentGear}
-        />
-      </div>
-
-      {/* TAB 1: DRIVING COCKPIT - the gauges are sized to fit the screen exactly, so in
-          normal use this never scrolls. It stays scrollable rather than clipped for the
-          extremes (phone landscape) where the chrome alone leaves no room for a dial. */}
+      {/* TAB 1: DRIVING. The dial is sized to the space it is given, so in normal use this
+          never scrolls. It stays scrollable rather than clipped for the extremes (phone
+          landscape) where the chrome alone leaves no room for a dial. */}
       {activeTab === 'cockpit' && (
-        <main ref={cockpitRef} className="flex-1 min-h-0 flex flex-col gap-2 overflow-y-auto">
-          <section className="bg-[#0e111a] border border-[rgba(255,255,255,0.08)] rounded-2xl p-3 sm:p-5 shadow-sm flex flex-col md:grid md:grid-cols-3 items-center justify-around gap-3 flex-1 min-h-0">
-            {/* 1. Hero Coolant Temp Dial (Large & High-Contrast) */}
-            <div className="order-1 md:order-2 flex justify-center">
-              <RadialGauge
-                value={metrics.coolantTempF}
-                min={100}
-                max={260}
-                title="COOLANT TEMP"
-                unit="°F"
-                subValue={`${metrics.coolantTempC}°C • ${isColdEngine ? 'COLD' : isOverheating ? 'OVERHEAT' : 'OPTIMAL'}`}
-                subLabel="Status"
-                accentColor={isColdEngine ? '#00d2ff' : isOverheating ? '#ff2a40' : '#00e676'}
-                redlineStart={225}
-                ticks={[100, 140, 180, 220, 260]}
-                size={heroGaugeSize}
-                isHero={true}
-              />
-            </div>
-
-            {/* 2. Twin Large Driving Dials: Real-Time Instant MPG & Oil Health */}
-            <div className="order-2 md:contents w-full grid grid-cols-2 gap-3 sm:gap-6 justify-items-center items-center">
-              {/* Lifetime MPG - real vehicle miles only, so it reads 0 until an adapter
-                  has actually been connected. The sub-label carries the mileage behind
-                  it, because an average over 4 miles and one over 4,000 are not the
-                  same claim. */}
-              <div className="flex justify-center">
-                <RadialGauge
-                  value={hasLifetimeData ? metrics.lifetimeMpg : 0}
-                  min={0}
-                  max={50}
-                  title="LIFETIME MPG"
-                  unit="MPG"
-                  subValue={
-                    hasLifetimeData
-                      ? `${Math.round(metrics.lifetimeMiles).toLocaleString()} mi`
-                      : 'Needs OBD'
-                  }
-                  subLabel={hasLifetimeData ? 'Tracked' : 'Status'}
-                  accentColor={
-                    !hasLifetimeData
-                      ? '#475569'
-                      : metrics.lifetimeMpg >= 32
-                      ? '#00e676'
-                      : metrics.lifetimeMpg >= 26
-                      ? '#f8fafc'
-                      : '#ffaa00'
-                  }
-                  ticks={[0, 10, 20, 30, 40, 50]}
-                  size={twinGaugeSize}
-                />
-              </div>
-
-              {/* Oil Health Remaining */}
-              <div className="flex justify-center">
-                <RadialGauge
-                  value={oil.oilLifePercent}
-                  min={0}
-                  max={100}
-                  title="OIL HEALTH"
-                  unit="%"
-                  subValue={`~${oil.estimatedMilesRemaining.toLocaleString()} mi`}
-                  subLabel="Left"
-                  accentColor={oil.oilLifePercent < 15 ? '#ff2a40' : oil.oilLifePercent < 40 ? '#ffaa00' : '#00e676'}
-                  ticks={[0, 25, 50, 75, 100]}
-                  size={twinGaugeSize}
-                />
-              </div>
-            </div>
-          </section>
-
-          {/* Fuel Level & Range-to-Empty */}
-          <section
-            className={`telemetry-card-subtle items-center gap-3 shrink-0 ${
-              isShortViewport ? 'hidden' : 'flex'
-            }`}
-          >
-            <Fuel
-              size={18}
-              className={
-                metrics.fuelLevelPercent < 15
-                  ? 'text-[#ff2a40]'
-                  : metrics.fuelLevelPercent < 30
-                  ? 'text-[#ffaa00]'
-                  : 'text-[#94a3b8]'
-              }
+        <main className="flex-1 min-h-0 flex flex-col gap-3 overflow-y-auto">
+          <div className="shrink-0">
+            <ShiftLightBar
+              stage={metrics.shiftLightStage}
+              rpm={metrics.rpm}
+              shiftMode={shiftMode}
+              shouldShiftUp={metrics.shouldShiftUp}
+              onToggleMode={toggleShiftMode}
+              currentGear={metrics.currentGear}
             />
-            <div className="flex-1">
-              <div className="flex items-center justify-between text-[12px] font-bold font-['Chakra_Petch'] text-[#64748b] tracking-wider">
-                <span>FUEL</span>
-                <span className="text-[#f8fafc]">
-                  {Math.round(metrics.fuelLevelPercent)}% &bull; ~{metrics.fuelRangeMiles} mi to empty
+          </div>
+
+          {/* Hero: what you are getting right now, with what you have averaged since the
+              app started tracking directly underneath it. The two figures answer the same
+              question over two timescales, so they belong together and nothing should sit
+              between them. */}
+          <div
+            ref={heroRef}
+            className="flex-1 min-h-0 flex flex-col items-center justify-center gap-1"
+          >
+            <RadialGauge
+              value={mpgArcValue}
+              overrideValue={mpgOverride}
+              min={0}
+              max={MPG_SCALE_MAX}
+              title="Instant"
+              unit="mpg"
+              subValue={mpgNote}
+              ticks={[0, 30, 60]}
+              size={gaugeSize}
+              isHero
+            />
+
+            {/* Inside the hero group, not below it. The two figures answer the same
+                question over two timescales; separated by the flex gap they read as two
+                unrelated things with an accident of adjacency. */}
+            <p
+              className="text-center tabular-nums"
+              style={{ fontSize: 12.5, color: INK_2, letterSpacing: '0.01em' }}
+            >
+              {hasLifetimeData ? (
+                <>
+                  Lifetime{' '}
+                  <span style={{ color: INK, fontSize: 14 }}>{metrics.lifetimeMpg.toFixed(1)}</span>{' '}
+                  mpg
+                  <span style={{ color: INK_3 }}>
+                    {' '}
+                    &middot; {Math.round(metrics.lifetimeMiles).toLocaleString()} mi
+                  </span>
+                </>
+              ) : (
+                <span style={{ color: INK_3 }}>
+                  Lifetime average starts once an adapter is connected
+                </span>
+              )}
+            </p>
+          </div>
+
+          {/* The value list. Coolant leads it: it was the hero dial, which gave the largest
+              readout on the screen to a number you look at twice a year. It matters when it
+              is wrong, and a row that turns amber says that as well as a dial did. */}
+          <div className={`shrink-0 ${isShortViewport ? 'hidden' : ''}`}>
+            <StatRow
+              label="Coolant"
+              value={String(metrics.coolantTempF)}
+              unit="°F"
+              note={isColdEngine ? 'Warming up' : isOverheating ? 'Too hot' : `${metrics.coolantTempC}°C`}
+              tone={isOverheating ? ALERT : isColdEngine ? WARN : INK}
+            />
+            <StatRow
+              label="Oil life"
+              value={String(Math.round(oil.oilLifePercent))}
+              unit="%"
+              note={`≈ ${oil.estimatedMilesRemaining.toLocaleString()} mi left`}
+              tone={oil.oilLifePercent < 15 ? ALERT : oil.oilLifePercent < 40 ? WARN : INK}
+            />
+            <StatRow
+              label="Battery"
+              value={metrics.batteryVoltage.toFixed(1)}
+              unit="V"
+              tone={isBatteryLow || isBatteryHigh ? WARN : INK}
+            />
+            <StatRow
+              label="Engine load"
+              value={String(Math.round(metrics.engineLoadPercent))}
+              unit="%"
+            />
+            <StatRow label="Outside" value={String(metrics.ambientAirTempF)} unit="°F" />
+
+            {/* Fuel keeps a bar because it is the one value on this screen you read as a
+                proportion rather than a figure - how much is left, not how many percent. */}
+            <div className="stat-row flex-col items-stretch gap-2.5">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="t-key">Fuel</span>
+                <span className="t-value tabular-nums">
+                  {Math.round(metrics.fuelLevelPercent)}
+                  <span className="t-label ml-1" style={{ letterSpacing: '0.1em', color: INK_3 }}>
+                    %
+                  </span>
+                  <span className="ml-2.5" style={{ fontSize: 11.5, color: INK_3, letterSpacing: 0 }}>
+                    {metrics.fuelRangeMiles} mi to empty
+                  </span>
                 </span>
               </div>
-              <div className="w-full bg-[#161a26] h-2 rounded-full mt-1.5 overflow-hidden">
-                <div
-                  className={`h-full transition-all duration-500 ${
-                    metrics.fuelLevelPercent < 15
-                      ? 'bg-[#ff2a40]'
-                      : metrics.fuelLevelPercent < 30
-                      ? 'bg-[#ffaa00]'
-                      : 'bg-[#00e676]'
-                  }`}
-                  style={{ width: `${Math.max(0, Math.min(100, metrics.fuelLevelPercent))}%` }}
+              <div className="meter">
+                <i
+                  style={{
+                    width: `${Math.max(0, Math.min(100, metrics.fuelLevelPercent))}%`,
+                    backgroundColor:
+                      metrics.fuelLevelPercent < 15
+                        ? ALERT
+                        : metrics.fuelLevelPercent < 30
+                        ? WARN
+                        : INK_2,
+                  }}
                 />
               </div>
             </div>
-          </section>
+          </div>
         </main>
       )}
 
-      {/* TAB 2: DEDICATED PHYSICS MPG & FUEL FLOW */}
       {activeTab === 'fuel_physics' && (
         <main className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pb-1">
           <MpgTelemetryCard
@@ -468,7 +424,6 @@ export function App() {
         </main>
       )}
 
-      {/* TAB 3: DEDICATED TRIP TELEMETRY & ECO STATS */}
       {activeTab === 'trip' && (
         <main className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pb-1">
           <TripSummaryBar
@@ -479,7 +434,6 @@ export function App() {
         </main>
       )}
 
-      {/* TAB 4: DEDICATED OIL LIFE & WEAR DIAGNOSTICS */}
       {activeTab === 'oil_wear' && (
         <main className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pb-1">
           <OilLifeCard
@@ -488,45 +442,56 @@ export function App() {
             onResetOil={() => telemetryManager.resetOilLife()}
           />
 
-          {/* Deep Explanation */}
-          <section className="telemetry-card flex flex-col gap-2.5 text-xs text-[#94a3b8]">
-            <h3 className="text-xs font-bold font-['Chakra_Petch'] text-[#f8fafc] flex items-center gap-1.5">
-              <Layers size={14} className="text-[#ff2a40]" />
-              How the Deep Oil Life Algorithm Works (2013 Civic LX R18Z1)
+          {/* Card-less, like everything above it. A single card appearing at the bottom of
+              a hairline-separated page reads as a component someone forgot to convert. */}
+          <section
+            className="flex flex-col gap-3 pt-4"
+            style={{ borderTop: '1px solid var(--hairline)' }}
+          >
+            <h3 style={{ fontSize: 14, fontWeight: 500, letterSpacing: '-0.01em' }}>
+              How oil life is calculated
             </h3>
-            <p className="text-[11px] leading-relaxed">
-              Unlike generic dash odometers that only count distance, this custom model calculates oil additive depletion using real-time telemetry from your <strong>2013 Civic 5MT</strong>:
+            <p style={{ fontSize: 13, color: INK_2, lineHeight: 1.6 }}>
+              A dash odometer counts distance. This model reads four things off the engine that
+              wear oil at very different rates, so a month of short cold trips costs more life
+              than the same miles on a motorway.
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
-              <div className="telemetry-card-subtle flex flex-col gap-0.5">
-                <strong className="text-[#00e676] font-['Chakra_Petch']">1. Mechanical Revolutions (Cycles)</strong>
-                <p className="text-[#64748b]">Crankshaft revolution counter. Stop-and-go 1st/2nd gear city driving shears oil 3x faster than 5th gear cruising.</p>
-              </div>
-              <div className="telemetry-card-subtle flex flex-col gap-0.5">
-                <strong className="text-[#00d2ff] font-['Chakra_Petch']">2. Cold-Start & Condensation</strong>
-                <p className="text-[#64748b]">Starts below 160°F accumulate moisture and fuel blowby, increasing additive depletion until warmed up.</p>
-              </div>
-              <div className="telemetry-card-subtle flex flex-col gap-0.5">
-                <strong className="text-[#ffaa00] font-['Chakra_Petch']">3. Short Trip Dilution</strong>
-                <p className="text-[#64748b]">Trips ending under 15 minutes before reaching 185°F fail to vaporize unburned gasoline out of the crankcase.</p>
-              </div>
-              <div className="telemetry-card-subtle flex flex-col gap-0.5">
-                <strong className="text-[#ff2a40] font-['Chakra_Petch']">4. High-RPM Thermal Stress</strong>
-                <p className="text-[#64748b]">VTEC high-RPM pulls (&gt;4,500 RPM under load) calculate viscosity breakdown from elevated oil film heat.</p>
-              </div>
+            <div className="flex flex-col gap-4 pt-1">
+              {[
+                {
+                  h: 'Crankshaft revolutions',
+                  p: 'Stop-and-go first and second gear shears oil roughly three times faster than fifth-gear cruising over the same distance.',
+                },
+                {
+                  h: 'Cold starts',
+                  p: 'Starting below 160°F draws moisture and unburned fuel into the crankcase until the engine warms through.',
+                },
+                {
+                  h: 'Short trips',
+                  p: 'A trip that ends under fifteen minutes never reaches 185°F, so the fuel that got in never boils back out.',
+                },
+                {
+                  h: 'Thermal stress',
+                  p: 'Sustained pulls above 4,500 rpm under load thin the oil film and break down viscosity.',
+                },
+              ].map((item) => (
+                <div key={item.h} className="flex flex-col gap-1">
+                  <strong style={{ fontSize: 12.5, fontWeight: 500, color: INK }}>{item.h}</strong>
+                  <p style={{ fontSize: 12.5, color: INK_3, lineHeight: 1.6 }}>{item.p}</p>
+                </div>
+              ))}
             </div>
           </section>
         </main>
       )}
 
-      {/* TAB 5: DIAGNOSTIC DTC SCANNER */}
       {activeTab === 'dtc' && (
         <main className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pb-1">
           <DtcScannerCard />
+          <PidDiscoveryCard />
         </main>
       )}
 
-      {/* TAB 6: ECU BENCH / SIMULATOR */}
       {activeTab === 'bench' && (
         <main className="flex-1 min-h-0 overflow-y-auto flex flex-col gap-3 pb-1">
           <SimulatorControls
@@ -550,26 +515,32 @@ export function App() {
         </main>
       )}
 
-      {/* Bottom Tab Bar - all six destinations in thumb reach, one tap each, and
-          swipe left/right anywhere moves between them in this same order. */}
-      <nav className="grid grid-cols-6 gap-1 shrink-0">
-        {TABS.map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            className={`flex flex-col items-center justify-center gap-1 py-2 rounded-lg font-['Chakra_Petch'] font-bold transition-all border ${
-              activeTab === tab.id
-                ? 'bg-[#ff2a40] text-white border-[#ff4b5c]'
-                : 'bg-[#0e111a] text-[#94a3b8] border-[rgba(255,255,255,0.08)]'
-            }`}
-          >
-            <tab.icon size={17} />
-            <span className="text-[10px] leading-none">{tab.label}</span>
-          </button>
-        ))}
+      {/* Tab bar. Every button used to carry a border and the active one a solid red fill,
+          which put the heaviest block of colour on the screen at the bottom edge where
+          nothing is being read. Active is now white text and a coloured icon. */}
+      <nav
+        className="grid grid-cols-6 shrink-0 pt-3"
+        style={{ borderTop: '1px solid var(--hairline)' }}
+      >
+        {TABS.map((tab) => {
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className="flex flex-col items-center justify-center gap-1.5 py-1 transition-colors"
+              style={{ color: isActive ? INK : '#464c53' }}
+              aria-current={isActive ? 'page' : undefined}
+            >
+              <tab.icon size={17} strokeWidth={1.5} color={isActive ? ALERT : '#464c53'} />
+              <span style={{ fontSize: 9.5, fontWeight: 500, letterSpacing: '0.05em' }}>
+                {tab.label}
+              </span>
+            </button>
+          );
+        })}
       </nav>
 
-      {/* Bluetooth Connection Modal */}
       <BluetoothModal
         isOpen={isBluetoothModalOpen}
         onClose={() => setIsBluetoothModalOpen(false)}
@@ -577,6 +548,8 @@ export function App() {
         statusMessage={telemetryManager.statusMessage}
         onConnect={(options) => telemetryManager.connectBluetooth(options)}
         checkEnvironment={() => telemetryManager.getBluetoothEnvironment()}
+        getProtocolLog={() => telemetryManager.getProtocolLog()}
+        setProtocolLogListener={(fn) => telemetryManager.setProtocolLogListener(fn)}
         onDisconnect={() => telemetryManager.disconnect()}
         onStartSim={() => telemetryManager.startSimulation()}
       />

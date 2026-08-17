@@ -16,24 +16,24 @@ export const ManualTransmissionCard: React.FC<ManualTransmissionCardProps> = ({ 
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#00d2ff] border border-[rgba(255,255,255,0.08)]">
+          <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#9aa1a9] border border-[rgba(255,255,255,0.08)]">
             <Gauge size={16} />
           </div>
           <div>
-            <h3 className="text-xs font-bold text-[#f8fafc] font-['Chakra_Petch'] tracking-wide">
+            <h3 className="text-xs font-bold text-[#eef0f2] tracking-wide">
               5-SPEED MANUAL DYNAMICS
             </h3>
-            <p className="text-[10px] text-[#64748b]">Gear Deduction & Clutch Sync</p>
+            <p className="text-[10px] text-[#6b727a]">Gear Deduction & Clutch Sync</p>
           </div>
         </div>
 
         {isSlipping ? (
-          <div className="badge-pill badge-red animate-pulse">
+          <div className="badge-pill badge-alert">
             <AlertOctagon size={11} />
             CLUTCH SLIP
           </div>
         ) : (
-          <div className="badge-pill badge-green">
+          <div className="badge-pill">
             <CheckCircle2 size={11} />
             SYNCED
           </div>
@@ -44,27 +44,27 @@ export const ManualTransmissionCard: React.FC<ManualTransmissionCardProps> = ({ 
       <div className="grid grid-cols-2 gap-3 items-center telemetry-card-subtle">
         {/* Left: Giant Active Gear Box */}
         <div className="flex items-center gap-3">
-          <div className="w-14 h-14 rounded-xl bg-[#08090d] border border-[#ff2a40]/50 flex flex-col items-center justify-center">
-            <span className="text-3xl font-black text-[#f8fafc] font-['Chakra_Petch'] leading-none">
+          <div className="w-14 h-14 rounded-xl bg-[#101215] border border-[#d8453b]/50 flex flex-col items-center justify-center">
+            <span className="text-3xl font-medium text-[#eef0f2] leading-none">
               {gear === 'CLUTCH' ? 'C' : gear}
             </span>
-            <span className="text-[8px] uppercase font-bold text-[#ff6b7b] font-['Chakra_Petch'] mt-0.5">
+            <span className="text-[8px] uppercase font-bold text-[#d8453b] mt-0.5">
               {gear === 'N' ? 'NEUTRAL' : gear === 'CLUTCH' ? 'CLUTCH' : 'GEAR'}
             </span>
           </div>
 
           <div className="flex flex-col">
-            <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch']">
+            <span className="text-[9px] uppercase font-bold text-[#6b727a]">
               Ratio
             </span>
             <div className="flex items-baseline gap-0.5">
-              <span className="text-base font-bold text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
+              <span className="text-base font-bold text-[#eef0f2] tabular-nums">
                 {metrics.gearRatio > 0 ? metrics.gearRatio.toFixed(2) : '--'}
               </span>
-              <span className="text-[10px] text-[#64748b]">:1</span>
+              <span className="text-[10px] text-[#6b727a]">:1</span>
             </div>
-            <span className="text-[9px] text-[#94a3b8]">
-              Shift: <strong className="text-[#f8fafc] font-['Chakra_Petch']">{metrics.optimalShiftRpm}</strong>
+            <span className="text-[9px] text-[#9aa1a9]">
+              Shift: <strong className="text-[#eef0f2]">{metrics.optimalShiftRpm}</strong>
             </span>
           </div>
         </div>
@@ -76,10 +76,10 @@ export const ManualTransmissionCard: React.FC<ManualTransmissionCardProps> = ({ 
             return (
               <div
                 key={g}
-                className={`w-8 h-10 rounded-md flex flex-col items-center justify-center font-['Chakra_Petch'] font-bold text-sm transition-all ${
+                className={`w-8 h-10 rounded-md flex flex-col items-center justify-center font-bold text-sm transition-all ${
                   isCurrent
-                    ? 'bg-[#ff2a40] text-white border border-[#ff4b5c]'
-                    : 'bg-[#08090d] text-[#64748b] border border-[rgba(255,255,255,0.06)]'
+                    ? 'bg-[#d8453b] text-white border border-[#d8453b]'
+                    : 'bg-[#101215] text-[#6b727a] border border-[rgba(255,255,255,0.06)]'
                 }`}
               >
                 <span>{g}</span>
@@ -91,12 +91,12 @@ export const ManualTransmissionCard: React.FC<ManualTransmissionCardProps> = ({ 
       </div>
 
       {/* Shift Advice Footer */}
-      <div className="flex items-center justify-between px-1 text-[10px] font-['Chakra_Petch'] text-[#64748b]">
+      <div className="flex items-center justify-between px-1 text-[10px] text-[#6b727a]">
         <span className="flex items-center gap-1">
-          <ArrowUpRight size={11} className="text-[#00e676]" />
+          <ArrowUpRight size={11} className="text-[#eef0f2]" />
           Shift Advisory:
         </span>
-        <span className={metrics.shouldShiftUp && gear !== 5 ? 'text-[#00d2ff] font-bold animate-pulse' : 'text-[#94a3b8]'}>
+        <span className={metrics.shouldShiftUp && gear !== 5 ? 'text-[#9aa1a9] font-bold' : 'text-[#9aa1a9]'}>
           {metrics.shouldShiftUp && gear !== 5
             ? `Shift to ${typeof gear === 'number' ? gear + 1 : 'next'} gear`
             : gear === 5

@@ -1,6 +1,11 @@
 import React from 'react';
-import { Navigation, Clock, RotateCcw, Award, Timer } from 'lucide-react';
 import { TripAnalytics } from '../types/obd';
+
+/*
+ * The trip tab. Five filled tiles in a grid became a list, because these are five
+ * unrelated figures rather than a set to compare - a grid implies a relationship between
+ * neighbours that does not exist between "distance" and "eco score".
+ */
 
 interface TripSummaryBarProps {
   trip: TripAnalytics;
@@ -8,132 +13,114 @@ interface TripSummaryBarProps {
   engineRuntimeSec?: number;
 }
 
-export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({ trip, onResetTrip, engineRuntimeSec }) => {
+const INK = '#eef0f2';
+const INK_2 = '#9aa1a9';
+const INK_3 = '#6b727a';
+const WARN = '#c8952e';
+const ALERT = '#d8453b';
+
+function Figure({
+  label,
+  value,
+  unit,
+  note,
+  tone = INK,
+}: {
+  label: string;
+  value: string;
+  unit?: string;
+  note?: string;
+  tone?: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5 py-4" style={{ borderTop: '1px solid var(--hairline)' }}>
+      <span className="t-label">{label}</span>
+      <div className="flex items-baseline gap-1.5">
+        <span className="t-hero tabular-nums" style={{ fontSize: 30, color: tone }}>
+          {value}
+        </span>
+        {unit && (
+          <span className="t-hero t-unit" style={{ fontSize: 12 }}>
+            {unit}
+          </span>
+        )}
+      </div>
+      {note && <span style={{ fontSize: 11.5, color: INK_3 }}>{note}</span>}
+    </div>
+  );
+}
+
+export const TripSummaryBar: React.FC<TripSummaryBarProps> = ({
+  trip,
+  onResetTrip,
+  engineRuntimeSec,
+}) => {
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = Math.floor(seconds % 60);
-    if (mins < 60) {
-      return `${mins}m ${secs}s`;
-    }
+    if (mins < 60) return `${mins}m ${secs}s`;
     const hrs = Math.floor(mins / 60);
     return `${hrs}h ${mins % 60}m`;
   };
 
-  const ecoScore = trip.ecoScore;
-  let ecoColor = 'text-[#00e676]';
-  if (ecoScore < 60) ecoColor = 'text-[#ffaa00]';
-  if (ecoScore < 40) ecoColor = 'text-[#ff2a40]';
+  const ecoTone = trip.ecoScore < 40 ? ALERT : trip.ecoScore < 60 ? WARN : INK;
 
   return (
-    <div className="telemetry-card flex flex-col gap-2.5">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#00e676] border border-[rgba(255,255,255,0.08)]">
-            <Navigation size={16} />
-          </div>
-          <div>
-            <h3 className="text-xs font-bold text-[#f8fafc] font-['Chakra_Petch'] tracking-wide">
-              TRIP TELEMETRY & EFFICIENCY
-            </h3>
-            <p className="text-[10px] text-[#64748b]">Drive Cycle Stats & Distance</p>
-          </div>
+    <div className="flex flex-col">
+      <div className="flex items-baseline justify-between gap-3 pb-1">
+        <div>
+          <h3 style={{ fontSize: 15, fontWeight: 500, letterSpacing: '-0.01em', color: INK }}>
+            This trip
+          </h3>
+          <p style={{ fontSize: 11.5, color: INK_3, marginTop: 3 }}>
+            Since the last reset
+          </p>
         </div>
-
+        {/* A text button. It was a bordered, filled capsule competing with the figures. */}
         <button
           onClick={onResetTrip}
-          className="flex items-center gap-1 px-2 py-1 rounded-md bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)] text-[#94a3b8] hover:text-[#f8fafc] border border-[rgba(255,255,255,0.08)] text-[10px] font-['Chakra_Petch'] transition-colors"
+          className="transition-colors shrink-0"
+          style={{ fontSize: 12.5, color: INK_2 }}
         >
-          <RotateCcw size={11} />
-          Reset Trip
+          Reset
         </button>
       </div>
 
-      {/* Grid of 4 Clean Tiles */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-        {/* Average MPG */}
-        <div className="telemetry-card-subtle flex flex-col">
-          <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch']">
-            Trip Average
-          </span>
-          <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-xl font-black text-[#00e676] font-['Chakra_Petch'] tabular-nums">
-              {trip.avgMpg > 0 ? trip.avgMpg.toFixed(1) : '--'}
-            </span>
-            <span className="text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">MPG</span>
-          </div>
-          <span className="text-[9px] text-[#64748b]">
-            {trip.totalFuelUsedGallons.toFixed(2)} gal used
-          </span>
-        </div>
-
-        {/* Distance */}
-        <div className="telemetry-card-subtle flex flex-col">
-          <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch']">
-            Distance
-          </span>
-          <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-xl font-black text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
-              {trip.distanceMiles.toFixed(1)}
-            </span>
-            <span className="text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">MI</span>
-          </div>
-          <span className="text-[9px] text-[#64748b]">
-            Avg {trip.avgSpeedMph.toFixed(0)} mph (Max {trip.maxSpeedMph.toFixed(0)})
-          </span>
-        </div>
-
-        {/* Duration */}
-        <div className="telemetry-card-subtle flex flex-col">
-          <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch'] flex items-center gap-1">
-            <Clock size={9} />
-            Duration
-          </span>
-          <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-xl font-black text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
-              {formatTime(trip.tripDurationSec)}
-            </span>
-          </div>
-          <span className="text-[9px] text-[#ffaa00]">
-            Idle: {formatTime(trip.idleTimeSec)}
-          </span>
-        </div>
-
-        {/* Eco Score */}
-        <div className="telemetry-card-subtle flex flex-col">
-          <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch'] flex items-center gap-1">
-            <Award size={9} className="text-[#00e676]" />
-            Eco Score
-          </span>
-          <div className="flex items-baseline gap-1 mt-0.5">
-            <span className={`text-xl font-black font-['Chakra_Petch'] tabular-nums ${ecoColor}`}>
-              {ecoScore}
-            </span>
-            <span className="text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">/100</span>
-          </div>
-          <span className="text-[9px] text-[#00d2ff]">
-            DFCO saved: +{(trip.coastingFuelSavedGallons * 1000).toFixed(0)} mL
-          </span>
-        </div>
-
-        {/* Engine Runtime (ECU-reported, independent of the app's own trip timer) */}
-        {engineRuntimeSec !== undefined && (
-          <div className="telemetry-card-subtle flex flex-col">
-            <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch'] flex items-center gap-1">
-              <Timer size={9} />
-              Engine Runtime
-            </span>
-            <div className="flex items-baseline gap-1 mt-0.5">
-              <span className="text-xl font-black text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
-                {formatTime(engineRuntimeSec)}
-              </span>
-            </div>
-            <span className="text-[9px] text-[#64748b]">
-              Since last start (ECU PID 011F)
-            </span>
-          </div>
-        )}
-      </div>
+      {/* An em dash at 30px and weight 250 renders as a horizontal rule, not as a value -
+          it read as a stray divider above the note. Toned down so it reads as "nothing
+          yet" rather than as part of the furniture. */}
+      <Figure
+        label="Average"
+        value={trip.avgMpg > 0 ? trip.avgMpg.toFixed(1) : '—'}
+        unit={trip.avgMpg > 0 ? 'mpg' : undefined}
+        tone={trip.avgMpg > 0 ? INK : INK_3}
+        note={`${trip.totalFuelUsedGallons.toFixed(2)} gal used`}
+      />
+      <Figure
+        label="Distance"
+        value={trip.distanceMiles.toFixed(1)}
+        unit="mi"
+        note={`${trip.avgSpeedMph.toFixed(0)} mph average, ${trip.maxSpeedMph.toFixed(0)} peak`}
+      />
+      <Figure
+        label="Duration"
+        value={formatTime(trip.tripDurationSec)}
+        note={`${formatTime(trip.idleTimeSec)} of it standing still`}
+      />
+      <Figure
+        label="Eco score"
+        value={String(trip.ecoScore)}
+        unit="/ 100"
+        tone={ecoTone}
+        note={`Coasting saved ${(trip.coastingFuelSavedGallons * 1000).toFixed(0)} mL`}
+      />
+      {engineRuntimeSec !== undefined && (
+        <Figure
+          label="Engine runtime"
+          value={formatTime(engineRuntimeSec)}
+          note="Since last start, reported by the ECU"
+        />
+      )}
     </div>
   );
 };

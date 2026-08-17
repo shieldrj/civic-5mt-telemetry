@@ -6,9 +6,45 @@ import {
   FuelBlendProperties,
 } from './civicSpecs';
 
+/**
+ * What the instant-MPG readout is actually showing. Two of these are not economy figures
+ * at all, and rendering them as numbers is what made the old readout untrustworthy: at a
+ * red light `calculateInstantMpg` returns 0 because the car is not moving, and on a closed
+ * throttle it returns the 99.9 cap because the injectors are off. Neither is "your car is
+ * getting N mpg", so neither should be drawn as a value.
+ */
+export type MpgDisplayState = 'idle' | 'coasting' | 'driving';
+
+export interface MpgDisplayReading {
+  value: number;
+  state: MpgDisplayState;
+}
+
 export class FuelModelEngine {
   private recentMpgHistory: number[] = [];
-  private readonly MAX_HISTORY_SAMPLES = 600; // 600 samples (30 seconds at 20Hz)
+
+  // 30 seconds of samples at the loop's real rate. Derived rather than written down,
+  // because the two drifted apart last time: this was 600 with a comment claiming 20Hz,
+  // while the loop runs at 80ms, so `rolling30sMpg` was averaging 48 seconds.
+  private readonly MAX_HISTORY_SAMPLES = Math.round(
+    30_000 / CIVIC_2013_SPECS.telemetryTickMs
+  );
+
+  // ── Instant-MPG display damping ──────────────────────────────────────────────
+  // The loop recomputes instant MPG 12.5 times a second, and the underlying figure
+  // genuinely swings between single digits under acceleration and the 99.9 cap on
+  // overrun. Both facts are real; a numeral that reflects them directly is unreadable.
+  //
+  // So the needle and the numeral are damped differently, which is what OEM consumption
+  // gauges do. The arc follows a 1.5s exponential average - the eye reads a moving shape
+  // fine, and you still see it dive within about a second of opening the throttle. The
+  // numeral is resampled from that same average twice a second, because a digit changing
+  // 12 times a second carries no information a driver can use.
+  private displayMpgAverage = 0;
+  private displayMpgLatched = 0;
+  private displayMpgLatchAgeSec = 0;
+  private readonly DISPLAY_TIME_CONSTANT_SEC = 1.5;
+  private readonly DISPLAY_LATCH_INTERVAL_SEC = 0.5;
 
   /**
    * The blend in the tank. Every mass-to-volume and air-to-fuel conversion below depends
@@ -145,6 +181,41 @@ export class FuelModelEngine {
       }
     }
     return validCount > 0 ? validCount / reciprocalSum : 0;
+  }
+
+  /**
+   * Shapes instant MPG into something a driver can read at a glance, and says which of the
+   * three things it currently is. See the field comments above for why the damping exists.
+   *
+   * Standing still and coasting deliberately do not feed the average. Letting them in was
+   * the whole problem: every red light dragged it to zero and every off-throttle moment
+   * pulled it toward 99.9, so the figure spent most of a drive recovering from states that
+   * were never economy readings in the first place. Frozen instead of reset, so pulling
+   * away from a light resumes from what you were getting rather than climbing from nothing.
+   */
+  public updateDisplayMpg(
+    instantMpg: number,
+    speedMph: number,
+    isDfcoActive: boolean,
+    dtSec: number
+  ): MpgDisplayReading {
+    const state: MpgDisplayState =
+      speedMph <= 1.0 ? 'idle' : isDfcoActive ? 'coasting' : 'driving';
+
+    if (state === 'driving') {
+      // Frame-rate independent: a dropped frame damps by the time that actually passed
+      // rather than by one fixed step, so the needle behaves the same on a slow phone.
+      const alpha = 1 - Math.exp(-Math.max(0, dtSec) / this.DISPLAY_TIME_CONSTANT_SEC);
+      this.displayMpgAverage += (instantMpg - this.displayMpgAverage) * alpha;
+    }
+
+    this.displayMpgLatchAgeSec += Math.max(0, dtSec);
+    if (this.displayMpgLatchAgeSec >= this.DISPLAY_LATCH_INTERVAL_SEC) {
+      this.displayMpgLatchAgeSec = 0;
+      this.displayMpgLatched = this.displayMpgAverage;
+    }
+
+    return { value: this.displayMpgLatched, state };
   }
 
   /**

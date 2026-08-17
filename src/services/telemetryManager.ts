@@ -100,8 +100,6 @@ export class TelemetryManager {
       mafGramsPerSec: 2.4,
       coolantTempC: 85,
       coolantTempF: 185,
-      intakeAirTempC: 22,
-      intakeAirTempF: 72,
       engineLoadPercent: 18,
       throttlePosPercent: 12,
       shortTermFuelTrim: 0,
@@ -116,6 +114,8 @@ export class TelemetryManager {
       o2Sensor2Voltage: 0.65,
       engineRuntimeSec: 0,
       instantMpg: 0,
+      displayMpg: 0,
+      mpgDisplayState: 'idle',
       isDfcoActive: false,
       fuelFlowGalPerHour: 0.22,
       fuelFlowLitersPerHour: 0.83,
@@ -187,7 +187,34 @@ export class TelemetryManager {
     };
   }
 
-  public async connectBluetooth(options: { acceptAllDevices?: boolean } = {}): Promise<void> {
+  /**
+   * Enumerates and reads every PID the car supports. Refuses unless a real adapter is
+   * connected - the simulator would happily invent a complete list, which is exactly the
+   * confident-but-fictional answer this screen exists to eliminate.
+   */
+  public async runPidDiscovery(onProgress?: (done: number, total: number) => void) {
+    if (this.connectionStatus !== 'connected') {
+      throw new Error(
+        'Connect to the adapter first — this reads the list from the car itself, so the simulator cannot answer it.'
+      );
+    }
+    return this.bluetooth.discoverPids(onProgress);
+  }
+
+  /** Recent adapter exchanges, for the connection screen's log panel. */
+  public getProtocolLog() {
+    return this.bluetooth.getProtocolLog();
+  }
+
+  public setProtocolLogListener(listener: (() => void) | null): void {
+    this.bluetooth.setLogListener(listener ? () => listener() : null);
+  }
+
+  // `address` picks a specific paired adapter and is passed straight through to the SPP
+  // transport. It was missing from this signature while the modal was already sending it.
+  public async connectBluetooth(
+    options: { acceptAllDevices?: boolean; address?: string } = {}
+  ): Promise<void> {
     this.stopLoop();
     this.connectionStatus = 'connecting';
     this.statusMessage = 'Connecting to OBDLink MX+...';
@@ -236,8 +263,13 @@ export class TelemetryManager {
     this.lastUpdateTimestamp = Date.now();
     if (this.timerHandle) clearInterval(this.timerHandle);
     
-    // Run telemetry processing at 12.5Hz (80ms interval) with GPU CSS needle interpolation for battery efficiency
-    this.timerHandle = setInterval(() => this.processUpdateStep(), 80);
+    // 12.5Hz, with CSS interpolating the needle between steps for battery efficiency. The
+    // period is a spec constant because the rolling-MPG buffer is sized in samples and has
+    // to divide by it; see CIVIC_2013_SPECS.telemetryTickMs.
+    this.timerHandle = setInterval(
+      () => this.processUpdateStep(),
+      CIVIC_2013_SPECS.telemetryTickMs
+    );
   }
 
   private stopLoop(): void {
@@ -270,7 +302,6 @@ export class TelemetryManager {
     const speedMphRaw = raw.speedKmh * 0.621371;
     const speedMph = parseFloat(speedMphRaw.toFixed(1));
     const coolantF = Math.round((raw.coolantC * 9) / 5 + 32);
-    const iatF = Math.round((raw.iatC * 9) / 5 + 32);
     const ambientF = Math.round((raw.ambientC * 9) / 5 + 32);
 
     // 2. Gear & Manual Transmission Analysis
@@ -289,6 +320,7 @@ export class TelemetryManager {
     // 4. Instantaneous MPG & Rolling Window
     const instantMpg = this.fuelModel.calculateInstantMpg(speedMph, fuelFlow.fuelFlowGalPerHour, isDfco);
     const rollingMpg = this.fuelModel.updateRollingMpg(instantMpg);
+    const displayMpg = this.fuelModel.updateDisplayMpg(instantMpg, speedMph, isDfco, dtSec);
     const fuelRangeMiles = this.fuelModel.calculateFuelRange(
       raw.fuelLevelPercent,
       CIVIC_2013_SPECS.fuelTankCapacityGallons,
@@ -303,8 +335,6 @@ export class TelemetryManager {
       mafGramsPerSec: raw.maf,
       coolantTempC: raw.coolantC,
       coolantTempF: coolantF,
-      intakeAirTempC: raw.iatC,
-      intakeAirTempF: iatF,
       engineLoadPercent: raw.engineLoad,
       throttlePosPercent: raw.throttlePos,
       shortTermFuelTrim: raw.stft,
@@ -319,6 +349,8 @@ export class TelemetryManager {
       o2Sensor2Voltage: parseFloat(raw.o2Sensor2Voltage.toFixed(3)),
       engineRuntimeSec: raw.engineRuntimeSec,
       instantMpg: parseFloat(instantMpg.toFixed(1)),
+      displayMpg: parseFloat(displayMpg.value.toFixed(1)),
+      mpgDisplayState: displayMpg.state,
       isDfcoActive: isDfco,
       fuelFlowGalPerHour: parseFloat(fuelFlow.fuelFlowGalPerHour.toFixed(3)),
       fuelFlowLitersPerHour: parseFloat(fuelFlow.fuelFlowLitersPerHour.toFixed(2)),

@@ -1,3 +1,7 @@
+import type { MpgDisplayState } from '../services/obd2/fuelModel';
+
+export type { MpgDisplayState };
+
 export interface OBDLiveMetrics {
   // Raw / Base OBD-II PIDs
   rpm: number;                  // PID 010C (RPM)
@@ -6,8 +10,6 @@ export interface OBDLiveMetrics {
   mafGramsPerSec: number;       // PID 0110 (g/s)
   coolantTempC: number;         // PID 0105 (°C)
   coolantTempF: number;         // Calculated (°F)
-  intakeAirTempC: number;       // PID 010F (°C)
-  intakeAirTempF: number;       // Calculated (°F)
   engineLoadPercent: number;    // PID 0104 (%)
   throttlePosPercent: number;   // PID 0111 (%)
   shortTermFuelTrim: number;    // PID 0106 (%)
@@ -24,6 +26,8 @@ export interface OBDLiveMetrics {
 
   // Custom Computed / Physics Fuel Metrics
   instantMpg: number;           // Calculated MPG (0 - 99.9 or Infinity on DFCO)
+  displayMpg: number;           // instantMpg damped for reading - see FuelModelEngine.updateDisplayMpg
+  mpgDisplayState: MpgDisplayState; // Whether displayMpg is a figure at all, or idle / coasting
   isDfcoActive: boolean;        // Deceleration Fuel Cut-Off (Engine braking in gear)
   fuelFlowGalPerHour: number;   // Current fuel consumption (gal/hr)
   fuelFlowLitersPerHour: number;// Current fuel consumption (L/hr)

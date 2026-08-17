@@ -1,19 +1,41 @@
 import React from 'react';
 
+/*
+ * A dial, stripped back to the parts that carry a reading.
+ *
+ * What came off: an SVG Gaussian glow filter on the value arc, a two-stop gradient along
+ * it, an outer bezel circle, a white pointer bead ringed in the accent colour, five tick
+ * labels, and a bordered chip around the sub-value. None of it encoded anything - the
+ * angle of the arc was already the whole message, and every added mark competed with the
+ * numeral in the middle, which is what a driver actually reads.
+ *
+ * What stayed: a hairline track, a solid arc, three ticks, and a short radial mark at the
+ * value. The mark is a watch hand rather than a bead - it points at the scale instead of
+ * sitting on top of it.
+ */
+
 interface RadialGaugeProps {
   value: number;
   min: number;
   max: number;
   title: string;
   unit: string;
+  /** Sits under the numeral as plain text. No chip, no border. */
   subValue?: string | number;
-  subLabel?: string;
+  /** Replaces the numeral entirely - for states that are not a reading. See `state` below. */
+  overrideValue?: string;
+  /** Colour of the arc and mark. Defaults to the ink colour: a normal value is not coloured. */
   accentColor?: string;
+  /** Where the scale stops being normal. Drawn as a hairline segment, not a filled zone. */
   redlineStart?: number;
   ticks?: number[];
   size?: number;
   isHero?: boolean;
 }
+
+const INK = '#eef0f2';
+const INK_2 = '#9aa1a9';
+const INK_3 = '#6b727a';
 
 export const RadialGauge: React.FC<RadialGaugeProps> = ({
   value,
@@ -22,94 +44,74 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
   title,
   unit,
   subValue,
-  subLabel,
-  accentColor = '#ff2a40',
+  overrideValue,
+  accentColor = INK,
   redlineStart,
   ticks = [],
   size = 220,
   isHero = false,
 }) => {
   const clampedValue = Math.max(min, Math.min(max, value));
-  
-  // 250-degree sweep from 145° (bottom-left) to 395° (bottom-right)
+
+  // 250-degree sweep from 145 (bottom-left) to 395 (bottom-right).
   const startAngle = 145;
   const endAngle = 395;
-  const totalSweep = endAngle - startAngle; // 250°
+  const totalSweep = endAngle - startAngle;
 
   const valueRatio = Math.max(0, Math.min(1, (clampedValue - min) / (max - min)));
   const currentAngle = startAngle + valueRatio * totalSweep;
 
   const cx = 100;
   const cy = 100;
-  const radius = 70;
-  const strokeWidth = isHero ? 9 : 7;
+  const radius = 74;
+
+  // Thin. The old gauge used 9px on the hero, which at 344px across is a band rather than
+  // a line, and it forced everything else to shout to keep up.
+  const strokeWidth = isHero ? 3 : 2.5;
 
   const degToRad = (deg: number) => (deg * Math.PI) / 180;
 
   const getCoord = (r: number, deg: number) => {
     const rad = degToRad(deg);
-    return {
-      x: cx + r * Math.cos(rad),
-      y: cy + r * Math.sin(rad),
-    };
+    return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
   };
 
   const createArc = (startDeg: number, endDeg: number, r: number) => {
     const p1 = getCoord(r, startDeg);
     const p2 = getCoord(r, endDeg);
     const largeArc = Math.abs(endDeg - startDeg) > 180 ? 1 : 0;
-    return `M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${p2.x.toFixed(2)} ${p2.y.toFixed(2)}`;
+    return `M ${p1.x.toFixed(2)} ${p1.y.toFixed(2)} A ${r} ${r} 0 ${largeArc} 1 ${p2.x.toFixed(
+      2
+    )} ${p2.y.toFixed(2)}`;
   };
 
-  const gradientId = `gauge-grad-${title.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}`;
+  const displayValue =
+    overrideValue !== undefined
+      ? overrideValue
+      : unit === '%' || unit === '°F' || value >= 100
+      ? Math.round(value)
+      : value.toFixed(1);
 
-  // Formatted main value
-  const displayValue = typeof value === 'number'
-    ? (unit === '%' || unit === '°F' || value >= 100 ? Math.round(value) : value.toFixed(1))
-    : value;
+  const markStart = getCoord(radius - 8, currentAngle);
+  const markEnd = getCoord(radius + 2, currentAngle);
 
   return (
     <div
       className="relative flex flex-col items-center justify-center select-none"
       style={{ width: size, height: size }}
     >
-      <svg
-        viewBox="0 0 200 200"
-        className="w-full h-full overflow-visible"
-      >
-        <defs>
-          <linearGradient id={gradientId} x1="0%" y1="100%" x2="100%" y2="0%">
-            <stop offset="0%" stopColor={accentColor} stopOpacity="0.5" />
-            <stop offset="100%" stopColor={accentColor} stopOpacity="1" />
-          </linearGradient>
-          {/* Subtle Outer Glow */}
-          <filter id={`glow-${gradientId}`} x="-20%" y="-20%" width="140%" height="140%">
-            <feGaussianBlur stdDeviation="2.5" result="blur" />
-            <feComposite in="SourceGraphic" in2="blur" operator="over" />
-          </filter>
-        </defs>
-
-        {/* Outer Bezel */}
-        <circle
-          cx={cx}
-          cy={cy}
-          r={94}
-          fill="none"
-          stroke="rgba(255, 255, 255, 0.05)"
-          strokeWidth="1.5"
-        />
-
-        {/* Background Track Arc */}
+      <svg viewBox="0 0 200 200" className="w-full h-full overflow-visible">
+        {/* Track */}
         <path
           d={createArc(startAngle, endAngle, radius)}
           fill="none"
-          stroke="#161b28"
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
+          stroke="rgba(255,255,255,0.09)"
+          strokeWidth="1.5"
         />
 
-        {/* Redline Warning Zone */}
-        {redlineStart && redlineStart < max && (
+        {/* Redline. A hairline in the alert colour rather than a translucent filled band -
+            it marks where the scale changes meaning without occupying the scale. */}
+        {redlineStart !== undefined && redlineStart < max && (
           <path
             d={createArc(
               startAngle + ((redlineStart - min) / (max - min)) * totalSweep,
@@ -117,120 +119,103 @@ export const RadialGauge: React.FC<RadialGaugeProps> = ({
               radius
             )}
             fill="none"
-            stroke="rgba(255, 42, 64, 0.35)"
-            strokeWidth={strokeWidth}
-            strokeLinecap="round"
+            stroke="#d8453b"
+            strokeWidth="1.5"
           />
         )}
 
-        {/* Active Value Progress Arc */}
-        {valueRatio > 0.005 && (
+        {/* Value */}
+        {valueRatio > 0.004 && (
           <path
             d={createArc(startAngle, currentAngle, radius)}
             fill="none"
-            stroke={`url(#${gradientId})`}
+            stroke={accentColor}
             strokeWidth={strokeWidth}
-            strokeLinecap="round"
-            filter={`url(#glow-${gradientId})`}
+            strokeLinecap="butt"
+            style={{ transition: 'stroke 240ms ease' }}
           />
         )}
 
-        {/* Outer Calibrated Ticks & High-Contrast Labels */}
+        {/* Three ticks. The ends and the middle - enough to read the scale, and no more.
+            Unlabelled: the numeral in the centre is the reading, and five small numbers
+            around the rim were competing with it. */}
         {ticks.map((t) => {
-          const tRatio = (t - min) / (max - min);
-          const tAngle = startAngle + tRatio * totalSweep;
-          const p1 = getCoord(radius + 7, tAngle);
-          const p2 = getCoord(radius + 14, tAngle);
-          const pText = getCoord(radius + 22, tAngle);
-          const isRed = redlineStart && t >= redlineStart;
-
-          const tickLabel = t >= 1000 ? `${t / 1000}k` : `${t}`;
-
+          const tAngle = startAngle + ((t - min) / (max - min)) * totalSweep;
+          const p1 = getCoord(radius + 6, tAngle);
+          const p2 = getCoord(radius + 12, tAngle);
           return (
-            <g key={t}>
-              <line
-                x1={p1.x.toFixed(2)}
-                y1={p1.y.toFixed(2)}
-                x2={p2.x.toFixed(2)}
-                y2={p2.y.toFixed(2)}
-                stroke={isRed ? '#ff2a40' : 'rgba(255, 255, 255, 0.4)'}
-                strokeWidth={isRed ? '2' : '1.5'}
-              />
-              <text
-                x={pText.x.toFixed(2)}
-                y={(pText.y + 3.5).toFixed(2)}
-                fill={isRed ? '#ff6b7b' : 'rgba(255, 255, 255, 0.6)'}
-                fontSize={isHero ? "10" : "9"}
-                fontFamily="'Chakra Petch', monospace"
-                fontWeight="700"
-                textAnchor="middle"
-              >
-                {tickLabel}
-              </text>
-            </g>
+            <line
+              key={t}
+              x1={p1.x.toFixed(2)}
+              y1={p1.y.toFixed(2)}
+              x2={p2.x.toFixed(2)}
+              y2={p2.y.toFixed(2)}
+              stroke="rgba(255,255,255,0.2)"
+              strokeWidth="1"
+            />
           );
         })}
 
-        {/* High-Luminance Perimeter Pointer (Sweeps along outer arc without blocking central numbers) */}
-        <g
-          style={{
-            transform: `rotate(${currentAngle}deg)`,
-            transformOrigin: `${cx}px ${cy}px`,
-            transition: 'transform 0.08s cubic-bezier(0.1, 0.9, 0.2, 1)',
-          }}
-        >
-          {/* Outer Pointer Bead */}
-          <circle
-            cx={cx + radius}
-            cy={cy}
-            r={isHero ? 5.5 : 4.5}
-            fill="#ffffff"
+        {/* The hand. Crosses the track so it reads as pointing at a scale. */}
+        {overrideValue === undefined && (
+          <line
+            x1={markStart.x.toFixed(2)}
+            y1={markStart.y.toFixed(2)}
+            x2={markEnd.x.toFixed(2)}
+            y2={markEnd.y.toFixed(2)}
             stroke={accentColor}
-            strokeWidth="2.5"
+            strokeWidth={isHero ? 2.25 : 2}
+            strokeLinecap="butt"
+            style={{ transition: 'stroke 240ms ease' }}
           />
-        </g>
+        )}
       </svg>
 
-      {/* Center Digital Readout (Unobstructed, Maximum Scale & Contrast).
-          Font sizes are derived from `size` rather than fixed, because the cockpit sizes
-          these gauges from the viewport height to guarantee it fits without scrolling -
-          fixed type would look oversized on a short screen and lost on a tall one. */}
+      {/* Centre readout. Sizes derive from `size` because the cockpit fits the gauge to the
+          measured viewport - fixed type would be lost on a tall screen and oversized on a
+          short one. */}
       <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center px-4">
-        {/* Title */}
+        {/* The title and the sub-value are clamped at the top as well as the bottom. They
+            scale with the dial so a small one stays legible, but a 380px dial was giving
+            its 10px label a 17px rendering - a label the size of a value stops reading as
+            a label. The numeral is the only thing that should grow without a ceiling. */}
         <span
-          className="font-bold tracking-widest text-[#94a3b8] uppercase font-['Inter'] leading-none"
-          style={{ fontSize: Math.max(10, size * 0.052), marginBottom: size * 0.02 }}
+          className="t-label"
+          style={{
+            fontSize: Math.min(12, Math.max(9, size * 0.045)),
+            marginBottom: size * 0.03,
+          }}
         >
           {title}
         </span>
 
-        {/* Hero Number & Unit */}
-        <div className="flex items-baseline justify-center gap-1">
-          <span
-            className="font-black text-[#ffffff] font-['Chakra_Petch'] tabular-nums tracking-tight leading-none"
-            style={{ fontSize: Math.max(30, size * 0.21) }}
-          >
+        <div className="flex items-baseline justify-center" style={{ gap: size * 0.012 }}>
+          <span className="t-hero" style={{ fontSize: Math.max(30, size * 0.24) }}>
             {displayValue}
           </span>
-          <span
-            className="font-extrabold text-[#94a3b8] font-['Chakra_Petch'] leading-none"
-            style={{ fontSize: Math.max(11, size * 0.058) }}
-          >
-            {unit}
-          </span>
+          {overrideValue === undefined && (
+            <span className="t-hero t-unit" style={{ fontSize: Math.max(11, size * 0.072) }}>
+              {unit}
+            </span>
+          )}
         </div>
 
-        {/* Status / Sub-label */}
         {subValue !== undefined && (
-          <div
-            className="font-semibold font-['Inter'] px-2 py-0.5 rounded-md bg-[#121622] border border-[rgba(255,255,255,0.06)] text-[#cbd5e1] leading-tight"
-            style={{ fontSize: Math.max(10, size * 0.05), marginTop: size * 0.035 }}
+          <span
+            style={{
+              fontSize: Math.min(13, Math.max(10, size * 0.05)),
+              marginTop: size * 0.045,
+              color: INK_2,
+              letterSpacing: '0.01em',
+              lineHeight: 1.3,
+            }}
           >
-            {subLabel ? <span className="text-[#64748b] mr-1">{subLabel}:</span> : null}
-            <strong className="text-[#f8fafc] font-bold">{subValue}</strong>
-          </div>
+            {subValue}
+          </span>
         )}
       </div>
     </div>
   );
 };
+
+export { INK, INK_2, INK_3 };

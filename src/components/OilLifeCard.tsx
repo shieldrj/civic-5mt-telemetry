@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
-import { Droplet, RotateCcw, AlertTriangle, ShieldCheck, ThermometerSnowflake } from 'lucide-react';
 import { OilLifeProfile } from '../types/obd';
+
+/*
+ * The oil tab. The health ring stays - a percentage of a fixed span is exactly what a
+ * ring is for - but loses its 7px stroke and rounded cap for a hairline track and a thin
+ * arc, matching RadialGauge. The four boxes underneath become rows.
+ */
 
 interface OilLifeCardProps {
   oilProfile: OilLifeProfile;
@@ -8,201 +13,169 @@ interface OilLifeCardProps {
   onResetOil: () => void;
 }
 
-export const OilLifeCard: React.FC<OilLifeCardProps> = ({
-  oilProfile,
-  onResetOil,
-}) => {
+const INK = '#eef0f2';
+const INK_2 = '#9aa1a9';
+const INK_3 = '#6b727a';
+const WARN = '#c8952e';
+const ALERT = '#d8453b';
+
+function Row({ label, value, note }: { label: string; value: string; note?: string }) {
+  return (
+    <div className="stat-row">
+      <span className="t-key shrink-0">{label}</span>
+      <span className="t-value text-right tabular-nums">
+        {value}
+        {note && (
+          <span className="ml-2.5" style={{ fontSize: 11.5, color: INK_3, letterSpacing: 0 }}>
+            {note}
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+export const OilLifeCard: React.FC<OilLifeCardProps> = ({ oilProfile, onResetOil }) => {
   const [showResetModal, setShowResetModal] = useState(false);
 
   const percent = oilProfile.oilLifePercent;
-  let statusColor = '#00e676';
-  let badgeClass = 'badge-green';
+  const tone = percent < 15 ? ALERT : percent < 40 ? WARN : INK;
 
-  if (percent < 15) {
-    statusColor = '#ff2a40';
-    badgeClass = 'badge-red';
-  } else if (percent < 40) {
-    statusColor = '#ffaa00';
-    badgeClass = 'badge-amber';
-  }
-
-  // Circular progress math - sized for legibility on a large high-density phone screen
-  const ringSize = 108;
-  const ringCenter = ringSize / 2;
-  const radius = 46;
+  const ringSize = 132;
+  const center = ringSize / 2;
+  const radius = 58;
   const circumference = 2 * Math.PI * radius;
-  const strokeDashoffset = circumference - (percent / 100) * circumference;
+  const dashoffset = circumference - (percent / 100) * circumference;
+
+  const { revWearFactor, coldStartPenalty, shortTripPenalty, thermalShearPenalty } =
+    oilProfile.degradationBreakdown;
 
   return (
-    <div className="telemetry-card flex flex-col justify-between gap-3">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#ff2a40] border border-[rgba(255,255,255,0.08)]">
-            <Droplet size={16} />
-          </div>
-          <div>
-            <h3 className="text-xs font-bold text-[#f8fafc] font-['Chakra_Petch'] tracking-wide">
-              OIL LIFE & WEAR MODEL
-            </h3>
-            <p className="text-[10px] text-[#64748b]">Revolutions + Cold Starts + Thermal Shear</p>
-          </div>
+    <div className="flex flex-col gap-5">
+      <div className="flex items-baseline justify-between gap-3">
+        <div>
+          <h3 style={{ fontSize: 15, fontWeight: 500, letterSpacing: '-0.01em', color: INK }}>
+            Oil life
+          </h3>
+          <p style={{ fontSize: 11.5, color: INK_3, marginTop: 3 }}>
+            {oilProfile.oilConditionGrade}
+          </p>
         </div>
-
         <button
           onClick={() => setShowResetModal(true)}
-          className="flex items-center gap-1 px-2 py-1 rounded-md bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)] text-[#94a3b8] hover:text-[#f8fafc] border border-[rgba(255,255,255,0.08)] text-[10px] font-['Chakra_Petch'] transition-colors"
+          className="transition-colors shrink-0"
+          style={{ fontSize: 12.5, color: INK_2 }}
         >
-          <RotateCcw size={11} />
           Reset
         </button>
       </div>
 
-      {/* Main Health Split */}
-      <div className="grid grid-cols-2 gap-3 items-center telemetry-card-subtle">
-        {/* Left: Circular Health Ring */}
-        <div className="relative flex items-center justify-center">
-          <svg width={ringSize} height={ringSize} className="transform -rotate-90">
+      <div className="flex items-center justify-center gap-7 py-2">
+        <div className="relative shrink-0" style={{ width: ringSize, height: ringSize }}>
+          <svg width={ringSize} height={ringSize} className="-rotate-90">
             <circle
-              cx={ringCenter}
-              cy={ringCenter}
+              cx={center}
+              cy={center}
               r={radius}
-              stroke="#161a26"
-              strokeWidth={7}
-              fill="transparent"
+              stroke="rgba(255,255,255,0.09)"
+              strokeWidth={1.5}
+              fill="none"
             />
             <circle
-              cx={ringCenter}
-              cy={ringCenter}
+              cx={center}
+              cy={center}
               r={radius}
-              stroke={statusColor}
-              strokeWidth={7}
-              fill="transparent"
+              stroke={tone}
+              strokeWidth={3}
+              fill="none"
               strokeDasharray={circumference}
-              strokeDashoffset={strokeDashoffset}
-              strokeLinecap="round"
-              className="transition-all duration-300 ease-out"
+              strokeDashoffset={dashoffset}
+              strokeLinecap="butt"
+              style={{ transition: 'stroke-dashoffset 300ms ease, stroke 240ms ease' }}
             />
           </svg>
-          <div className="absolute flex flex-col items-center justify-center text-center">
-            <span
-              className="text-2xl font-black font-['Chakra_Petch'] tabular-nums"
-              style={{ color: statusColor }}
-            >
-              {Math.round(percent)}%
-            </span>
-            <span className="text-[8px] uppercase font-bold text-[#64748b] font-['Chakra_Petch']">
-              HEALTH
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="t-hero tabular-nums" style={{ fontSize: 40, color: tone }}>
+              {Math.round(percent)}
+              <span className="t-unit" style={{ fontSize: 15 }}>
+                %
+              </span>
             </span>
           </div>
         </div>
 
-        {/* Right: Projected Remaining */}
-        <div className="flex flex-col gap-1">
-          <div>
-            <span className={`badge-pill ${badgeClass}`}>
-              <ShieldCheck size={10} />
-              {oilProfile.oilConditionGrade.toUpperCase()}
+        <div className="flex flex-col gap-1 min-w-0">
+          <span className="t-label">Remaining</span>
+          <span className="t-hero tabular-nums" style={{ fontSize: 26 }}>
+            {oilProfile.estimatedMilesRemaining.toLocaleString()}
+            <span className="t-unit" style={{ fontSize: 12, marginLeft: 4 }}>
+              mi
             </span>
-          </div>
-          <div className="flex flex-col mt-0.5">
-            <span className="text-[9px] uppercase font-bold text-[#64748b] font-['Chakra_Petch']">
-              EST. REMAINING
-            </span>
-            <span className="text-base font-bold text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
-              ~{oilProfile.estimatedMilesRemaining.toLocaleString()} <span className="text-[10px] text-[#64748b]">mi</span>
-            </span>
-            <span className="text-[9px] text-[#94a3b8]">
-              approx {oilProfile.estimatedDaysRemaining} days left
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Secondary Metrics: Revolutions & Cold Starts */}
-      <div className="grid grid-cols-2 gap-2 text-xs">
-        <div className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded-lg p-2 flex flex-col justify-between">
-          <span className="text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">
-            MECHANICAL REVS
           </span>
-          <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-sm font-bold text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
-              {(oilProfile.accumulatedRevolutions / 1000000).toFixed(2)}M
-            </span>
-            <span className="text-[8px] text-[#64748b]">cycles</span>
-          </div>
-          <span className="text-[8px] text-[#64748b]">
-            Rev wear: {oilProfile.degradationBreakdown.revWearFactor}%
-          </span>
-        </div>
-
-        <div className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded-lg p-2 flex flex-col justify-between">
-          <div className="flex items-center justify-between text-[9px] font-bold text-[#64748b] font-['Chakra_Petch']">
-            <span className="flex items-center gap-1">
-              <ThermometerSnowflake size={10} className="text-[#00d2ff]" />
-              COLD STARTS
-            </span>
-            <span className="text-[#00d2ff] font-['Chakra_Petch']">{oilProfile.coldStartsCount}</span>
-          </div>
-          <div className="flex items-baseline gap-1 mt-0.5">
-            <span className="text-sm font-bold text-[#f8fafc] font-['Chakra_Petch'] tabular-nums">
-              {oilProfile.shortTripsCount}
-            </span>
-            <span className="text-[8px] text-[#64748b]">short trips</span>
-          </div>
-          <span className="text-[8px] text-[#64748b]">
-            Dilution: +{oilProfile.degradationBreakdown.coldStartPenalty}%
+          <span style={{ fontSize: 11.5, color: INK_3 }}>
+            about {oilProfile.estimatedDaysRemaining} days
           </span>
         </div>
       </div>
 
-      {/* Wear Factor Decomposition Bar */}
-      <div className="bg-[#08090d] border border-[rgba(255,255,255,0.06)] rounded-lg p-2 flex flex-col gap-1 text-[9px] font-['Chakra_Petch']">
-        <div className="flex justify-between text-[#64748b]">
-          <span>WEAR FACTOR BREAKDOWN</span>
-          <span>{oilProfile.highThermalStressSec}s high RPM</span>
+      <div className="flex flex-col">
+        <Row
+          label="Crank revolutions"
+          value={`${(oilProfile.accumulatedRevolutions / 1_000_000).toFixed(2)}M`}
+          note={`${revWearFactor}% of wear`}
+        />
+        <Row
+          label="Cold starts"
+          value={String(oilProfile.coldStartsCount)}
+          note={`+${coldStartPenalty}% dilution`}
+        />
+        <Row
+          label="Short trips"
+          value={String(oilProfile.shortTripsCount)}
+          note={`+${shortTripPenalty}%`}
+        />
+        <Row
+          label="High-rpm time"
+          value={`${oilProfile.highThermalStressSec}s`}
+          note={`+${thermalShearPenalty}%`}
+        />
+      </div>
+
+      {/* Where the wear came from. The one place more than one value shares a bar, so the
+          segments have to stay distinguishable - they run light to dark rather than
+          through four hues, and the legend below names them in the same order. */}
+      <div className="flex flex-col gap-2.5 pt-4" style={{ borderTop: '1px solid var(--hairline)' }}>
+        <span className="t-label">What used it up</span>
+        <div className="meter flex">
+          <span style={{ width: `${revWearFactor}%`, background: INK }} />
+          <span style={{ width: `${coldStartPenalty}%`, background: INK_2 }} />
+          <span style={{ width: `${shortTripPenalty}%`, background: INK_3 }} />
+          <span style={{ width: `${thermalShearPenalty}%`, background: WARN }} />
         </div>
-        <div className="w-full bg-[#161a26] h-1.5 rounded-full flex overflow-hidden">
-          <div
-            title="Mechanical Revs"
-            className="bg-[#00e676] h-full"
-            style={{ width: `${oilProfile.degradationBreakdown.revWearFactor}%` }}
-          />
-          <div
-            title="Cold Starts"
-            className="bg-[#00d2ff] h-full"
-            style={{ width: `${oilProfile.degradationBreakdown.coldStartPenalty}%` }}
-          />
-          <div
-            title="Short Trips"
-            className="bg-[#ffaa00] h-full"
-            style={{ width: `${oilProfile.degradationBreakdown.shortTripPenalty}%` }}
-          />
-          <div
-            title="Thermal Shear"
-            className="bg-[#ff2a40] h-full"
-            style={{ width: `${oilProfile.degradationBreakdown.thermalShearPenalty}%` }}
-          />
+        <div className="flex flex-wrap gap-x-4 gap-y-1" style={{ fontSize: 11, color: INK_3 }}>
+          <span>Revolutions</span>
+          <span>Cold starts</span>
+          <span>Short trips</span>
+          <span>Thermal</span>
         </div>
       </div>
 
-      {/* Reset Confirmation Modal */}
       {showResetModal && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-[#0e111a] border border-[rgba(255,255,255,0.12)] rounded-2xl max-w-sm w-full p-5 shadow-2xl flex flex-col gap-3.5">
-            <div className="flex items-center gap-2 text-[#ffaa00]">
-              <AlertTriangle size={20} />
-              <h3 className="text-sm font-bold font-['Chakra_Petch'] text-[#f8fafc]">
-                Reset Oil Life Tracker?
-              </h3>
-            </div>
-            <p className="text-xs text-[#94a3b8] leading-relaxed">
-              Reset the accumulated crank revolutions, cold start log, and degradation penalty to <strong>100% (7,500 miles)</strong> after completing an oil and filter change.
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-5" style={{ background: 'rgba(0,0,0,0.8)' }}>
+          <div
+            className="w-full max-w-sm flex flex-col gap-4 p-6 rounded-2xl"
+            style={{ background: 'var(--panel)', border: '1px solid var(--hairline-strong)' }}
+          >
+            <h3 style={{ fontSize: 15, fontWeight: 500, color: INK }}>Reset oil life?</h3>
+            <p style={{ fontSize: 13, color: INK_2, lineHeight: 1.6 }}>
+              Clears the accumulated crank revolutions, the cold-start log and the
+              degradation penalty, and starts again at 100% — 7,500 miles. Do this after an
+              oil and filter change, not before.
             </p>
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex justify-end gap-5 pt-1">
               <button
                 onClick={() => setShowResetModal(false)}
-                className="px-3 py-1.5 rounded-lg bg-[#161a26] text-[#94a3b8] hover:text-[#f8fafc] text-xs font-['Chakra_Petch']"
+                style={{ fontSize: 13, color: INK_2 }}
               >
                 Cancel
               </button>
@@ -211,9 +184,9 @@ export const OilLifeCard: React.FC<OilLifeCardProps> = ({
                   onResetOil();
                   setShowResetModal(false);
                 }}
-                className="px-4 py-1.5 rounded-lg bg-[#ff2a40] hover:bg-[#d61c2f] text-white text-xs font-bold font-['Chakra_Petch'] transition-colors"
+                style={{ fontSize: 13, color: ALERT, fontWeight: 500 }}
               >
-                Confirm Reset (100%)
+                Reset to 100%
               </button>
             </div>
           </div>
