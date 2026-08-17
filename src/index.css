@@ -1,149 +1,252 @@
 @import "tailwindcss";
 
+/*
+ * Civic telemetry - visual system.
+ *
+ * The rule this replaced was "every element gets a fill, a border, a radius and a
+ * saturated colour". Five accents were on screen at once, a squared display face ran
+ * from 28px headings down to 8px labels, and cards nested three deep. It read as a
+ * racing sim rather than an instrument.
+ *
+ * Three rules now:
+ *   1. One accent. Normal values are white. Amber means look, red means act. Nothing is
+ *      green, because "fine" is the absence of a signal, not a colour.
+ *   2. Groups are separated by space and a hairline, not by a box. Cards survive only on
+ *      the deeper tabs, where genuinely distinct blocks sit next to each other.
+ *   3. One typeface, four sizes. Character comes from weight contrast and tight tracking
+ *      on numerals, not from a display face.
+ */
+
 :root {
-  --bg-obsidian: #08090d;
-  --bg-surface: #0e111a;
-  --bg-surface-subtle: #131724;
-  --bg-surface-elevated: #181d2d;
-  
-  --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-active: rgba(255, 255, 255, 0.16);
-  
-  --honda-red: #ff2a40;
-  --honda-red-soft: rgba(255, 42, 64, 0.15);
-  
-  --eco-emerald: #00e676;
-  --eco-emerald-soft: rgba(0, 230, 118, 0.12);
-  
-  --amber-warm: #ffaa00;
-  --amber-warm-soft: rgba(255, 170, 0, 0.12);
-  
-  --cyan-vtec: #00d2ff;
-  --cyan-vtec-soft: rgba(0, 210, 255, 0.12);
-  
-  --text-primary: #f8fafc;
-  --text-secondary: #94a3b8;
-  --text-tertiary: #64748b;
-  --text-quaternary: #475569;
-  
-  --font-digital: 'Chakra Petch', monospace, sans-serif;
-  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'Space Mono', monospace;
+  /* Graphite, not void. Pure #000 under saturated accents is most of what made the old
+     screen read as a game; a ground with a faint cool bias reads as a machined surface. */
+  --ground: #101215;
+  --panel: #181b20;
+  --panel-raised: #1f2328;
+
+  --hairline: rgba(255, 255, 255, 0.07);
+  --hairline-strong: rgba(255, 255, 255, 0.13);
+
+  --ink: #eef0f2;
+  --ink-2: #9aa1a9;
+  --ink-3: #6b727a;
+  --ink-4: #464c53;
+
+  /* Honda red, deepened and desaturated out of neon. The only accent in the app. */
+  --accent: #d8453b;
+  --accent-soft: rgba(216, 69, 59, 0.14);
+
+  /* Two signals, and they are not decoration - amber means a value wants a look, red
+     means it wants an action. Neither appears anywhere a value is behaving normally. */
+  --warn: #c8952e;
+  --warn-soft: rgba(200, 149, 46, 0.14);
+  --alert: #d8453b;
+  --alert-soft: rgba(216, 69, 59, 0.14);
+
+  /* One face. The platform's own, deliberately: a Capacitor app in a car loses the
+     network in tunnels and underground car parks, and a webfont that fails there takes
+     the whole readout's metrics with it. Roboto on Android and Segoe UI Variable on
+     Windows are both excellent instrument faces with real tabular figures. */
+  --font-body: ui-sans-serif, system-ui, "Segoe UI Variable Display", "Segoe UI",
+    Roboto, -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", "Roboto Mono", Consolas, monospace;
 }
 
+/*
+ * No `margin: 0; padding: 0` here, and it is not an oversight.
+ *
+ * Tailwind v4 emits its utilities inside `@layer utilities`, and an unlayered rule beats
+ * a layered one outright - the cascade decides on layer before it ever looks at
+ * specificity. So a bare `* { padding: 0 }` silently killed every px-*, ml-* and gap-*
+ * class in the app: the whole UI was rendering flush to both screen edges with labels
+ * jammed against their values ("3GEAR", "117°FWarming up"). Preflight already zeroes the
+ * margins that need zeroing, in a layer, where utilities can still override it.
+ */
 * {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
   -webkit-tap-highlight-color: transparent;
 }
 
-html, body, #root {
+html,
+body,
+#root {
   width: 100%;
   height: 100%;
   min-height: 100vh;
-  background-color: var(--bg-obsidian);
-  color: var(--text-primary);
+  background-color: var(--ground);
+  color: var(--ink);
   font-family: var(--font-body);
   overflow-x: hidden;
   user-select: none;
   -webkit-font-smoothing: antialiased;
 }
 
-/* Minimalist deep precision cockpit backdrop */
-body {
-  background-image: 
-    radial-gradient(ellipse at 50% 0%, rgba(255, 42, 64, 0.04) 0%, transparent 50%),
-    radial-gradient(ellipse at 50% 100%, rgba(0, 210, 255, 0.03) 0%, transparent 50%);
-  background-attachment: fixed;
-}
+/* No backdrop. The old two-colour radial wash tinted the whole screen red at the top and
+   cyan at the bottom, which is exactly the ambient glow that made it look like a HUD. */
 
-/* Tabular numbers for stable data scanning while driving */
+/* Digits that sit in a column, or that change while you are reading them, must not
+   reflow. Applied to every readout in the app rather than case by case. */
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
 
-/* Precision Telemetry Card - flat, minimal, zero visual bloat */
+@layer components {
+/* ── Type roles ──────────────────────────────────────────────────────────────
+   Four sizes, and they are roles rather than measurements. The old file had nine
+   distinct sizes below 12px, which is the density of a game HUD and unreadable at
+   arm's length in a car. */
+
+/* 10px, wide-tracked, uppercase. The only place uppercase survives. */
+.t-label {
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  line-height: 1.2;
+}
+
+/* 12.5px sentence case - the name of a value, next to the value. */
+.t-key {
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--ink-2);
+  line-height: 1.35;
+}
+
+/* 17px - a secondary readout. Tight tracking, tabular. */
+.t-value {
+  font-size: 17px;
+  font-weight: 400;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+/* The hero numeral. Hairline weight at large size is where the character lives - it is
+   what separates an instrument from a scoreboard. Sized inline by the gauge, which
+   derives it from the measured viewport. */
+.t-hero {
+  font-weight: 250;
+  letter-spacing: -0.045em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.t-unit {
+  font-weight: 300;
+  color: var(--ink-2);
+  letter-spacing: 0;
+}
+
+/* ── Surfaces ────────────────────────────────────────────────────────────────
+   The cockpit uses none of these. They exist for the deeper tabs, where separate
+   subjects sit next to each other and a boundary is carrying real information. */
+
 .telemetry-card {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
+  background: var(--panel);
+  border: 1px solid var(--hairline);
   border-radius: 14px;
-  padding: 14px;
+  padding: 16px;
   position: relative;
-  transition: border-color 0.15s ease;
 }
 
+/* One step in, and only one. Nothing nests inside this. */
 .telemetry-card-subtle {
-  background: var(--bg-surface-subtle);
-  border: 1px solid var(--border-subtle);
+  background: var(--panel-raised);
   border-radius: 10px;
-  padding: 10px;
+  padding: 12px;
 }
 
-/* Minimal Status Badges */
+/* A row in a list of values: hairline above, nothing else. This is what replaced the
+   bordered tiles on the cockpit. */
+.stat-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-top: 1px solid var(--hairline);
+}
+
+/* ── Status ──────────────────────────────────────────────────────────────────
+   A badge is now text and colour, with no fill and no border. The fill was doing the
+   same job as the colour and doubling the visual weight of a label. */
+
 .badge-pill {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 8px;
-  border-radius: 6px;
-  font-family: var(--font-digital);
   font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.5px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   line-height: 1;
+  color: var(--ink-3);
 }
 
-.badge-red {
-  background: var(--honda-red-soft);
-  color: #ff6b7b;
-  border: 1px solid rgba(255, 42, 64, 0.3);
+.badge-warn {
+  color: var(--warn);
 }
 
-.badge-green {
-  background: var(--eco-emerald-soft);
-  color: #5aff9f;
-  border: 1px solid rgba(0, 230, 118, 0.3);
+.badge-alert {
+  color: var(--alert);
 }
 
-.badge-amber {
-  background: var(--amber-warm-soft);
-  color: #ffc966;
-  border: 1px solid rgba(255, 170, 0, 0.3);
+.badge-accent {
+  color: var(--accent);
 }
 
-.badge-cyan {
-  background: var(--cyan-vtec-soft);
-  color: #70e4ff;
-  border: 1px solid rgba(0, 210, 255, 0.3);
+/* ── Bars ────────────────────────────────────────────────────────────────────
+   2px, square, no radius, no fill behind it beyond a hairline track. A rounded 8px bar
+   with a glowing fill reads as a health meter. */
+
+.meter {
+  height: 2px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
 }
 
-.badge-neutral {
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--text-secondary);
-  border: 1px solid var(--border-subtle);
+.meter > i {
+  display: block;
+  height: 100%;
+  background: var(--ink);
+  transition: width 400ms ease, background-color 220ms ease;
 }
 
-/* Redline strobe for high-RPM gear shift */
-@keyframes redline-strobe {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.25; }
+/* The redline strobe is gone. A 0.12s flash is a slot machine; at the one moment the
+   driver's attention is worth most, it made the bar harder to read, not easier. The
+   shift cue is now a colour change and a word. */
 }
 
-.animate-redline {
-  animation: redline-strobe 0.12s infinite;
+/* Everything below stays unlayered on purpose - these are overrides that must win, which
+   is the one case where beating the utility layer is the point. */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
-/* Smooth custom scrollbar for mobile overflow */
+/* Focus has to survive the redesign - it was never styled before, and a car app gets
+   driven from a Bluetooth keyboard and screen readers more than you would think. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 ::-webkit-scrollbar {
-  width: 4px;
-  height: 4px;
+  width: 3px;
+  height: 3px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
 }

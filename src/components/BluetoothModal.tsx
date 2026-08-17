@@ -84,23 +84,23 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-[#0e111a] border border-[rgba(255,255,255,0.12)] rounded-2xl max-w-md w-full p-5 shadow-2xl flex flex-col gap-4">
+      <div className="bg-[#181b20] border border-[rgba(255,255,255,0.12)] rounded-2xl max-w-md w-full p-5 shadow-2xl flex flex-col gap-4">
         {/* Modal Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#00d2ff] border border-[rgba(255,255,255,0.08)]">
+            <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#9aa1a9] border border-[rgba(255,255,255,0.08)]">
               <Bluetooth size={18} />
             </div>
             <div>
-              <h2 className="text-sm font-bold font-['Chakra_Petch'] text-[#f8fafc]">
+              <h2 className="text-sm font-bold text-[#eef0f2]">
                 OBD-II Hardware Link
               </h2>
-              <p className="text-[10px] text-[#64748b]">OBDLink MX+ BLE Interface</p>
+              <p className="text-[10px] text-[#6b727a]">OBDLink MX+ BLE Interface</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="p-1 rounded-lg text-[#64748b] hover:text-[#f8fafc] hover:bg-[#161a26] transition-colors"
+            className="p-1 rounded-lg text-[#6b727a] hover:text-[#eef0f2] hover:bg-[#1f2328] transition-colors"
           >
             <X size={16} />
           </button>
@@ -112,16 +112,16 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
             <div
               className={`w-2.5 h-2.5 rounded-full ${
                 status === 'connected'
-                  ? 'bg-[#00e676]'
+                  ? 'bg-[#eef0f2]'
                   : status === 'simulating'
-                  ? 'bg-[#00d2ff]'
+                  ? 'bg-[#9aa1a9]'
                   : status === 'connecting'
-                  ? 'bg-[#ffaa00] animate-pulse'
-                  : 'bg-[#ff2a40]'
+                  ? 'bg-[#c8952e]'
+                  : 'bg-[#d8453b]'
               }`}
             />
             <div className="flex flex-col">
-              <span className="text-xs font-bold font-['Chakra_Petch'] text-[#f8fafc] uppercase">
+              <span className="text-xs font-bold text-[#eef0f2] uppercase">
                 {status === 'connected'
                   ? 'Live OBD Connected'
                   : status === 'simulating'
@@ -130,21 +130,21 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
                   ? 'Connecting...'
                   : 'Disconnected'}
               </span>
-              <span className="text-[10px] text-[#64748b]">{statusMessage}</span>
+              <span className="text-[10px] text-[#6b727a]">{statusMessage}</span>
             </div>
           </div>
 
           {status === 'connected' ? (
             <button
               onClick={onDisconnect}
-              className="px-2.5 py-1.5 rounded-lg bg-[#ff2a40]/20 text-[#ff6b7b] border border-[#ff2a40]/40 text-xs font-bold font-['Chakra_Petch']"
+              className="px-2.5 py-1.5 rounded-lg bg-[#d8453b]/20 text-[#d8453b] border border-[#d8453b]/40 text-xs font-bold"
             >
               Disconnect
             </button>
           ) : (
             <button
               onClick={() => onConnect()}
-              className="px-3.5 py-1.5 rounded-xl bg-[#00d2ff] hover:bg-[#00b4db] text-black text-xs font-bold font-['Chakra_Petch'] transition-all flex items-center gap-1.5"
+              className="px-3.5 py-1.5 rounded-xl bg-[#9aa1a9] hover:bg-[#00b4db] text-black text-xs font-bold transition-all flex items-center gap-1.5"
             >
               <Radio size={13} />
               Pair OBDLink MX+
@@ -154,13 +154,13 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
 
         {/* Environment blocker - the things that make scanning fail before it starts */}
         {blocker && (
-          <div className="flex items-start gap-2 rounded-lg border border-[#ff2a40]/40 bg-[#ff2a40]/10 p-2.5 text-[11px] leading-relaxed text-[#ff9aa5]">
-            <AlertTriangle size={14} className="text-[#ff2a40] shrink-0 mt-0.5" />
+          <div className="flex items-start gap-2 rounded-lg border border-[#d8453b]/40 bg-[#d8453b]/10 p-2.5 text-[11px] leading-relaxed text-[#ff9aa5]">
+            <AlertTriangle size={14} className="text-[#d8453b] shrink-0 mt-0.5" />
             <span>{blocker}</span>
           </div>
         )}
         {env && !blocker && status !== 'connected' && (
-          <div className="flex items-center gap-2 rounded-lg border border-[#00e676]/30 bg-[#00e676]/10 p-2 text-[11px] text-[#5aff9f]">
+          <div className="flex items-center gap-2 rounded-lg border border-[#eef0f2]/30 bg-[#eef0f2]/10 p-2 text-[11px] text-[#eef0f2]">
             <CheckCircle2 size={13} className="shrink-0" />
             Browser, HTTPS and Bluetooth radio all check out.
           </div>
@@ -169,9 +169,9 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
         {/* Which physical link this build speaks. The distinction is the whole reason the
             native app exists, so it is stated rather than implied. */}
         {env && (
-          <div className="flex items-center justify-between gap-2 rounded-lg border border-[rgba(255,255,255,0.08)] bg-[#08090d] px-2.5 py-1.5 text-[11px]">
-            <span className="text-[#64748b] font-['Chakra_Petch'] uppercase tracking-wide">Link</span>
-            <span className={isNative ? 'text-[#00e676] font-bold' : 'text-[#94a3b8]'}>
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-[rgba(255,255,255,0.08)] bg-[#101215] px-2.5 py-1.5 text-[11px]">
+            <span className="text-[#6b727a] uppercase tracking-wide">Link</span>
+            <span className={isNative ? 'text-[#eef0f2] font-bold' : 'text-[#9aa1a9]'}>
               {env.transportLabel}
             </span>
           </div>
@@ -180,7 +180,7 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
         {/* Native: pick from adapters already paired in Android settings. */}
         {isNative && status !== 'connected' && env && env.pairedAdapters.length > 0 && (
           <div className="flex flex-col gap-1.5">
-            <span className="text-[11px] text-[#64748b] font-['Chakra_Petch'] uppercase tracking-wide">
+            <span className="text-[11px] text-[#6b727a] uppercase tracking-wide">
               Paired adapters
             </span>
             {env.pairedAdapters.map((device) => (
@@ -189,10 +189,10 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
                 onClick={() => onConnect({ address: device.address })}
                 className="flex items-center justify-between gap-2 w-full px-2.5 py-2 rounded-lg bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.12)] text-left transition-colors hover:bg-[rgba(255,255,255,0.1)]"
               >
-                <span className="text-[12px] font-bold text-[#f8fafc] font-['Chakra_Petch']">
+                <span className="text-[12px] font-bold text-[#eef0f2]">
                   {device.name}
                 </span>
-                <span className="text-[10px] text-[#64748b] tabular-nums">{device.address}</span>
+                <span className="text-[10px] text-[#6b727a] tabular-nums">{device.address}</span>
               </button>
             ))}
           </div>
@@ -203,27 +203,27 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
         {!isNative && status !== 'connected' && (
           <button
             onClick={() => onConnect({ acceptAllDevices: true })}
-            className="flex items-center justify-center gap-1.5 w-full py-2 rounded-lg bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.12)] text-[#f8fafc] text-[12px] font-bold font-['Chakra_Petch'] transition-colors hover:bg-[rgba(255,255,255,0.1)]"
+            className="flex items-center justify-center gap-1.5 w-full py-2 rounded-lg bg-[rgba(255,255,255,0.05)] border border-[rgba(255,255,255,0.12)] text-[#eef0f2] text-[12px] font-bold transition-colors hover:bg-[rgba(255,255,255,0.1)]"
           >
-            <Search size={13} className="text-[#00d2ff]" />
+            <Search size={13} className="text-[#9aa1a9]" />
             Show all nearby devices
           </button>
         )}
 
         {/* Native build: pairing lives in Android settings, so there is nothing to scan. */}
         {isNative && (
-          <div className="telemetry-card-subtle flex flex-col gap-2 text-xs text-[#94a3b8]">
-            <div className="flex items-center gap-1.5 text-[#f8fafc] font-bold font-['Chakra_Petch'] text-[11px]">
-              <Info size={13} className="text-[#00d2ff]" />
+          <div className="telemetry-card-subtle flex flex-col gap-2 text-xs text-[#9aa1a9]">
+            <div className="flex items-center gap-1.5 text-[#eef0f2] font-bold text-[11px]">
+              <Info size={13} className="text-[#9aa1a9]" />
               Native Bluetooth Classic
             </div>
             <p className="text-[11px] leading-relaxed">
               This build talks RFCOMM directly, which is what the OBDLink MX+ actually speaks —
               no LE scanning involved. Pair the adapter once in{' '}
-              <strong className="text-[#f8fafc]">Android Settings → Bluetooth</strong>, turn the
-              ignition to <strong className="text-[#f8fafc]">ON / II</strong>, then pick it above.
+              <strong className="text-[#eef0f2]">Android Settings → Bluetooth</strong>, turn the
+              ignition to <strong className="text-[#eef0f2]">ON / II</strong>, then pick it above.
             </p>
-            <p className="text-[10px] leading-relaxed text-[#64748b]">
+            <p className="text-[10px] leading-relaxed text-[#6b727a]">
               Nothing listed? Pair it in Android settings first. Connection refused? Close the
               official OBDLink app — only one app can hold the adapter at a time.
             </p>
@@ -232,33 +232,33 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
 
         {/* Browser build: the LE troubleshooting path */}
         {!isNative && (
-        <div className="telemetry-card-subtle flex flex-col gap-2 text-xs text-[#94a3b8]">
-          <div className="flex items-center gap-1.5 text-[#f8fafc] font-bold font-['Chakra_Petch'] text-[11px]">
-            <Info size={13} className="text-[#00d2ff]" />
+        <div className="telemetry-card-subtle flex flex-col gap-2 text-xs text-[#9aa1a9]">
+          <div className="flex items-center gap-1.5 text-[#eef0f2] font-bold text-[11px]">
+            <Info size={13} className="text-[#9aa1a9]" />
             If the list stays empty:
           </div>
-          <p className="text-[11px] leading-relaxed text-[#94a3b8]">
-            First answer this: in <strong className="text-[#f8fafc]">Show all nearby devices</strong>,
+          <p className="text-[11px] leading-relaxed text-[#9aa1a9]">
+            First answer this: in <strong className="text-[#eef0f2]">Show all nearby devices</strong>,
             did <em>any</em> device appear — earbuds, a TV, another phone?
           </p>
-          <div className="rounded-md border border-[rgba(255,255,255,0.08)] bg-[#08090d] p-2 text-[11px] leading-relaxed">
-            <p className="text-[#ffaa00] font-bold font-['Chakra_Petch']">Completely empty →</p>
-            <p className="text-[#94a3b8]">
+          <div className="rounded-md border border-[rgba(255,255,255,0.08)] bg-[#101215] p-2 text-[11px] leading-relaxed">
+            <p className="text-[#c8952e] font-bold">Completely empty →</p>
+            <p className="text-[#9aa1a9]">
               Android is blocking the scan, not the adapter. Grant Chrome{' '}
-              <strong className="text-[#f8fafc]">Nearby devices</strong> permission (Settings → Apps →
-              Chrome → Permissions) and switch <strong className="text-[#f8fafc]">Location</strong> on.
+              <strong className="text-[#eef0f2]">Nearby devices</strong> permission (Settings → Apps →
+              Chrome → Permissions) and switch <strong className="text-[#eef0f2]">Location</strong> on.
               Both are required for any BLE scan, and both fail silently.
             </p>
           </div>
-          <div className="rounded-md border border-[rgba(255,255,255,0.08)] bg-[#08090d] p-2 text-[11px] leading-relaxed">
-            <p className="text-[#00d2ff] font-bold font-['Chakra_Petch']">Other devices, but not the adapter →</p>
-            <p className="text-[#94a3b8]">
+          <div className="rounded-md border border-[rgba(255,255,255,0.08)] bg-[#101215] p-2 text-[11px] leading-relaxed">
+            <p className="text-[#9aa1a9] font-bold">Other devices, but not the adapter →</p>
+            <p className="text-[#9aa1a9]">
               It is not advertising over LE. Forget it in Android Bluetooth settings, turn the
-              ignition to <strong className="text-[#f8fafc]">ON / II</strong>, then hold the adapter's
-              <strong className="text-[#f8fafc]"> Pair</strong> button until its LED flashes and scan again.
+              ignition to <strong className="text-[#eef0f2]">ON / II</strong>, then hold the adapter's
+              <strong className="text-[#eef0f2]"> Pair</strong> button until its LED flashes and scan again.
             </p>
           </div>
-          <p className="text-[10px] leading-relaxed text-[#64748b]">
+          <p className="text-[10px] leading-relaxed text-[#6b727a]">
             Still nothing? Install a BLE scanner (nRF Connect) and look for the adapter there. That
             app sees everything advertising over LE — if it cannot find it either, the adapter does
             not speak Bluetooth LE on Android, and no browser can reach it — that is what the
@@ -271,16 +271,16 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
             is indistinguishable from one that worked - the gauges simply never move. */}
         {log.length > 0 && (
           <div className="flex flex-col gap-1.5">
-            <span className="text-[11px] text-[#64748b] font-['Chakra_Petch'] uppercase tracking-wide">
+            <span className="text-[11px] text-[#6b727a] uppercase tracking-wide">
               Adapter log
             </span>
-            <div className="max-h-36 overflow-y-auto rounded-lg border border-[rgba(255,255,255,0.08)] bg-[#08090d] p-2 font-mono text-[10px] leading-relaxed">
+            <div className="max-h-36 overflow-y-auto rounded-lg border border-[rgba(255,255,255,0.08)] bg-[#101215] p-2 font-mono text-[10px] leading-relaxed">
               {log.map((entry, i) => (
                 <div key={i} className="flex gap-1.5">
-                  <span className="text-[#00d2ff] shrink-0">{entry.cmd}</span>
+                  <span className="text-[#9aa1a9] shrink-0">{entry.cmd}</span>
                   <span
                     className={
-                      entry.resp === '(no reply)' ? 'text-[#ff6b7b]' : 'text-[#94a3b8] break-all'
+                      entry.resp === '(no reply)' ? 'text-[#d8453b]' : 'text-[#9aa1a9] break-all'
                     }
                   >
                     {entry.resp.replace(/\r/g, ' ')}
@@ -293,13 +293,13 @@ export const BluetoothModal: React.FC<BluetoothModalProps> = ({
 
         {/* Switch to Simulator */}
         <div className="flex items-center justify-between pt-1 border-t border-[rgba(255,255,255,0.06)]">
-          <span className="text-[11px] text-[#64748b]">Testing without vehicle?</span>
+          <span className="text-[11px] text-[#6b727a]">Testing without vehicle?</span>
           <button
             onClick={() => {
               onStartSim();
               onClose();
             }}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)] text-[#00d2ff] text-xs font-bold font-['Chakra_Petch'] transition-colors"
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[rgba(255,255,255,0.05)] hover:bg-[rgba(255,255,255,0.1)] text-[#9aa1a9] text-xs font-bold transition-colors"
           >
             <Cpu size={13} />
             Run Simulator

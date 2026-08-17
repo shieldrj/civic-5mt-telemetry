@@ -41,32 +41,32 @@ export const PidDiscoveryCard: React.FC = () => {
     <div className="telemetry-card flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Radar size={16} className="text-[#00d2ff]" />
+          <Radar size={16} className="text-[#9aa1a9]" />
           <div className="flex flex-col">
-            <span className="text-[13px] font-bold font-['Chakra_Petch'] text-[#f8fafc]">
+            <span className="text-[13px] font-bold text-[#eef0f2]">
               Sensor Discovery
             </span>
-            <span className="text-[10px] text-[#64748b]">What this car actually exposes</span>
+            <span className="text-[10px] text-[#6b727a]">What this car actually exposes</span>
           </div>
         </div>
         <button
           onClick={handleScan}
           disabled={isScanning}
-          className="px-3 py-1.5 rounded-lg bg-[#00d2ff] disabled:bg-[#1e2534] disabled:text-[#64748b] text-black text-[11px] font-bold font-['Chakra_Petch'] transition-colors"
+          className="px-3 py-1.5 rounded-lg bg-[#9aa1a9] disabled:bg-[#1e2534] disabled:text-[#6b727a] text-black text-[11px] font-bold transition-colors"
         >
           {isScanning ? `${progress.done}/${progress.total || '…'}` : results ? 'Rescan' : 'Scan'}
         </button>
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-lg border border-[#ff2a40]/40 bg-[#ff2a40]/10 p-2.5 text-[11px] leading-relaxed text-[#ff9aa5]">
-          <AlertTriangle size={14} className="text-[#ff2a40] shrink-0 mt-0.5" />
+        <div className="flex items-start gap-2 rounded-lg border border-[#d8453b]/40 bg-[#d8453b]/10 p-2.5 text-[11px] leading-relaxed text-[#ff9aa5]">
+          <AlertTriangle size={14} className="text-[#d8453b] shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
       )}
 
       {!results && !error && !isScanning && (
-        <p className="text-[11px] leading-relaxed text-[#94a3b8]">
+        <p className="text-[11px] leading-relaxed text-[#9aa1a9]">
           Reads the support list from the ECU, then asks for every sensor on it. Takes a few
           seconds and needs the engine running. The gauges keep updating while it runs, just
           more slowly — they share one connection to the adapter.
@@ -77,18 +77,18 @@ export const PidDiscoveryCard: React.FC = () => {
         <>
           <div className="grid grid-cols-3 gap-1.5">
             {[
-              { label: 'Supported', value: sensors.length, tone: 'text-[#f8fafc]' },
-              { label: 'Answered', value: answered.length, tone: 'text-[#00e676]' },
-              { label: 'Unused', value: unused.length, tone: 'text-[#ffaa00]' },
+              { label: 'Supported', value: sensors.length, tone: 'text-[#eef0f2]' },
+              { label: 'Answered', value: answered.length, tone: 'text-[#eef0f2]' },
+              { label: 'Unused', value: unused.length, tone: 'text-[#c8952e]' },
             ].map((s) => (
               <div
                 key={s.label}
-                className="flex flex-col items-center gap-0.5 py-2 rounded-lg bg-[#08090d] border border-[rgba(255,255,255,0.08)]"
+                className="flex flex-col items-center gap-0.5 py-2 rounded-lg bg-[#101215] border border-[rgba(255,255,255,0.08)]"
               >
-                <span className={`text-[16px] font-bold font-['Chakra_Petch'] tabular-nums ${s.tone}`}>
+                <span className={`text-[16px] font-bold tabular-nums ${s.tone}`}>
                   {s.value}
                 </span>
-                <span className="text-[9px] text-[#64748b] uppercase tracking-wide">{s.label}</span>
+                <span className="text-[9px] text-[#6b727a] uppercase tracking-wide">{s.label}</span>
               </div>
             ))}
           </div>
@@ -97,20 +97,20 @@ export const PidDiscoveryCard: React.FC = () => {
             {sensors.map((r) => (
               <div
                 key={r.cmd}
-                className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-[#08090d] border border-[rgba(255,255,255,0.06)]"
+                className="flex items-center gap-2 px-2 py-1.5 rounded-lg bg-[#101215] border border-[rgba(255,255,255,0.06)]"
               >
                 {r.inUse ? (
-                  <CheckCircle2 size={12} className="text-[#00e676] shrink-0" />
+                  <CheckCircle2 size={12} className="text-[#eef0f2] shrink-0" />
                 ) : (
-                  <Circle size={12} className="text-[#475569] shrink-0" />
+                  <Circle size={12} className="text-[#464c53] shrink-0" />
                 )}
-                <span className="font-mono text-[10px] text-[#00d2ff] shrink-0 w-9">
+                <span className="font-mono text-[10px] text-[#9aa1a9] shrink-0 w-9">
                   {r.cmd.slice(2)}
                 </span>
-                <span className="text-[11px] text-[#f8fafc] flex-1 truncate">{r.name}</span>
+                <span className="text-[11px] text-[#eef0f2] flex-1 truncate">{r.name}</span>
                 <span
                   className={`text-[11px] font-bold tabular-nums shrink-0 ${
-                    r.value !== null ? 'text-[#f8fafc]' : 'text-[#64748b] font-mono text-[10px]'
+                    r.value !== null ? 'text-[#eef0f2]' : 'text-[#6b727a] font-mono text-[10px]'
                   }`}
                 >
                   {/* No formula in the catalogue: show the hex rather than invent a number. */}
@@ -120,10 +120,10 @@ export const PidDiscoveryCard: React.FC = () => {
             ))}
           </div>
 
-          <p className="text-[10px] leading-relaxed text-[#64748b]">
-            <CheckCircle2 size={10} className="inline text-[#00e676] mr-1" />
+          <p className="text-[10px] leading-relaxed text-[#6b727a]">
+            <CheckCircle2 size={10} className="inline text-[#eef0f2] mr-1" />
             already drives a gauge ·{' '}
-            <Circle size={10} className="inline text-[#475569] mr-1" />
+            <Circle size={10} className="inline text-[#464c53] mr-1" />
             available but unused. A row showing hex instead of a value means the car answered
             but this app has no formula for it yet.
           </p>

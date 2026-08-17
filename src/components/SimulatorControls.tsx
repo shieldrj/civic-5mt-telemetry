@@ -42,18 +42,18 @@ export const SimulatorControls: React.FC<SimulatorControlsProps> = ({
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#00d2ff] border border-[rgba(255,255,255,0.08)]">
+          <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#9aa1a9] border border-[rgba(255,255,255,0.08)]">
             <Sliders size={16} />
           </div>
           <div>
-            <h3 className="text-xs font-bold text-[#f8fafc] font-['Chakra_Petch'] tracking-wide">
+            <h3 className="text-xs font-bold text-[#eef0f2] tracking-wide">
               VIRTUAL 2013 CIVIC ECU BENCH
             </h3>
-            <p className="text-[10px] text-[#64748b]">Real-time Calculation & Sensor Simulation</p>
+            <p className="text-[10px] text-[#6b727a]">Real-time Calculation & Sensor Simulation</p>
           </div>
         </div>
 
-        <span className="badge-pill badge-cyan">
+        <span className="badge-pill">
           <Sparkles size={11} />
           SIMULATOR READY
         </span>
@@ -69,17 +69,17 @@ export const SimulatorControls: React.FC<SimulatorControlsProps> = ({
               onClick={() => onSelectScenario(s.id)}
               className={`p-2.5 rounded-xl border text-left flex flex-col justify-between transition-all ${
                 isSelected
-                  ? 'bg-[#182030] border-[#00d2ff]'
-                  : 'bg-[#08090d] border-[rgba(255,255,255,0.06)] hover:border-[rgba(255,255,255,0.12)]'
+                  ? 'bg-[#182030] border-[#9aa1a9]'
+                  : 'bg-[#101215] border-[rgba(255,255,255,0.06)] hover:border-[rgba(255,255,255,0.12)]'
               }`}
             >
               <div className="flex items-center justify-between w-full">
-                <span className={`text-xs font-bold font-['Chakra_Petch'] ${isSelected ? 'text-[#00d2ff]' : 'text-[#f8fafc]'}`}>
+                <span className={`text-xs font-bold ${isSelected ? 'text-[#9aa1a9]' : 'text-[#eef0f2]'}`}>
                   {s.label}
                 </span>
-                {isSelected && <Play size={10} className="text-[#00d2ff] fill-[#00d2ff]" />}
+                {isSelected && <Play size={10} className="text-[#9aa1a9] fill-[#9aa1a9]" />}
               </div>
-              <p className="text-[9px] text-[#64748b] mt-1 leading-tight">{s.desc}</p>
+              <p className="text-[9px] text-[#6b727a] mt-1 leading-tight">{s.desc}</p>
             </button>
           );
         })}
@@ -88,9 +88,9 @@ export const SimulatorControls: React.FC<SimulatorControlsProps> = ({
       {/* Interactive Pedals Slider */}
       {scenario === 'manual' && (
         <div className="telemetry-card-subtle flex flex-col gap-2.5">
-          <div className="flex items-center justify-between text-xs font-['Chakra_Petch']">
-            <span className="text-[#94a3b8] text-[11px]">THROTTLE PEDAL</span>
-            <span className="text-[#00d2ff] font-bold tabular-nums">{sim.throttlePos}%</span>
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-[#9aa1a9] text-[11px]">THROTTLE PEDAL</span>
+            <span className="text-[#9aa1a9] font-bold tabular-nums">{sim.throttlePos}%</span>
           </div>
           <input
             type="range"
@@ -100,7 +100,7 @@ export const SimulatorControls: React.FC<SimulatorControlsProps> = ({
             onChange={(e) => {
               sim.throttlePos = parseInt(e.target.value, 10);
             }}
-            className="w-full h-1.5 bg-[#161a26] rounded-lg appearance-none cursor-pointer accent-[#00d2ff]"
+            className="w-full h-1.5 bg-[#1f2328] rounded-lg appearance-none cursor-pointer accent-[#9aa1a9]"
           />
 
           <div className="flex items-center justify-between pt-1">
@@ -109,10 +109,10 @@ export const SimulatorControls: React.FC<SimulatorControlsProps> = ({
               onMouseUp={() => { sim.clutchPressed = false; }}
               onTouchStart={() => { sim.clutchPressed = true; }}
               onTouchEnd={() => { sim.clutchPressed = false; }}
-              className={`px-3 py-1.5 rounded-lg border text-xs font-bold font-['Chakra_Petch'] transition-all ${
+              className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${
                 sim.clutchPressed
-                  ? 'bg-[#ffaa00] text-black border-[#ffc966]'
-                  : 'bg-[#161a26] text-[#94a3b8] border-[#252b3d]'
+                  ? 'bg-[#c8952e] text-black border-[#c8952e]'
+                  : 'bg-[#1f2328] text-[#9aa1a9] border-[#252b3d]'
               }`}
             >
               🦶 Hold Clutch
@@ -126,10 +126,10 @@ export const SimulatorControls: React.FC<SimulatorControlsProps> = ({
                   onClick={() => {
                     sim.manualGear = g;
                   }}
-                  className={`w-7 h-7 rounded-md font-bold font-['Chakra_Petch'] text-xs border ${
+                  className={`w-7 h-7 rounded-md font-bold text-xs border ${
                     sim.manualGear === g
-                      ? 'bg-[#ff2a40] text-white border-[#ff4b5c]'
-                      : 'bg-[#121622] text-[#64748b] border-[#1a2030]'
+                      ? 'bg-[#d8453b] text-white border-[#d8453b]'
+                      : 'bg-[#1f2328] text-[#6b727a] border-[#1a2030]'
                   }`}
                 >
                   {g}

@@ -114,6 +114,8 @@ export class TelemetryManager {
       o2Sensor2Voltage: 0.65,
       engineRuntimeSec: 0,
       instantMpg: 0,
+      displayMpg: 0,
+      mpgDisplayState: 'idle',
       isDfcoActive: false,
       fuelFlowGalPerHour: 0.22,
       fuelFlowLitersPerHour: 0.83,
@@ -261,8 +263,13 @@ export class TelemetryManager {
     this.lastUpdateTimestamp = Date.now();
     if (this.timerHandle) clearInterval(this.timerHandle);
     
-    // Run telemetry processing at 12.5Hz (80ms interval) with GPU CSS needle interpolation for battery efficiency
-    this.timerHandle = setInterval(() => this.processUpdateStep(), 80);
+    // 12.5Hz, with CSS interpolating the needle between steps for battery efficiency. The
+    // period is a spec constant because the rolling-MPG buffer is sized in samples and has
+    // to divide by it; see CIVIC_2013_SPECS.telemetryTickMs.
+    this.timerHandle = setInterval(
+      () => this.processUpdateStep(),
+      CIVIC_2013_SPECS.telemetryTickMs
+    );
   }
 
   private stopLoop(): void {
@@ -313,6 +320,7 @@ export class TelemetryManager {
     // 4. Instantaneous MPG & Rolling Window
     const instantMpg = this.fuelModel.calculateInstantMpg(speedMph, fuelFlow.fuelFlowGalPerHour, isDfco);
     const rollingMpg = this.fuelModel.updateRollingMpg(instantMpg);
+    const displayMpg = this.fuelModel.updateDisplayMpg(instantMpg, speedMph, isDfco, dtSec);
     const fuelRangeMiles = this.fuelModel.calculateFuelRange(
       raw.fuelLevelPercent,
       CIVIC_2013_SPECS.fuelTankCapacityGallons,
@@ -341,6 +349,8 @@ export class TelemetryManager {
       o2Sensor2Voltage: parseFloat(raw.o2Sensor2Voltage.toFixed(3)),
       engineRuntimeSec: raw.engineRuntimeSec,
       instantMpg: parseFloat(instantMpg.toFixed(1)),
+      displayMpg: parseFloat(displayMpg.value.toFixed(1)),
+      mpgDisplayState: displayMpg.state,
       isDfcoActive: isDfco,
       fuelFlowGalPerHour: parseFloat(fuelFlow.fuelFlowGalPerHour.toFixed(3)),
       fuelFlowLitersPerHour: parseFloat(fuelFlow.fuelFlowLitersPerHour.toFixed(2)),
