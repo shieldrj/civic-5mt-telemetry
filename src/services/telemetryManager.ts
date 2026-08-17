@@ -55,9 +55,18 @@ export class TelemetryManager {
 
     // The 30s save debounce would otherwise lose the tail of a drive whenever the app is
     // backgrounded or closed, which on a phone is how it ends every single time.
+    //
+    // Both records need this, not just the lifetime one. Oil wear is debounced on the
+    // same 30 second timer inside OilLifeEngine but was never flushed here, so every
+    // drive quietly discarded up to its last 30 seconds of accumulated wear - and unlike
+    // the lifetime figure, oil life only ever moves in one direction, so the loss is
+    // systematic rather than averaging out.
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') this.saveLifetimeStats();
+        if (document.visibilityState === 'hidden') {
+          this.saveLifetimeStats();
+          this.oilLifeModel.saveProfile();
+        }
       });
     }
 
