@@ -442,7 +442,12 @@ export function App() {
             onResetOil={() => telemetryManager.resetOilLife()}
           />
 
-          <section className="telemetry-card flex flex-col gap-3">
+          {/* Card-less, like everything above it. A single card appearing at the bottom of
+              a hairline-separated page reads as a component someone forgot to convert. */}
+          <section
+            className="flex flex-col gap-3 pt-4"
+            style={{ borderTop: '1px solid var(--hairline)' }}
+          >
             <h3 style={{ fontSize: 14, fontWeight: 500, letterSpacing: '-0.01em' }}>
               How oil life is calculated
             </h3>
@@ -451,7 +456,7 @@ export function App() {
               wear oil at very different rates, so a month of short cold trips costs more life
               than the same miles on a motorway.
             </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div className="flex flex-col gap-4 pt-1">
               {[
                 {
                   h: 'Crankshaft revolutions',
@@ -470,9 +475,9 @@ export function App() {
                   p: 'Sustained pulls above 4,500 rpm under load thin the oil film and break down viscosity.',
                 },
               ].map((item) => (
-                <div key={item.h} className="telemetry-card-subtle flex flex-col gap-1.5">
+                <div key={item.h} className="flex flex-col gap-1">
                   <strong style={{ fontSize: 12.5, fontWeight: 500, color: INK }}>{item.h}</strong>
-                  <p style={{ fontSize: 12, color: INK_3, lineHeight: 1.55 }}>{item.p}</p>
+                  <p style={{ fontSize: 12.5, color: INK_3, lineHeight: 1.6 }}>{item.p}</p>
                 </div>
               ))}
             </div>

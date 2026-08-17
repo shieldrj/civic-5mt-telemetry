@@ -1,16 +1,5 @@
 import React, { useState } from 'react';
-import {
-  Search,
-  AlertTriangle,
-  CheckCircle2,
-  AlertOctagon,
-  Clock,
-  Trash2,
-  RefreshCw,
-  HelpCircle,
-  Zap,
-  ShieldCheck
-} from 'lucide-react';
+import { AlertTriangle, AlertOctagon, Clock, HelpCircle, ShieldCheck } from 'lucide-react';
 import { DtcScanReport, ScannedDtc } from '../services/obd2/dtcScanner';
 import { telemetryManager } from '../services/telemetryManager';
 
@@ -55,152 +44,118 @@ export const DtcScannerCard: React.FC = () => {
   const permanentCount = report?.permanentCodes.length || 0;
 
   return (
-    <div className="telemetry-card flex flex-col gap-3.5">
-      {/* Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[rgba(255,255,255,0.06)] pb-3">
-        <div className="flex items-center gap-2.5">
-          <div className="p-1.5 rounded-lg bg-[rgba(255,255,255,0.05)] text-[#d8453b] border border-[rgba(255,255,255,0.08)]">
-            <Search size={18} />
-          </div>
-          <div>
-            <h2 className="text-sm font-bold text-[#eef0f2] tracking-wide">
-              DIAGNOSTIC TROUBLE SCANNER (DTC)
-            </h2>
-            <p className="text-[10px] text-[#6b727a]">Mode 03 (Current) • Mode 07 (Pending / No CEL) • Mode 0A (Permanent)</p>
-          </div>
+    <div className="flex flex-col gap-5">
+      {/* Scanning is the one real verb on this screen, so it keeps a button shape - but a
+          bordered one. A solid red fill made the loudest thing on the tab an action you
+          take a couple of times a year. */}
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <div>
+          <h2 style={{ fontSize: 15, fontWeight: 500, letterSpacing: '-0.01em', color: '#eef0f2' }}>
+            Trouble codes
+          </h2>
+          <p style={{ fontSize: 11.5, color: '#6b727a', marginTop: 3 }}>
+            Modes 03, 07 and 0A — current, pending and permanent
+          </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-5 shrink-0">
           {report && allCodes.length > 0 && (
             <button
               onClick={() => setShowClearModal(true)}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-[#d8453b]/15 text-[#d8453b] hover:bg-[#d8453b]/25 border border-[#d8453b]/30 text-xs font-bold transition-all"
+              className="transition-colors"
+              style={{ fontSize: 12.5, color: '#d8453b' }}
             >
-              <Trash2 size={12} />
-              Clear DTCs
+              Clear codes
             </button>
           )}
 
           <button
             onClick={handleScan}
             disabled={isScanning}
-            className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-[#d8453b] hover:bg-[#d61c2f] text-white text-xs font-bold transition-all disabled:opacity-50"
+            className="px-4 py-2 transition-colors disabled:opacity-50"
+            style={{
+              fontSize: 12.5,
+              color: '#eef0f2',
+              border: '1px solid var(--hairline-strong)',
+              borderRadius: 8,
+            }}
           >
-            {isScanning ? (
-              <>
-                <RefreshCw size={13} className="animate-spin" />
-                Scanning ECU...
-              </>
-            ) : (
-              <>
-                <Search size={13} />
-                Run Diagnostic Scan
-              </>
-            )}
+            {isScanning ? 'Scanning…' : 'Run scan'}
           </button>
         </div>
       </div>
 
-      {/* Summary Status Strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-        {/* CEL Status */}
-        <div className="telemetry-card-subtle flex flex-col justify-between">
-          <span className="text-[9px] font-bold text-[#6b727a] uppercase">
-            Check Engine Light
+      {/* Four counts as rows. As tiles they were four filled boxes in a grid, each with a
+          label, a value, a unit and a footnote in four different sizes - and the values
+          are zero almost every time you look. */}
+      <div className="flex flex-col">
+        <div className="stat-row">
+          <span className="t-key">Check engine light</span>
+          <span className="t-value" style={{ color: report?.milOn ? '#d8453b' : '#eef0f2' }}>
+            {report?.milOn ? 'On' : 'Off'}
           </span>
-          <div className="flex items-center gap-1.5 mt-1">
-            <div className={`w-2 h-2 rounded-full ${report?.milOn ? 'bg-[#d8453b]' : 'bg-[#eef0f2]'}`} />
-            <span className={`text-xs font-bold ${report?.milOn ? 'text-[#d8453b]' : 'text-[#eef0f2]'}`}>
-              {report?.milOn ? 'MIL ON' : 'MIL OFF (NORMAL)'}
-            </span>
-          </div>
-          <span className="text-[8px] text-[#6b727a]">Dash Warning Light</span>
         </div>
-
-        {/* Pending Codes */}
-        <div className="telemetry-card-subtle flex flex-col justify-between">
-          <span className="text-[9px] font-bold text-[#9aa1a9] uppercase flex items-center gap-1">
-            <Zap size={10} />
-            Pending (No CEL)
-          </span>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className={`text-xl font-medium tabular-nums ${pendingCount > 0 ? 'text-[#9aa1a9]' : 'text-[#eef0f2]'}`}>
-              {pendingCount}
+        <div className="stat-row">
+          <span className="t-key">Confirmed</span>
+          <span
+            className="t-value tabular-nums"
+            style={{ color: confirmedCount > 0 ? '#c8952e' : '#eef0f2' }}
+          >
+            {confirmedCount}
+            <span className="ml-2.5" style={{ fontSize: 11.5, color: '#6b727a' }}>
+              active faults
             </span>
-            <span className="text-[9px] text-[#6b727a]">early warnings</span>
-          </div>
-          <span className="text-[8px] text-[#6b727a]">Intermittent faults</span>
+          </span>
         </div>
-
-        {/* Confirmed Codes */}
-        <div className="telemetry-card-subtle flex flex-col justify-between">
-          <span className="text-[9px] font-bold text-[#c8952e] uppercase">
-            Confirmed Codes
-          </span>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className={`text-xl font-medium tabular-nums ${confirmedCount > 0 ? 'text-[#c8952e]' : 'text-[#eef0f2]'}`}>
-              {confirmedCount}
+        <div className="stat-row">
+          <span className="t-key">Pending</span>
+          <span className="t-value tabular-nums">
+            {pendingCount}
+            <span className="ml-2.5" style={{ fontSize: 11.5, color: '#6b727a' }}>
+              no dash light yet
             </span>
-            <span className="text-[9px] text-[#6b727a]">active faults</span>
-          </div>
-          <span className="text-[8px] text-[#6b727a]">Mode 03 verified</span>
+          </span>
         </div>
-
-        {/* Permanent Codes */}
-        <div className="telemetry-card-subtle flex flex-col justify-between">
-          <span className="text-[9px] font-bold text-[#6b727a] uppercase">
-            Permanent / NVRAM
-          </span>
-          <div className="flex items-baseline gap-1 mt-1">
-            <span className="text-xl font-medium text-[#9aa1a9] tabular-nums">
-              {permanentCount}
+        <div className="stat-row">
+          <span className="t-key">Permanent</span>
+          <span className="t-value tabular-nums">
+            {permanentCount}
+            <span className="ml-2.5" style={{ fontSize: 11.5, color: '#6b727a' }}>
+              in ECU memory
             </span>
-            <span className="text-[9px] text-[#6b727a]">in memory</span>
-          </div>
-          <span className="text-[8px] text-[#6b727a]">Mode 0A NVRAM history</span>
+          </span>
         </div>
       </div>
 
-      {/* Explanatory Banner */}
-      <div className="bg-[#9aa1a9]/10 border border-[#9aa1a9]/20 rounded-xl p-3 flex items-start gap-2.5 text-xs text-[#9aa1a9] leading-relaxed">
-        <Zap size={15} className="text-[#9aa1a9] shrink-0 mt-0.5" />
-        <div>
-          <strong className="text-[#9aa1a9] uppercase block text-[11px]">
-            Mode 07 Pending Codes (Catch Issues Before a Dashboard CEL)
-          </strong>
-          When the Civic ECU detects an intermittent sensor anomaly or single-trip misfire, it logs a <strong>Pending Code</strong>. The dashboard CEL will only turn on after repeating across 2–3 drive cycles.
-        </div>
+      <div className="flex flex-col gap-2 pt-4" style={{ borderTop: '1px solid var(--hairline)' }}>
+        <h3 style={{ fontSize: 13, fontWeight: 500, color: '#eef0f2' }}>
+          What a pending code means
+        </h3>
+        <p style={{ fontSize: 12.5, color: '#6b727a', lineHeight: 1.6 }}>
+          When the ECU sees an intermittent sensor reading or a single-trip misfire it logs the
+          fault without lighting the dash. The warning light only comes on if the same fault
+          repeats across two or three drive cycles — so a pending code is the early warning.
+        </p>
       </div>
 
       {/* Main Results */}
       {!report && !isScanning ? (
-        <div className="telemetry-card-subtle p-8 flex flex-col items-center justify-center text-center gap-3">
-          <Search size={28} className="text-[#464c53]" />
-          <div className="flex flex-col gap-1">
-            <h3 className="text-xs font-bold text-[#eef0f2]">
-              No Diagnostic Scan Run Yet
-            </h3>
-            <p className="text-[11px] text-[#6b727a] max-w-sm">
-              Click <strong>Run Diagnostic Scan</strong> above to query Modes 03, 07, and 0A across your Civic ECU.
-            </p>
-          </div>
-          <button
-            onClick={handleScan}
-            className="mt-1 px-3 py-1.5 rounded-lg bg-[#1f2328] hover:bg-[#1f2638] text-[#9aa1a9] text-xs font-bold border border-[#9aa1a9]/30 transition-all"
-          >
-            Start Scan Now
-          </button>
+        <div
+          className="flex flex-col items-center text-center gap-2 py-10"
+          style={{ borderTop: '1px solid var(--hairline)' }}
+        >
+          <p style={{ fontSize: 13, color: '#6b727a', maxWidth: '32ch', lineHeight: 1.6 }}>
+            Nothing scanned yet. Run a scan to read modes 03, 07 and 0A off the ECU.
+          </p>
         </div>
       ) : allCodes.length === 0 ? (
-        <div className="telemetry-card-subtle p-8 flex flex-col items-center justify-center text-center gap-2">
-          <div className="w-10 h-10 rounded-full bg-[#eef0f2]/15 border border-[#eef0f2]/30 flex items-center justify-center text-[#eef0f2]">
-            <CheckCircle2 size={20} />
-          </div>
-          <h3 className="text-sm font-bold text-[#eef0f2]">
-            Zero Fault Codes Found!
-          </h3>
-          <p className="text-xs text-[#9aa1a9] max-w-md">
-            No confirmed, pending, or permanent diagnostic trouble codes exist in your 2013 Civic ECU memory. All systems are operating within factory tolerances.
+        <div
+          className="flex flex-col items-center text-center gap-2 py-10"
+          style={{ borderTop: '1px solid var(--hairline)' }}
+        >
+          <h3 style={{ fontSize: 15, fontWeight: 500, color: '#eef0f2' }}>No codes</h3>
+          <p style={{ fontSize: 13, color: '#6b727a', maxWidth: '38ch', lineHeight: 1.6 }}>
+            Nothing confirmed, pending or stored in memory.
           </p>
         </div>
       ) : (

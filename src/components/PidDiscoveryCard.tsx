@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Radar, AlertTriangle, CheckCircle2, Circle } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Circle } from 'lucide-react';
 import { telemetryManager } from '../services/telemetryManager';
 import type { PidProbeResult } from '../services/bluetooth/obdlinkBluetooth';
 
@@ -38,29 +38,43 @@ export const PidDiscoveryCard: React.FC = () => {
   const unused = answered.filter((r) => !r.inUse);
 
   return (
-    <div className="telemetry-card flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <Radar size={16} className="text-[#9aa1a9]" />
-          <div className="flex flex-col">
-            <span className="text-[13px] font-bold text-[#eef0f2]">
-              Sensor Discovery
-            </span>
-            <span className="text-[10px] text-[#6b727a]">What this car actually exposes</span>
-          </div>
+    <div className="flex flex-col gap-4 pt-4" style={{ borderTop: '1px solid var(--hairline)' }}>
+      <div className="flex items-baseline justify-between gap-3">
+        <div>
+          <h3 style={{ fontSize: 15, fontWeight: 500, letterSpacing: '-0.01em', color: '#eef0f2' }}>
+            Sensor discovery
+          </h3>
+          <p style={{ fontSize: 11.5, color: '#6b727a', marginTop: 3 }}>
+            What this car actually exposes
+          </p>
         </div>
+        {/* Was a solid white pill with black text: the brightest element anywhere in the
+            app, on a secondary action nested inside a secondary tab. */}
         <button
           onClick={handleScan}
           disabled={isScanning}
-          className="px-3 py-1.5 rounded-lg bg-[#9aa1a9] disabled:bg-[#1e2534] disabled:text-[#6b727a] text-black text-[11px] font-bold transition-colors"
+          className="px-4 py-2 transition-colors disabled:opacity-50 shrink-0"
+          style={{
+            fontSize: 12.5,
+            color: '#eef0f2',
+            border: '1px solid var(--hairline-strong)',
+            borderRadius: 8,
+          }}
         >
-          {isScanning ? `${progress.done}/${progress.total || '…'}` : results ? 'Rescan' : 'Scan'}
+          {isScanning
+            ? `${progress.done}/${progress.total || '…'}`
+            : results
+            ? 'Rescan'
+            : 'Scan'}
         </button>
       </div>
 
       {error && (
-        <div className="flex items-start gap-2 rounded-lg border border-[#d8453b]/40 bg-[#d8453b]/10 p-2.5 text-[11px] leading-relaxed text-[#ff9aa5]">
-          <AlertTriangle size={14} className="text-[#d8453b] shrink-0 mt-0.5" />
+        <div
+          className="flex items-start gap-2"
+          style={{ fontSize: 12.5, color: '#d8453b', lineHeight: 1.6 }}
+        >
+          <AlertTriangle size={14} className="shrink-0 mt-0.5" />
           <span>{error}</span>
         </div>
       )}
