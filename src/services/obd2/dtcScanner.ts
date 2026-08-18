@@ -1,5 +1,7 @@
 import { OBDLinkBluetoothManager } from '../bluetooth/obdlinkBluetooth';
 import { DtcDefinition, HONDA_DTC_DATABASE } from './dtcSpecs';
+import { decodeReadinessMonitors, UNKNOWN_MONITORS } from './readinessMonitors';
+import type { ReadinessMonitorStatus } from './readinessMonitors';
 
 export type DtcStatusType = 'Pending' | 'Confirmed' | 'Permanent';
 
@@ -17,59 +19,18 @@ export interface ScannedDtc {
   };
 }
 
-export interface ReadinessMonitorStatus {
-  misfire: 'Ready' | 'Not Ready' | 'N/A';
-  fuelSystem: 'Ready' | 'Not Ready' | 'N/A';
-  comprehensive: 'Ready' | 'Not Ready' | 'N/A';
-  catalyst: 'Ready' | 'Not Ready' | 'N/A';
-  evap: 'Ready' | 'Not Ready' | 'N/A';
-  o2Sensor: 'Ready' | 'Not Ready' | 'N/A';
-  o2Heater: 'Ready' | 'Not Ready' | 'N/A';
-  egrVvt: 'Ready' | 'Not Ready' | 'N/A';
-}
-
 /**
- * Decodes the readiness monitor bits from Mode 01 PID 01 (bytes B, C and D).
- *
- * For every monitor there are two bits: one saying the ECU supports the test at all,
- * and one saying the test has not finished since codes were last cleared. A monitor the
- * engine does not have reports N/A rather than Ready - claiming a test passed when it
- * was never run is the failure mode this replaced, and it is the reading that matters
- * when someone is deciding whether the car is ready for a smog check.
- *
- * Byte B carries the three tests common to every engine, and its low nibble is the
- * "supported" half while bits 4-6 are the "incomplete" half. Bytes C and D are the
- * spark-ignition monitor set, split the same way: C supported, D incomplete.
+ * The readiness bitmap decoder now lives in readinessMonitors.ts, because the PID
+ * catalogue needs it too and cannot import this file - see the comment there. Re-exported
+ * so every existing caller of `from './dtcScanner'` keeps working.
  */
-export function decodeReadinessMonitors(b: number, c: number, d: number): ReadinessMonitorStatus {
-  const read = (supported: boolean, incomplete: boolean): 'Ready' | 'Not Ready' | 'N/A' =>
-    !supported ? 'N/A' : incomplete ? 'Not Ready' : 'Ready';
-
-  const bit = (byte: number, index: number) => (byte & (1 << index)) !== 0;
-
-  return {
-    misfire: read(bit(b, 0), bit(b, 4)),
-    fuelSystem: read(bit(b, 1), bit(b, 5)),
-    comprehensive: read(bit(b, 2), bit(b, 6)),
-    catalyst: read(bit(c, 0), bit(d, 0)),
-    evap: read(bit(c, 2), bit(d, 2)),
-    o2Sensor: read(bit(c, 5), bit(d, 5)),
-    o2Heater: read(bit(c, 6), bit(d, 6)),
-    egrVvt: read(bit(c, 7), bit(d, 7)),
-  };
-}
-
-/** Every monitor unknown - used when the ECU's PID 01 reply cannot be read. */
-export const UNKNOWN_MONITORS: ReadinessMonitorStatus = {
-  misfire: 'N/A',
-  fuelSystem: 'N/A',
-  comprehensive: 'N/A',
-  catalyst: 'N/A',
-  evap: 'N/A',
-  o2Sensor: 'N/A',
-  o2Heater: 'N/A',
-  egrVvt: 'N/A',
-};
+export {
+  decodeReadinessMonitors,
+  UNKNOWN_MONITORS,
+  MONITOR_LABELS,
+  summariseMonitors,
+} from './readinessMonitors';
+export type { ReadinessMonitorStatus } from './readinessMonitors';
 
 export interface DtcScanReport {
   timestamp: number;

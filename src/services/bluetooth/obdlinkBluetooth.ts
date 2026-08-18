@@ -10,7 +10,11 @@ import { WebBluetoothTransport, OBDLINK_SERVICE_UUIDS } from './webBluetoothTran
 import { ClassicSppTransport, isNativePlatform } from './classicSppTransport';
 import {
   BANK_MARKER_PIDS,
-  PIDS_IN_USE,
+  pidsInUseFor,
+  choosePid,
+  LAMBDA_PID_CANDIDATES,
+  PRE_CAT_PID_CANDIDATES,
+  OUTSIDE_AIR_PID_CANDIDATES,
   decodePidValue,
   pidCommand,
   pidLabel,
@@ -29,6 +33,16 @@ export interface PidProbeResult {
   isBankMarker: boolean;
   /** Whether a gauge already consumes this PID. */
   inUse: boolean;
+  /**
+   * The hex data bytes, or null when nothing parseable came back.
+   *
+   * This exists so "the car answered" and "we understood the answer" can be counted
+   * separately. The discovery screen used to derive one from the other and label the
+   * result "Answered", which undercounted by every PID that replied without a formula -
+   * six of them on this Civic. A screen whose whole purpose is honest measurement should
+   * not be the thing miscounting.
+   */
+  payload: string | null;
 }
 
 /**
@@ -56,6 +70,22 @@ export interface ProtocolLogEntry {
   resp: string;
 }
 
+/** Where an outside-air figure came from, because 0F is not the same quantity as 46. */
+export type OutsideAirSource = 'ambient' | 'intake';
+
+/*
+ * Readings the car may simply not have are `number | null`, and start as null.
+ *
+ * Every field here used to be a number seeded with a plausible idle value - lambda 1.0,
+ * ambient 22 C, pre-catalyst 0.45 V. When the PID behind one of those does not exist, the
+ * seed is what the gauge displays, indefinitely, and it is indistinguishable on screen
+ * from a measurement. This Civic supports none of PIDs 24, 46 or 14, so all three of those
+ * numbers were fabricated. Null makes "never measured" representable, and the display layer
+ * has to say so rather than print a number.
+ *
+ * The fields that stay non-null are the ones every OBD-II car answers; their seeds are only
+ * ever visible for the fraction of a second before the first poll returns.
+ */
 export interface RawObdData {
   rpm: number;
   speedKmh: number;
@@ -66,11 +96,20 @@ export interface RawObdData {
   stft: number;
   ltft: number;
   timingAdvance: number;
-  lambda: number;
+  /** Wide-range lambda from PID 24 or 34, or null when the car has neither. */
+  lambda: number | null;
   batteryVoltage: number;
   fuelLevelPercent: number;
-  ambientC: number;
-  o2Sensor1Voltage: number;
+  /** Outside air, or null when neither PID 46 nor 0F answered. */
+  ambientC: number | null;
+  /** Which PID the figure above came from, so it can be labelled truthfully. */
+  ambientSource: OutsideAirSource | null;
+  /** Pre-catalyst narrowband voltage from PID 14, null on a car that reports lambda instead. */
+  o2Sensor1Voltage: number | null;
+  /** Pre-catalyst lambda from PID 34, null on a car with a narrowband there instead. */
+  o2Sensor1Lambda: number | null;
+  /** Wide-range sensor current in mA from PID 34. Near zero means sitting at balance. */
+  o2Sensor1CurrentMa: number | null;
   o2Sensor2Voltage: number;
   engineRuntimeSec: number;
 }
@@ -108,6 +147,15 @@ export class OBDLinkBluetoothManager {
   /** PIDs the car reported via 0100/0120/0140. Empty means "unknown, poll everything". */
   private readonly supportedPids = new Set<number>();
 
+  /**
+   * Which PID supplies each reading that more than one PID can supply, decided once from
+   * the support bitmaps. Resolved through the shared candidate lists in pidCatalog, so the
+   * discovery screen's "already drives a gauge" tick cannot disagree with what is polled.
+   */
+  private lambdaPid: number | null = null;
+  private preCatPid: number | null = null;
+  private outsideAirPid: number | null = null;
+
   /** Commands already recorded once, so steady-state polling stops adding log lines. */
   private readonly loggedOnce = new Set<string>();
 
@@ -124,11 +172,14 @@ export class OBDLinkBluetoothManager {
     stft: 0,
     ltft: 0,
     timingAdvance: 10,
-    lambda: 1.0,
+    lambda: null,
     batteryVoltage: 14.2,
     fuelLevelPercent: 65,
-    ambientC: 22,
-    o2Sensor1Voltage: 0.45,
+    ambientC: null,
+    ambientSource: null,
+    o2Sensor1Voltage: null,
+    o2Sensor1Lambda: null,
+    o2Sensor1CurrentMa: null,
     o2Sensor2Voltage: 0.65,
     engineRuntimeSec: 0,
   };
@@ -399,6 +450,8 @@ export class OBDLinkBluetoothManager {
       }
       if (!this.supportedPids.has(base + 0x20)) break; // Bit 32 says whether the next bank exists
     }
+
+    this.resolveOptionalPids();
   }
 
   /**
@@ -416,6 +469,8 @@ export class OBDLinkBluetoothManager {
     await this.loadSupportedPids();
 
     const pids = [...this.supportedPids].sort((a, b) => a - b);
+    // The same rule the poll loop uses, so a ticked row is one that really is being read.
+    const inUsePids = pidsInUseFor(this.supportedPids);
     const results: PidProbeResult[] = [];
 
     for (const pid of pids) {
@@ -431,6 +486,7 @@ export class OBDLinkBluetoothManager {
             .toString(16)
             .toUpperCase()}`,
           raw: '',
+          payload: null,
           value: null,
           isBankMarker: true,
           inUse: false,
@@ -446,14 +502,41 @@ export class OBDLinkBluetoothManager {
         cmd,
         name: pidLabel(pid),
         raw: raw.replace(/[\r\n]+/g, ' ').trim(),
+        payload: payload || null,
         value: payload ? decodePidValue(pid, payload) : null,
         isBankMarker: false,
-        inUse: PIDS_IN_USE.has(pid),
+        inUse: inUsePids.has(pid),
       });
       onProgress?.(results.length, pids.length);
     }
 
     return results;
+  }
+
+  /**
+   * Decides which PID supplies lambda, the pre-catalyst sensor and outside air.
+   *
+   * Called after every bitmap read, because a stale choice is the same class of bug as a
+   * hardcoded one. The resolution itself lives in pidCatalog so the discovery screen can
+   * apply the identical rule when it marks a row as already driving a gauge.
+   */
+  private resolveOptionalPids(): void {
+    this.lambdaPid = choosePid(LAMBDA_PID_CANDIDATES, this.supportedPids);
+    this.preCatPid = choosePid(PRE_CAT_PID_CANDIDATES, this.supportedPids);
+    this.outsideAirPid = choosePid(OUTSIDE_AIR_PID_CANDIDATES, this.supportedPids);
+
+    const name = (pid: number | null) =>
+      pid === null ? 'none' : pid.toString(16).toUpperCase().padStart(2, '0');
+
+    this.log(
+      'PID-SELECT',
+      'lambda=' +
+        name(this.lambdaPid) +
+        ' pre-cat=' +
+        name(this.preCatPid) +
+        ' outside-air=' +
+        name(this.outsideAirPid)
+    );
   }
 
   /** False only when the bitmaps were read and positively say the car lacks this PID. */
@@ -503,10 +586,20 @@ export class OBDLinkBluetoothManager {
         const throttleResp = await this.pollPid('0111');
         this.parseThrottle(throttleResp);
 
-        // O2 sensor voltages oscillate rapidly (pre-cat especially) - a slow poll would
+        // O2 sensor readings oscillate rapidly (pre-cat especially) - a slow poll would
         // alias them into a flat line, which defeats the point of showing a live trace.
-        const o2s1Resp = await this.pollPid('0114');
-        this.parseO2Sensor1(o2s1Resp);
+        //
+        // Which PID that is depends on the car. A narrowband front sensor answers PID 14
+        // with a voltage; a wide-range one answers PID 34 with lambda and current. This
+        // Civic has only 34, and asking it for 14 forever was why the "Pre-catalyst" row
+        // showed a constant 0.45 V that had never come from the car.
+        if (this.preCatPid === 0x34) {
+          // One request covers both jobs: 34 is the pre-catalyst sensor *and* the wideband
+          // the fuel model needs, so polling it here also keeps lambda at this tier's rate.
+          this.parseWideRangeO2(await this.pollPid('0134'));
+        } else if (this.preCatPid === 0x14) {
+          this.parseO2Sensor1(await this.pollPid('0114'));
+        }
 
         const o2s2Resp = await this.pollPid('0115');
         this.parseO2Sensor2(o2s2Resp);
@@ -525,8 +618,13 @@ export class OBDLinkBluetoothManager {
           const batteryResp = await this.pollPid('0142');
           this.parseBatteryVoltage(batteryResp);
 
-          const ambientResp = await this.pollPid('0146');
-          this.parseAmbientTemp(ambientResp);
+          // PID 46 is outside air; 0F is intake air, which is a different quantity and gets
+          // labelled as one. Neither existing leaves the reading null rather than at 22 C.
+          if (this.outsideAirPid === 0x46) {
+            this.parseOutsideAirTemp(await this.pollPid('0146'), 'ambient');
+          } else if (this.outsideAirPid === 0x0f) {
+            this.parseOutsideAirTemp(await this.pollPid('010F'), 'intake');
+          }
         }
 
         if (cycle % 12 === 0) {
@@ -536,8 +634,16 @@ export class OBDLinkBluetoothManager {
           const ltftResp = await this.pollPid('0107');
           this.parseLtft(ltftResp);
 
-          const lambdaResp = await this.pollPid('0124');
-          this.parseLambda(lambdaResp);
+          // Only when lambda is not already arriving with the pre-catalyst read above.
+          // On this Civic the two are the same PID, so this branch does not run at all;
+          // a car with a narrowband front sensor plus a separate wideband needs it to.
+          if (this.lambdaPid !== null && this.lambdaPid !== this.preCatPid) {
+            if (this.lambdaPid === 0x24) {
+              this.parseLambda(await this.pollPid('0124'));
+            } else if (this.lambdaPid === 0x34) {
+              this.parseWideRangeO2(await this.pollPid('0134'));
+            }
+          }
 
           // Fuel level & engine runtime change slowly - the slowest tier is plenty.
           const fuelLevelResp = await this.pollPid('012F');
@@ -633,12 +739,37 @@ export class OBDLinkBluetoothManager {
     }
   }
 
+  /** PID 24: wide-range lambda with sensor voltage. Only the lambda word is used here. */
   private parseLambda(resp: string): void {
     const hex = this.extractHexBytes(resp, '4124');
     if (hex && hex.length >= 4) {
       const a = parseInt(hex.substring(0, 2), 16);
       const b = parseInt(hex.substring(2, 4), 16);
       this.latestData.lambda = parseFloat((((a * 256) + b) / 32768).toFixed(3));
+    }
+  }
+
+  /**
+   * PID 34: the wide-range front sensor, as lambda plus sensor current.
+   *
+   * Bytes A and B are the same lambda word as PID 24, which is why a car with 34 and no 24
+   * still has everything the fuel model needs. Bytes C and D are current in mA, offset by
+   * 128; near zero means the sensor is sitting at balance, which is a healthy closed loop.
+   */
+  private parseWideRangeO2(resp: string): void {
+    const hex = this.extractHexBytes(resp, '4134');
+    if (!hex || hex.length < 4) return;
+
+    const a = parseInt(hex.substring(0, 2), 16);
+    const b = parseInt(hex.substring(2, 4), 16);
+    const lambda = parseFloat((((a * 256) + b) / 32768).toFixed(3));
+    this.latestData.o2Sensor1Lambda = lambda;
+    this.latestData.lambda = lambda;
+
+    if (hex.length >= 8) {
+      const c = parseInt(hex.substring(4, 6), 16);
+      const d = parseInt(hex.substring(6, 8), 16);
+      this.latestData.o2Sensor1CurrentMa = parseFloat((((c * 256) + d) / 256 - 128).toFixed(2));
     }
   }
 
@@ -659,11 +790,20 @@ export class OBDLinkBluetoothManager {
     }
   }
 
-  private parseAmbientTemp(resp: string): void {
-    const hex = this.extractHexBytes(resp, '4146');
+  /**
+   * Outside air, from PID 46 where it exists and PID 0F where it does not.
+   *
+   * The source is recorded rather than discarded. They are genuinely different readings -
+   * intake air sits in the engine bay and read 51 C on a warm idle here, which is not the
+   * weather - so the screen has to be able to say which one it is showing.
+   */
+  private parseOutsideAirTemp(resp: string, source: OutsideAirSource): void {
+    const prefix = source === 'ambient' ? '4146' : '410F';
+    const hex = this.extractHexBytes(resp, prefix);
     if (hex && hex.length >= 2) {
       const a = parseInt(hex.substring(0, 2), 16);
       this.latestData.ambientC = a - 40;
+      this.latestData.ambientSource = source;
     }
   }
 

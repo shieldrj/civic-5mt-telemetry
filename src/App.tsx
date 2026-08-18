@@ -375,7 +375,21 @@ export function App() {
               value={String(Math.round(metrics.engineLoadPercent))}
               unit="%"
             />
-            <StatRow label="Outside" value={String(metrics.ambientAirTempF)} unit="°F" />
+            {/*
+                Labelled by where the figure came from. PID 46 is genuinely outside air;
+                PID 0F is intake air, which sits in the engine bay and read 51 °C on a warm
+                idle - so calling it "Outside" would be a weather report from beside the
+                exhaust manifold. A car with neither gets an em dash, not a number: this row
+                used to read a confident "72 °F" that was the seeded default, on a car that
+                reports no ambient PID at all.
+            */}
+            <StatRow
+              label={metrics.outsideAirSource === 'intake' ? 'Intake air' : 'Outside'}
+              value={metrics.outsideAirTempF === null ? '—' : String(metrics.outsideAirTempF)}
+              unit={metrics.outsideAirTempF === null ? undefined : '°F'}
+              note={metrics.outsideAirTempF === null ? 'not reported' : undefined}
+              tone={metrics.outsideAirTempF === null ? INK_3 : INK}
+            />
 
             {/* Fuel keeps a bar because it is the one value on this screen you read as a
                 proportion rather than a figure - how much is left, not how many percent. */}

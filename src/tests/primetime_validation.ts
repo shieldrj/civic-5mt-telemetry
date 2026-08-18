@@ -6,6 +6,14 @@ import { HONDA_DTC_DATABASE } from '../services/obd2/dtcSpecs';
 import { OBDLinkBluetoothManager } from '../services/bluetooth/obdlinkBluetooth';
 import { decodeReadinessMonitors, UNKNOWN_MONITORS } from '../services/obd2/dtcScanner';
 import {
+  choosePid,
+  decodePidValue,
+  pidsInUseFor,
+  LAMBDA_PID_CANDIDATES,
+  PRE_CAT_PID_CANDIDATES,
+  OUTSIDE_AIR_PID_CANDIDATES,
+} from '../services/obd2/pidCatalog';
+import {
   resolveIntegrationStep,
   shouldRecordLifetime,
   MAX_INTEGRATION_STEP_SEC,
@@ -86,6 +94,47 @@ assert(Math.abs(afrStoichE10 - 13.78) < 0.05, `AFR at stoichiometry on E10 is 13
 const afrRich = fuelModel.calculateAirFuelRatio(0.85, 0, 0);
 assert(afrRich < 13.0, `Rich AFR properly calculated for power pull (Got: ${afrRich.toFixed(2)})`);
 
+/*
+ * A car with no wideband PID must fall through to the fuel trims.
+ *
+ * This is the regression that mattered most. The lambda argument used to default to 1.0, so
+ * a car that reports neither PID 24 nor 34 - which is this Civic - arrived here with an
+ * apparently valid stoichiometric reading on every tick. It passed the validity range, took
+ * the wideband branch, and returned bare stoichiometry forever while the real fuel trims
+ * sitting in the next two arguments were discarded. Both halves are pinned below: null must
+ * reach the trims, and a genuine 1.0 must still suppress them.
+ */
+fuelModel.setFuelBlend('E10');
+const stoichE10 = FUEL_BLENDS.E10.stoichAfr;
+
+const afrFromTrims = fuelModel.calculateAirFuelRatio(null, 3.91, 2.34);
+assert(
+  Math.abs(afrFromTrims - stoichE10) > 0.1,
+  `No wideband PID falls through to fuel trims instead of reporting bare stoichiometry (Got: ${afrFromTrims.toFixed(2)} vs stoich ${stoichE10.toFixed(2)})`
+);
+assert(
+  afrFromTrims < stoichE10,
+  `Positive trims mean the ECU is adding fuel, so AFR lands below stoichiometry (Got: ${afrFromTrims.toFixed(2)})`
+);
+
+const afrTrimsLean = fuelModel.calculateAirFuelRatio(null, -4.0, -2.0);
+assert(
+  afrTrimsLean > stoichE10,
+  `Negative trims mean the ECU is pulling fuel, so AFR lands above stoichiometry (Got: ${afrTrimsLean.toFixed(2)})`
+);
+
+// A real wideband reading of 1.0 already accounts for the trims; applying them again would
+// double-count. So the same trims must be ignored when lambda was actually measured.
+const afrMeasuredStoich = fuelModel.calculateAirFuelRatio(1.0, 3.91, 2.34);
+assert(
+  Math.abs(afrMeasuredStoich - stoichE10) < 0.001,
+  `A measured lambda of 1.0 overrides the trims rather than compounding them (Got: ${afrMeasuredStoich.toFixed(3)})`
+);
+assert(
+  afrMeasuredStoich !== afrFromTrims,
+  'A measured stoichiometric reading and an inferred one are distinguishable, not identical'
+);
+
 // Fuel Flow at Idle (2.8 g/s MAF, 14.7 AFR)
 const idleFlow = fuelModel.calculateFuelFlow(2.8, 14.7, false);
 assert(idleFlow.fuelFlowLitersPerHour > 0.8 && idleFlow.fuelFlowLitersPerHour < 1.8, `Idle fuel burn rate realistic (${idleFlow.fuelFlowLitersPerHour.toFixed(2)} L/hr)`);
@@ -144,11 +193,26 @@ const defaults = btManager.latestData;
 
 assert(defaults.batteryVoltage > 9 && defaults.batteryVoltage < 16, `Battery voltage default in plausible range (${defaults.batteryVoltage}V)`);
 assert(defaults.fuelLevelPercent >= 0 && defaults.fuelLevelPercent <= 100, `Fuel level default in valid % range (${defaults.fuelLevelPercent}%)`);
-// PID 0114/0115 byte A is A/200, so full scale is 0 - 1.275V (not 1.0V - a narrowband
-// sensor only *uses* roughly 0.1-0.9V of that range in practice).
-assert(defaults.o2Sensor1Voltage >= 0 && defaults.o2Sensor1Voltage <= 1.275, `O2 Sensor 1 (pre-cat) default within PID full scale (${defaults.o2Sensor1Voltage}V)`);
+// PID 0115 byte A is A/200, so full scale is 0 - 1.275V (not 1.0V - a narrowband sensor
+// only *uses* roughly 0.1-0.9V of that range in practice). Every car answers 0115.
 assert(defaults.o2Sensor2Voltage >= 0 && defaults.o2Sensor2Voltage <= 1.275, `O2 Sensor 2 (post-cat) default within PID full scale (${defaults.o2Sensor2Voltage}V)`);
 assert(defaults.engineRuntimeSec >= 0, `Engine runtime default non-negative (${defaults.engineRuntimeSec}s)`);
+
+/*
+ * Readings that may not exist start as null - strictly null, not "a plausible number".
+ *
+ * These three were 1.0, 22 and 0.45. On a car lacking the PID behind them, that seed is
+ * what the gauge displayed indefinitely, indistinguishable on screen from a measurement.
+ * Written as `=== null` deliberately: the range checks these replace would both still pass
+ * against null, since null coerces to 0, so a range check here is a check that has quietly
+ * stopped running.
+ */
+assert(defaults.lambda === null, `Lambda starts as no-reading, not a stoichiometric-looking 1.0 (${defaults.lambda})`);
+assert(defaults.ambientC === null, `Outside air starts as no-reading, not a room-temperature 22 (${defaults.ambientC})`);
+assert(defaults.ambientSource === null, 'No outside-air reading means no source to attribute it to');
+assert(defaults.o2Sensor1Voltage === null, `Pre-catalyst voltage starts as no-reading, not a switch-point 0.45 (${defaults.o2Sensor1Voltage})`);
+assert(defaults.o2Sensor1Lambda === null, `Pre-catalyst lambda starts as no-reading (${defaults.o2Sensor1Lambda})`);
+assert(defaults.o2Sensor1CurrentMa === null, `Wide-range sensor current starts as no-reading (${defaults.o2Sensor1CurrentMa})`);
 
 // Fuel range: 50% of a 13.2gal tank at 30 MPG -> 6.6 gal * 30 mpg = 198 miles
 const range = fuelModel.calculateFuelRange(50, CIVIC_2013_SPECS.fuelTankCapacityGallons, 30);
@@ -282,6 +346,101 @@ assert(resolveIntegrationStep(5) === 0, 'A 5-second gap already exceeds the trus
 assert(resolveIntegrationStep(0) === 0, 'A zero step contributes nothing');
 assert(resolveIntegrationStep(-3) === 0, 'A negative step (clock adjustment) contributes nothing');
 assert(resolveIntegrationStep(NaN) === 0, 'A non-finite step contributes nothing');
+
+// 9. PID AVAILABILITY, SELECTION, AND THE READINGS THIS CAR ACTUALLY RETURNS
+console.log('\n--- 9. PID Selection & Decoding (measured against a real scan) ---');
+
+/*
+ * The support set below is a real scan of the car this app is built for, taken at a warm
+ * idle: 38 PIDs, and crucially none of 0x24, 0x46 or 0x14 - the three the gauges used to
+ * ask for unconditionally. Hardcoding it here is the point. A synthetic set would have been
+ * written to match whatever the code already did, which is exactly how the original bug
+ * survived: nothing anywhere asserted that the PIDs being polled were PIDs this car has.
+ */
+const CIVIC_SUPPORTED_PIDS = new Set([
+  0x01, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x13, 0x15,
+  0x1c, 0x1f, 0x21, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x3c, 0x41, 0x42,
+  0x43, 0x44, 0x45, 0x47, 0x49, 0x4a, 0x4c, 0x51,
+]);
+
+assert(
+  !CIVIC_SUPPORTED_PIDS.has(0x24) && !CIVIC_SUPPORTED_PIDS.has(0x46) && !CIVIC_SUPPORTED_PIDS.has(0x14),
+  'The scanned car reports none of PIDs 24, 46 or 14 - the premise the rest of this section rests on'
+);
+
+assert(
+  choosePid(LAMBDA_PID_CANDIDATES, CIVIC_SUPPORTED_PIDS) === 0x34,
+  'Lambda resolves to PID 34 on a car with no PID 24'
+);
+assert(
+  choosePid(PRE_CAT_PID_CANDIDATES, CIVIC_SUPPORTED_PIDS) === 0x34,
+  'The pre-catalyst sensor resolves to PID 34 on a car with no narrowband PID 14'
+);
+assert(
+  choosePid(OUTSIDE_AIR_PID_CANDIDATES, CIVIC_SUPPORTED_PIDS) === 0x0f,
+  'Outside air falls back to intake air (PID 0F) on a car with no PID 46'
+);
+
+// A car that has the first choice must still get it.
+const richCar = new Set([0x14, 0x24, 0x46, 0x34, 0x0f]);
+assert(choosePid(LAMBDA_PID_CANDIDATES, richCar) === 0x24, 'PID 24 is preferred for lambda where it exists');
+assert(choosePid(PRE_CAT_PID_CANDIDATES, richCar) === 0x14, 'The narrowband PID 14 is preferred for the pre-catalyst trace where it exists');
+assert(choosePid(OUTSIDE_AIR_PID_CANDIDATES, richCar) === 0x46, 'Real outside air (PID 46) is preferred over intake air where it exists');
+
+// A car that has neither candidate must yield null, not the first one anyway.
+assert(choosePid(LAMBDA_PID_CANDIDATES, new Set([0x0c])) === null, 'A car with no wideband PID at all resolves to null rather than a guess');
+
+// An empty set means the bitmaps could not be read - which is not the same as "the car has
+// nothing", so it falls back to asking and letting the reply decide.
+assert(
+  choosePid(LAMBDA_PID_CANDIDATES, new Set()) === 0x24,
+  'Unreadable support bitmaps fall back to the first candidate rather than giving up'
+);
+
+// The discovery screen's tick and the poll loop must agree, because they now share this.
+const civicInUse = pidsInUseFor(CIVIC_SUPPORTED_PIDS);
+assert(civicInUse.has(0x34), 'PID 34 is marked as driving a gauge on this car');
+assert(civicInUse.has(0x0f), 'PID 0F is marked as driving a gauge on this car');
+assert(
+  !civicInUse.has(0x24) && !civicInUse.has(0x46) && !civicInUse.has(0x14),
+  'PIDs this car does not have are never marked as driving a gauge'
+);
+assert(
+  [...civicInUse].every((pid) => CIVIC_SUPPORTED_PIDS.has(pid)),
+  'Every PID claimed to drive a gauge is one the car actually reports'
+);
+
+/*
+ * The six replies this car gave that had no formula, decoded. These are the literal bytes
+ * off the adapter, so each assertion is a round trip from a real reply to a real reading.
+ */
+assert(decodePidValue(0x2c, '00') === '0 %', `PID 2C commanded EGR decodes (Got: ${decodePidValue(0x2c, '00')})`);
+assert(decodePidValue(0x2d, 'FF') === '99.22 %', `PID 2D EGR error decodes its saturated reading (Got: ${decodePidValue(0x2d, 'FF')})`);
+// Signed: 0xFF96 is -106 quarter-pascals, a slight vacuum. Unsigned it would read +16742 Pa.
+assert(decodePidValue(0x32, 'FF96') === '-26.5 Pa', `PID 32 evap pressure decodes as signed (Got: ${decodePidValue(0x32, 'FF96')})`);
+assert(decodePidValue(0x51, '01') === 'Gasoline', `PID 51 fuel type decodes (Got: ${decodePidValue(0x51, '01')})`);
+
+const wideRange = decodePidValue(0x34, '843D7FF5');
+assert(
+  wideRange !== null && wideRange.includes('1.033') && wideRange.includes('-0.04'),
+  `PID 34 decodes to lambda and sensor current (Got: ${wideRange})`
+);
+
+// PID 41 is the same readiness bitmap as PID 01, scoped to this drive cycle. Byte A is
+// reserved, so the decoder must read B, C and D - offset by one from the payload start.
+const driveCycle = decodePidValue(0x41, '0005E000');
+assert(
+  driveCycle === '5 monitors, all complete',
+  `PID 41 summarises this drive cycle's monitors (Got: ${driveCycle})`
+);
+
+// Same bytes, one monitor forced incomplete, to prove the summary is reading D and not
+// simply reporting "all complete" for anything it is handed.
+const driveCycleBusy = decodePidValue(0x41, '0005E020');
+assert(
+  driveCycleBusy !== null && driveCycleBusy.includes('1 of 5') && driveCycleBusy.includes('O2 sensor'),
+  `PID 41 names the monitor still running rather than claiming completion (Got: ${driveCycleBusy})`
+);
 
 console.log('\n==================================================');
 console.log(`🏁 TEST RESULTS: ${passed} PASSED, ${failed} FAILED`);

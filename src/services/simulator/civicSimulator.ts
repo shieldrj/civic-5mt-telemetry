@@ -107,7 +107,6 @@ export class CivicSimulatorEngine {
 
     // Dynamic Fuel Trim and Lambda
     const isWot = this.throttlePos > 85;
-    const lambda = isWot ? 0.88 : 1.0; // Open loop enrichment at wide open throttle
     const stft = isWot ? 0 : parseFloat(((Math.sin(this.simulationTimeSec * 1.5) * 2.2) - 0.5).toFixed(1));
     const ltft = 1.2;
 
@@ -125,12 +124,29 @@ export class CivicSimulatorEngine {
     const fuelBurnRate = 0.00006 * (1 + this.throttlePos / 100) * (this.rpm / 3000);
     this.fuelLevelPercent = Math.max(0, this.fuelLevelPercent - fuelBurnRate * dt);
 
-    // Ambient air temp drifts slowly and independently of IAT (which heats from engine bay)
-    this.ambientC += Math.sin(this.simulationTimeSec * 0.02) * 0.05 * dt;
+    /*
+     * From here down the bench mirrors what this particular car actually reports, which a
+     * PID scan settled: no PID 46 (outside air), no PID 14 (pre-catalyst narrowband), no
+     * PID 24 - the front sensor is wide-range on PID 34 instead.
+     *
+     * It used to simulate all three of the PIDs the car does not have, which is why the
+     * bench looked healthy while the real drive was displaying seeded constants. A
+     * simulator that exercises a different code path than the car is worse than no
+     * simulator, because it certifies the path nobody drives.
+     */
 
-    // O2 sensors: healthy-catalyst signature - pre-cat swings actively around the switch
-    // point, post-cat stays comparatively flat.
-    const o2Sensor1Voltage = parseFloat((0.45 + Math.sin(this.simulationTimeSec * 2.2) * 0.35).toFixed(3));
+    // Intake air, which is what PID 0F reports: engine-bay air, so it climbs above outside
+    // temperature as the car sits and warms rather than drifting with the weather.
+    const intakeSoakC = 18 + Math.min(33, this.simulationTimeSec * 0.05);
+    this.ambientC = intakeSoakC;
+
+    // The wide-range front sensor. In closed loop it hunts narrowly around lambda 1.00;
+    // at wide-open throttle the ECU goes open loop and commands enrichment.
+    const o2Sensor1Lambda = parseFloat(
+      (isWot ? 0.88 : 1.0 + Math.sin(this.simulationTimeSec * 2.2) * 0.02).toFixed(3)
+    );
+    // Sensor current sits near zero at balance and swings negative as the mixture richens.
+    const o2Sensor1CurrentMa = parseFloat(((1.0 - o2Sensor1Lambda) * -8).toFixed(2));
     const o2Sensor2Voltage = 0.65;
 
     return {
@@ -143,11 +159,16 @@ export class CivicSimulatorEngine {
       stft,
       ltft,
       timingAdvance,
-      lambda,
+      // The wideband is the lambda source on this car, so the two agree by construction
+      // rather than by coincidence - exactly as parseWideRangeO2 sets them.
+      lambda: o2Sensor1Lambda,
       batteryVoltage: parseFloat(this.batteryVoltage.toFixed(2)),
       fuelLevelPercent: parseFloat(this.fuelLevelPercent.toFixed(1)),
       ambientC: Math.round(this.ambientC),
-      o2Sensor1Voltage,
+      ambientSource: 'intake',
+      o2Sensor1Voltage: null,
+      o2Sensor1Lambda,
+      o2Sensor1CurrentMa,
       o2Sensor2Voltage,
       engineRuntimeSec: Math.round(this.simulationTimeSec),
     };

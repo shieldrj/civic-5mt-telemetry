@@ -72,6 +72,32 @@ export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({
   const lambda = afr / activeBlend.stoichAfr;
   const afrStatus = lambda < 0.97 ? 'Rich' : lambda > 1.03 ? 'Lean' : 'Stoichiometric';
 
+  /*
+   * Whether the mixture was measured or inferred, said out loud.
+   *
+   * equivalenceRatio is null on a car with no wideband PID, and the fuel model then derives
+   * AFR from the fuel trims instead. Both are legitimate; they are not the same claim, and
+   * the row used to print "λ 1.000" either way - which on this car meant printing a
+   * measurement that had never been taken.
+   */
+  const mixtureNote =
+    metrics.equivalenceRatio !== null
+      ? afrStatus + ' · \u03bb ' + metrics.equivalenceRatio.toFixed(3)
+      : afrStatus + ' · from fuel trims';
+
+  /*
+   * What the front sensor is on this car. A narrowband reports voltage, a wide-range one
+   * reports lambda, and some cars report neither - three genuinely different rows, not one
+   * row with a fallback number. Voltage wins where both arrive, matching the order the poll
+   * loop prefers, so the section can never render two "Pre-catalyst" rows at once.
+   */
+  const preCatMode: 'voltage' | 'lambda' | 'absent' =
+    metrics.o2Sensor1Voltage !== null
+      ? 'voltage'
+      : metrics.o2Sensor1Lambda !== null
+      ? 'lambda'
+      : 'absent';
+
   const idleMinutes = Math.floor(trip.idleTimeSec / 60);
   const idleSeconds = Math.round(trip.idleTimeSec % 60);
 
@@ -127,7 +153,7 @@ export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({
               </span>
             </span>
           }
-          note={`${afrStatus} · λ ${metrics.equivalenceRatio.toFixed(3)}`}
+          note={mixtureNote}
         />
         {/* Where this mixture sits between 10:1 and 20:1. A hairline marks the blend's
             own stoichiometric point, so "rich" and "lean" are read off the scale rather
@@ -207,10 +233,70 @@ export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({
         </div>
       </Section>
 
+      {/*
+          The front sensor is not the same device on every car, so this section cannot assume
+          a voltage. A narrowband answers PID 14 with one that swings across 0.45 V; a
+          wide-range sensor answers PID 34 with lambda and a current, and does not swing at
+          all. This Civic has the latter, and the row previously showed a fixed 0.45 V - the
+          seeded default - immediately above a genuine post-catalyst reading, with nothing to
+          tell them apart.
+      */}
       <Section title="Oxygen sensors">
         <div className="flex flex-col gap-4">
+          {preCatMode === 'lambda' && metrics.o2Sensor1Lambda !== null && (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-baseline justify-between gap-3">
+                <span className="t-key">Pre-catalyst</span>
+                <span className="t-value tabular-nums">
+                  {metrics.o2Sensor1Lambda.toFixed(3)}
+                  <span className="t-label ml-1" style={{ letterSpacing: '0.1em' }}>
+                    {'\u03bb'}
+                  </span>
+                  <span className="ml-2.5" style={{ fontSize: 11.5, color: INK_3, letterSpacing: 0 }}>
+                    {metrics.o2Sensor1Lambda < 0.98
+                      ? 'Rich'
+                      : metrics.o2Sensor1Lambda > 1.02
+                      ? 'Lean'
+                      : 'At balance'}
+                    {metrics.o2Sensor1CurrentMa !== null &&
+                      ' · ' + metrics.o2Sensor1CurrentMa.toFixed(2) + ' mA'}
+                  </span>
+                </span>
+              </div>
+              {/* Scaled 0.8-1.2 lambda, with the hairline at stoichiometry. A wideband holds
+                  much tighter than a narrowband swings, so a 0-1.275 V style scale would
+                  render every reading as the same bar. */}
+              <div className="meter relative">
+                <i
+                  style={{
+                    width: `${Math.max(0, Math.min(100, ((metrics.o2Sensor1Lambda - 0.8) / 0.4) * 100))}%`,
+                    transition: 'width 150ms linear',
+                  }}
+                />
+                <span
+                  className="absolute inset-y-0 left-1/2 w-px"
+                  style={{ background: 'rgba(255,255,255,0.45)' }}
+                />
+              </div>
+            </div>
+          )}
+
+          {preCatMode === 'absent' && (
+            <div className="flex items-baseline justify-between gap-3">
+              <span className="t-key">Pre-catalyst</span>
+              <span className="t-value" style={{ color: INK_3 }}>
+                —
+                <span className="ml-2.5" style={{ fontSize: 11.5, color: INK_3, letterSpacing: 0 }}>
+                  not reported by this car
+                </span>
+              </span>
+            </div>
+          )}
+
           {[
-            { label: 'Pre-catalyst', volts: metrics.o2Sensor1Voltage },
+            ...(preCatMode === 'voltage' && metrics.o2Sensor1Voltage !== null
+              ? [{ label: 'Pre-catalyst', volts: metrics.o2Sensor1Voltage }]
+              : []),
             { label: 'Post-catalyst', volts: metrics.o2Sensor2Voltage },
           ].map((sensor) => (
             <div key={sensor.label} className="flex flex-col gap-2">
@@ -245,9 +331,14 @@ export const MpgTelemetryCard: React.FC<MpgTelemetryCardProps> = ({
           ))}
         </div>
         <p style={{ fontSize: 12.5, color: INK_3, lineHeight: 1.6 }}>
-          A healthy pre-catalyst sensor swings actively across the 0.45 V line while the
-          post-catalyst one stays comparatively steady. A post-catalyst trace that starts
-          mirroring the pre-catalyst swing is the live signature behind code P0420.
+          {preCatMode === 'lambda'
+            ? 'A wide-range front sensor reports lambda directly and holds close to 1.000 in ' +
+              'closed loop rather than swinging, with its current near zero. The post-catalyst ' +
+              'sensor should stay comparatively steady; one that starts swinging actively is ' +
+              'the live signature behind code P0420.'
+            : 'A healthy pre-catalyst sensor swings actively across the 0.45 V line while the ' +
+              'post-catalyst one stays comparatively steady. A post-catalyst trace that starts ' +
+              'mirroring the pre-catalyst swing is the live signature behind code P0420.'}
         </p>
       </Section>
     </div>
