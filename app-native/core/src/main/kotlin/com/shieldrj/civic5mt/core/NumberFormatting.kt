@@ -22,6 +22,13 @@ fun toFixed(value: Double, digits: Int): String =
     String.format(Locale.ROOT, "%.${digits}f", value)
 
 /**
+ * `parseFloat(x.toFixed(n))` - round to n decimals and come back as a number. The parsers
+ * use this because the TypeScript did: the stored reading is the rounded one, not the raw
+ * float, so a value that round-trips through storage does not shift.
+ */
+fun roundTo(value: Double, digits: Int): Double = toFixed(value, digits).toDouble()
+
+/**
  * `String(number)` for the values this app formats: no trailing zeros, no exponent, and
  * no negative zero. Not a general JavaScript number serialiser - it is only ever handed a
  * value already rounded to two decimals or to a whole number.

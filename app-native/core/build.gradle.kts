@@ -25,7 +25,13 @@ tasks.withType<JavaCompile>().configureEach {
 }
 
 dependencies {
+    // Coroutines only - the JVM artifact, not the Android one. The command queue and its
+    // timeout are the whole reason: an ELM327 has one command in flight and no request IDs,
+    // so serialising them is a correctness requirement, not a convenience.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+
     testImplementation(kotlin("test"))
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
