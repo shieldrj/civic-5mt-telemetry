@@ -125,9 +125,11 @@ object CivicSpecs {
     const val TIRE_WIDTH_MM: Int = 195
     const val TIRE_ASPECT_RATIO: Int = 65
     const val RIM_DIAMETER_INCHES: Int = 15
-    // Calculated tire diameter ~634.5 mm (0.6345 m), circumference = pi * D = ~1.9933 m
+    // Calculated tire diameter ~634.5 mm (0.6345 m), circumference = pi * D = ~1.9933 m.
+    // Kept in kilometres only. The same figure in miles used to sit beside it as a second
+    // literal, which is a rounding error waiting to disagree with this one - convert at the
+    // point of use instead.
     const val TIRE_CIRCUMFERENCE_KM: Double = 0.0019933
-    const val TIRE_CIRCUMFERENCE_MILES: Double = 0.0012386
 
     // Physical Vehicle Weights
     const val CURB_WEIGHT_KG: Int = 1247 // ~2,750 lbs
@@ -135,9 +137,13 @@ object CivicSpecs {
     const val FRONTAL_AREA_M2: Double = 2.1
 
     // Fuel Constants
-    const val GASOLINE_DENSITY_G_PER_GALLON: Double = 2788.0 // ~736.5 grams/liter
-    const val GASOLINE_DENSITY_G_PER_LITER: Double = 736.5
-    const val STOICHIOMETRIC_AFR: Double = 14.7 // Standard unleaded gasoline
+    //
+    // Fuel *properties* are deliberately not here. Density and stoichiometric ratio depend
+    // on the blend in the tank, so they live in FUEL_BLENDS and nowhere else. This object
+    // used to also carry a gasoline density of 736.5 g/L and a stoichiometric AFR of 14.7,
+    // left over from before blends existed - both unused, and both disagreeing with the
+    // blend model, which puts pure gasoline at 745.0 g/L. Two numbers for one physical
+    // quantity is how the next person picks the wrong one.
     const val GAS_PRICE_DEFAULT_DOLLARS_PER_GALLON: Double = 3.45
     const val FUEL_TANK_CAPACITY_GALLONS: Double = 13.2 // 2013 Civic LX sedan factory tank spec
 

@@ -244,23 +244,4 @@ class FuelModelEngine {
         val effectiveMpg = if (rollingMpg > 1) rollingMpg else CivicSpecs.EPA_COMBINED_MPG_DEFAULT
         return max(0.0, gallonsRemaining * effectiveMpg)
     }
-
-    /**
-     * Speed-density estimate, for when the MAF sensor is disconnected or faulty.
-     *
-     * Ideal gas law: air density = P / (R_specific * T), with R_specific for dry air of
-     * 287.058 J/(kg·K).
-     */
-    fun estimateMafFromSpeedDensity(
-        mapKpa: Double,
-        intakeAirTempC: Double,
-        rpm: Double,
-        volumetricEfficiency: Double = 0.85,
-    ): Double {
-        val iatKelvin = intakeAirTempC + 273.15
-        val displacementL = CivicSpecs.ENGINE_DISPLACEMENT_LITERS
-        val mafGramsPerSec =
-            (mapKpa * (rpm / 120) * displacementL * volumetricEfficiency * 28.97) / (8.314 * iatKelvin)
-        return max(0.0, mafGramsPerSec)
-    }
 }
