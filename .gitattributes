@@ -1,0 +1,5 @@
+# The rescued WebView localStorage is evidence: it has to come back out of git
+# byte for byte. Without this, Git's CRLF conversion rewrites bare LF bytes
+# inside the leveldb files and the "byte-verified against the device" claim in
+# the commit that added them stops being true on the next checkout.
+migration-backup/** -text -diff
