@@ -1,0 +1,14 @@
+2026/08/17-19:50:29.201 7891 Reusing MANIFEST /data/user/0/com.shieldrj.civic5mt/app_webview/Default/Local Storage/leveldb/MANIFEST-000001
+2026/08/17-19:50:29.204 7891 Recovering log #8
+2026/08/17-19:50:29.205 7891 Reusing old log /data/user/0/com.shieldrj.civic5mt/app_webview/Default/Local Storage/leveldb/000008.log 
+2026/08/17-19:52:33.685 7894 Level-0 table #12: started
+2026/08/17-19:52:33.693 7894 Level-0 table #12: 13801 bytes OK
+2026/08/17-19:52:33.701 7894 Delete type=0 #8
+2026/08/17-19:52:33.702 7894 Compacting 4@0 + 0@1 files
+2026/08/17-19:52:33.703 7894 Generated table #13@0: 6 keys, 812 bytes
+2026/08/17-19:52:33.703 7894 Compacted 4@0 + 0@1 files => 812 bytes
+2026/08/17-19:52:33.705 7894 compacted to: files[ 0 1 0 0 0 0 0 ]
+2026/08/17-19:52:33.705 7894 Delete type=2 #3
+2026/08/17-19:52:33.705 7894 Delete type=2 #7
+2026/08/17-19:52:33.705 7894 Delete type=2 #9
+2026/08/17-19:52:33.705 7894 Delete type=2 #12
