@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { AlertTriangle, CheckCircle2, Circle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { AlertTriangle, CheckCircle2, Circle, Copy, Check } from 'lucide-react';
 import { telemetryManager } from '../services/telemetryManager';
 import type { PidProbeResult } from '../services/bluetooth/obdlinkBluetooth';
 
@@ -11,11 +11,81 @@ import type { PidProbeResult } from '../services/bluetooth/obdlinkBluetooth';
  * is a guess - and a guess here produces a gauge that displays a confident wrong number.
  * Everything below comes from the car.
  */
+
+/**
+ * The last scan, kept so it survives leaving the tab.
+ *
+ * A scan needs the engine running, takes a few seconds, and is the only thing in the app
+ * that says what this specific ECU exposes - and it used to live in component state alone,
+ * so switching tabs destroyed it. That made the app's most considered measurement its least
+ * durable one. Keeping it also means a scan can be read back later, away from the car, which
+ * is when anyone actually wants to compare two of them.
+ */
+const STORAGE_KEY = 'civic.pidDiscovery.lastScan.v1';
+
+interface StoredScan {
+  at: number;
+  results: PidProbeResult[];
+}
+
+function loadStoredScan(): StoredScan | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredScan;
+    // A stored shape from an older build is discarded rather than half-rendered.
+    if (!parsed || typeof parsed.at !== 'number' || !Array.isArray(parsed.results)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function storeScan(scan: StoredScan): void {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(scan));
+  } catch {
+    // A full or disabled store is not worth interrupting the scan over.
+  }
+}
+
+/** Plain text, because the point is to paste it somewhere - a note, an email, a mechanic. */
+function formatScanReport(scan: StoredScan): string {
+  const sensors = scan.results.filter((r) => !r.isBankMarker);
+  const lines = [
+    '2013 Honda Civic LX 5MT — OBD-II sensor discovery',
+    'Scanned ' + new Date(scan.at).toLocaleString(),
+    sensors.length + ' PIDs supported',
+    '',
+  ];
+  for (const r of sensors) {
+    const mark = r.inUse ? '*' : ' ';
+    const reading = r.value ?? (r.payload ? 'hex ' + r.payload : 'no reply');
+    lines.push(mark + ' ' + r.cmd.slice(2).padEnd(4) + r.name.padEnd(36) + reading);
+  }
+  lines.push('');
+  lines.push('* = already drives a gauge');
+  return lines.join('\n');
+}
+
+/** A restored scan must not read as a live one, so every rendering of it carries its time. */
+function formatScanTime(at: number): string {
+  const scanned = new Date(at);
+  const time = scanned.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const isToday = scanned.toDateString() === new Date().toDateString();
+  return isToday ? 'Scanned ' + time : 'Scanned ' + scanned.toLocaleDateString() + ', ' + time;
+}
+
 export const PidDiscoveryCard: React.FC = () => {
-  const [results, setResults] = useState<PidProbeResult[] | null>(null);
+  const [scan, setScan] = useState<StoredScan | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [progress, setProgress] = useState({ done: 0, total: 0 });
   const [error, setError] = useState<string | null>(null);
+  const [didCopy, setDidCopy] = useState(false);
+
+  useEffect(() => {
+    setScan(loadStoredScan());
+  }, []);
 
   const handleScan = async () => {
     setIsScanning(true);
@@ -25,7 +95,9 @@ export const PidDiscoveryCard: React.FC = () => {
       const found = await telemetryManager.runPidDiscovery((done, total) =>
         setProgress({ done, total })
       );
-      setResults(found);
+      const fresh: StoredScan = { at: Date.now(), results: found };
+      setScan(fresh);
+      storeScan(fresh);
     } catch (err: any) {
       setError(err?.message || 'Discovery failed.');
     } finally {
@@ -33,8 +105,31 @@ export const PidDiscoveryCard: React.FC = () => {
     }
   };
 
+  const handleCopy = async () => {
+    if (!scan) return;
+    try {
+      await navigator.clipboard.writeText(formatScanReport(scan));
+      setDidCopy(true);
+      window.setTimeout(() => setDidCopy(false), 2000);
+    } catch {
+      setError('Could not reach the clipboard.');
+    }
+  };
+
+  const results = scan?.results ?? null;
   const sensors = results?.filter((r) => !r.isBankMarker) ?? [];
-  const answered = sensors.filter((r) => r.value !== null);
+
+  /*
+   * Three separate facts, which the old tiles conflated into two.
+   *
+   * "Answered" was computed as `value !== null`, which is whether this app has a formula -
+   * not whether the car replied. On this Civic six PIDs replied with bytes nobody had
+   * written a formula for, so a scan where all 38 answered was reported as 32, on the one
+   * screen whose entire purpose is honest measurement. `payload` now carries whether bytes
+   * came back, so the two questions are counted separately.
+   */
+  const answered = sensors.filter((r) => r.payload !== null);
+  const undecoded = answered.filter((r) => r.value === null);
   const unused = answered.filter((r) => !r.inUse);
 
   return (
@@ -45,28 +140,48 @@ export const PidDiscoveryCard: React.FC = () => {
             Sensor discovery
           </h3>
           <p style={{ fontSize: 11.5, color: '#6b727a', marginTop: 3 }}>
-            What this car actually exposes
+            {scan ? formatScanTime(scan.at) : 'What this car actually exposes'}
           </p>
         </div>
-        {/* Was a solid white pill with black text: the brightest element anywhere in the
-            app, on a secondary action nested inside a secondary tab. */}
-        <button
-          onClick={handleScan}
-          disabled={isScanning}
-          className="px-4 py-2 transition-colors disabled:opacity-50 shrink-0"
-          style={{
-            fontSize: 12.5,
-            color: '#eef0f2',
-            border: '1px solid var(--hairline-strong)',
-            borderRadius: 8,
-          }}
-        >
-          {isScanning
-            ? `${progress.done}/${progress.total || '…'}`
-            : results
-            ? 'Rescan'
-            : 'Scan'}
-        </button>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Copies the scan out as plain text. The reading is often wanted somewhere other
+              than this screen, hours later and nowhere near the car. */}
+          {scan && !isScanning && (
+            <button
+              onClick={handleCopy}
+              className="px-3 py-2 transition-colors inline-flex items-center gap-1.5"
+              style={{
+                fontSize: 12.5,
+                color: didCopy ? '#eef0f2' : '#9aa1a9',
+                border: '1px solid var(--hairline)',
+                borderRadius: 8,
+              }}
+              aria-label="Copy scan as text"
+            >
+              {didCopy ? <Check size={13} /> : <Copy size={13} />}
+              {didCopy ? 'Copied' : 'Copy'}
+            </button>
+          )}
+          {/* Was a solid white pill with black text: the brightest element anywhere in the
+              app, on a secondary action nested inside a secondary tab. */}
+          <button
+            onClick={handleScan}
+            disabled={isScanning}
+            className="px-4 py-2 transition-colors disabled:opacity-50 shrink-0"
+            style={{
+              fontSize: 12.5,
+              color: '#eef0f2',
+              border: '1px solid var(--hairline-strong)',
+              borderRadius: 8,
+            }}
+          >
+            {isScanning
+              ? `${progress.done}/${progress.total || '…'}`
+              : results
+              ? 'Rescan'
+              : 'Scan'}
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -138,8 +253,9 @@ export const PidDiscoveryCard: React.FC = () => {
             <CheckCircle2 size={10} className="inline text-[#eef0f2] mr-1" />
             already drives a gauge ·{' '}
             <Circle size={10} className="inline text-[#464c53] mr-1" />
-            available but unused. A row showing hex instead of a value means the car answered
-            but this app has no formula for it yet.
+            available but unused.
+            {undecoded.length > 0 &&
+              ` ${undecoded.length} answered with bytes this app has no formula for, shown as hex.`}
           </p>
         </>
       )}

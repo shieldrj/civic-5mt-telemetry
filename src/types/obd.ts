@@ -1,6 +1,7 @@
 import type { MpgDisplayState } from '../services/obd2/fuelModel';
+import type { OutsideAirSource } from '../services/bluetooth/obdlinkBluetooth';
 
-export type { MpgDisplayState };
+export type { MpgDisplayState, OutsideAirSource };
 
 export interface OBDLiveMetrics {
   // Raw / Base OBD-II PIDs
@@ -15,12 +16,15 @@ export interface OBDLiveMetrics {
   shortTermFuelTrim: number;    // PID 0106 (%)
   longTermFuelTrim: number;     // PID 0107 (%)
   timingAdvanceDeg: number;     // PID 010E (°)
-  equivalenceRatio: number;     // PID 0124 (Lambda, default 1.0)
+  equivalenceRatio: number | null;   // PID 0124 or 0134 (Lambda); null = no wideband PID
   batteryVoltage: number;       // PID 0142 (Control module / charging voltage, V)
   fuelLevelPercent: number;     // PID 012F (%)
-  ambientAirTempC: number;      // PID 0146 (°C)
-  ambientAirTempF: number;      // Calculated (°F)
-  o2Sensor1Voltage: number;     // PID 0114 (Bank 1 Sensor 1, pre-catalyst, V)
+  outsideAirTempC: number | null;    // PID 0146, else 010F; null = neither exists
+  outsideAirTempF: number | null;    // Calculated (°F)
+  outsideAirSource: OutsideAirSource | null; // Which of the two the figure above came from
+  o2Sensor1Voltage: number | null;   // PID 0114 (pre-catalyst narrowband, V); null if absent
+  o2Sensor1Lambda: number | null;    // PID 0134 (pre-catalyst wide range); null if absent
+  o2Sensor1CurrentMa: number | null; // PID 0134 sensor current (mA); null if absent
   o2Sensor2Voltage: number;     // PID 0115 (Bank 1 Sensor 2, post-catalyst, V)
   engineRuntimeSec: number;     // PID 011F (ECU-reported runtime since engine start, sec)
 

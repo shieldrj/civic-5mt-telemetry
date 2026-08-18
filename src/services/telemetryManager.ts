@@ -114,12 +114,17 @@ export class TelemetryManager {
       shortTermFuelTrim: 0,
       longTermFuelTrim: 1.2,
       timingAdvanceDeg: 12,
-      equivalenceRatio: 1.0,
+      // null, not a plausible figure: nothing has been measured yet, and until the first
+      // poll returns there is no honest number to show for any of these.
+      equivalenceRatio: null,
       batteryVoltage: 14.2,
       fuelLevelPercent: 65,
-      ambientAirTempC: 22,
-      ambientAirTempF: 72,
-      o2Sensor1Voltage: 0.45,
+      outsideAirTempC: null,
+      outsideAirTempF: null,
+      outsideAirSource: null,
+      o2Sensor1Voltage: null,
+      o2Sensor1Lambda: null,
+      o2Sensor1CurrentMa: null,
       o2Sensor2Voltage: 0.65,
       engineRuntimeSec: 0,
       instantMpg: 0,
@@ -311,7 +316,8 @@ export class TelemetryManager {
     const speedMphRaw = raw.speedKmh * 0.621371;
     const speedMph = parseFloat(speedMphRaw.toFixed(1));
     const coolantF = Math.round((raw.coolantC * 9) / 5 + 32);
-    const ambientF = Math.round((raw.ambientC * 9) / 5 + 32);
+    const outsideAirF =
+      raw.ambientC === null ? null : Math.round((raw.ambientC * 9) / 5 + 32);
 
     // 2. Gear & Manual Transmission Analysis
     const gearResult = this.gearCalculator.analyzeGear(
@@ -352,9 +358,13 @@ export class TelemetryManager {
       equivalenceRatio: raw.lambda,
       batteryVoltage: parseFloat(raw.batteryVoltage.toFixed(2)),
       fuelLevelPercent: parseFloat(raw.fuelLevelPercent.toFixed(1)),
-      ambientAirTempC: raw.ambientC,
-      ambientAirTempF: ambientF,
-      o2Sensor1Voltage: parseFloat(raw.o2Sensor1Voltage.toFixed(3)),
+      outsideAirTempC: raw.ambientC,
+      outsideAirTempF: outsideAirF,
+      outsideAirSource: raw.ambientSource,
+      o2Sensor1Voltage:
+        raw.o2Sensor1Voltage === null ? null : parseFloat(raw.o2Sensor1Voltage.toFixed(3)),
+      o2Sensor1Lambda: raw.o2Sensor1Lambda,
+      o2Sensor1CurrentMa: raw.o2Sensor1CurrentMa,
       o2Sensor2Voltage: parseFloat(raw.o2Sensor2Voltage.toFixed(3)),
       engineRuntimeSec: raw.engineRuntimeSec,
       instantMpg: parseFloat(instantMpg.toFixed(1)),

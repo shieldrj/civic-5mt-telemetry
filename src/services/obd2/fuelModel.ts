@@ -62,17 +62,32 @@ export class FuelModelEngine {
   }
 
   /**
-   * Calculates actual Air:Fuel Ratio from wideband lambda and fuel trims.
-   * At lambda 1.0 with zero trims this returns the blend's stoichiometric ratio.
+   * Calculates actual Air:Fuel Ratio from wideband lambda, or from fuel trims when the car
+   * has no wideband PID to read.
+   *
+   * The lambda argument is `number | null` and has no default, which is the whole point.
+   * It used to default to 1.0, and a car with no wideband PID therefore arrived here with
+   * a lambda of exactly 1.0 on every single tick - forever. That is not a neutral value:
+   * 1.0 passes the validity range below, so the function took the wideband branch, returned
+   * bare stoichiometry, and never reached the trim fallback. The app reported a mixture it
+   * had never measured while discarding the fuel trims it actually had.
+   *
+   * Passing null now means "not measured" and is the only way to reach the fallback, so a
+   * missing reading can no longer impersonate a stoichiometric one.
    */
   public calculateAirFuelRatio(
-    equivalenceRatioLambda: number = 1.0,
+    equivalenceRatioLambda: number | null,
     shortTermFuelTrimPercent: number = 0,
     longTermFuelTrimPercent: number = 0
   ): number {
-    // If wideband lambda (PID 0124) is available and valid, it already reflects
-    // post-trim combustion AFR. Using trims ON TOP of lambda double-counts.
-    if (equivalenceRatioLambda > 0.5 && equivalenceRatioLambda < 2.0) {
+    // A real wideband reading already reflects post-trim combustion AFR. Applying trims on
+    // top of it would double-count them.
+    if (
+      equivalenceRatioLambda !== null &&
+      Number.isFinite(equivalenceRatioLambda) &&
+      equivalenceRatioLambda > 0.5 &&
+      equivalenceRatioLambda < 2.0
+    ) {
       const dynamicAfr = this.blend.stoichAfr * equivalenceRatioLambda;
       return Math.max(6.0, Math.min(22.0, dynamicAfr));
     }
