@@ -12,9 +12,12 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import com.shieldrj.civic5mt.R
+import com.shieldrj.civic5mt.core.CivicSpecs
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.Elm327Client
 import com.shieldrj.civic5mt.core.ObdTransportError
+import com.shieldrj.civic5mt.core.OilLifeEngine
+import com.shieldrj.civic5mt.core.TelemetryManager
 import com.shieldrj.civic5mt.transport.BluetoothClassicTransport
 import com.shieldrj.civic5mt.ui.MainActivity
 import kotlinx.coroutines.CancellationException
@@ -22,6 +25,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.plus
 
@@ -47,12 +53,35 @@ class TelemetryService : Service() {
     private var client: Elm327Client? = null
     private var pollJob: Job? = null
     private var connectJob: Job? = null
+    private var tickJob: Job? = null
+
+    /**
+     * The models, and the trip and lifetime figures they accumulate into.
+     *
+     * Held by the service rather than rebuilt per connection, so a Bluetooth drop in a tunnel
+     * does not end the trip or lose what the oil model has been accruing.
+     */
+    private lateinit var manager: TelemetryManager
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+
+        // Before anything can write to storage. The rescued records are the only copy of
+        // figures that accumulated over real driving, and an import that runs after the first
+        // write has nothing left to import into.
+        importRescuedRecordsOnce(applicationContext)?.let { Log.i(TAG, it) }
+
+        manager = TelemetryManager(
+            lifetimeStore = PrefsLifetimeStore(applicationContext),
+            oilLife = OilLifeEngine(PrefsOilProfileStore(applicationContext)),
+        ).apply {
+            setFuelBlend(loadFuelBlend(applicationContext))
+        }
+        TelemetryState.setLifetime(manager.getLifetimeStats())
+        TelemetryState.setOil(manager.oilLife.getProfile())
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -112,6 +141,7 @@ class TelemetryService : Service() {
                 updateNotification("Logging")
 
                 pollJob = launch { elm.runPollLoop() }
+                tickJob = launch { runTelemetryLoop(elm) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ObdTransportError) {
@@ -132,11 +162,48 @@ class TelemetryService : Service() {
         }
     }
 
+    /**
+     * The tick loop, separate from the poll loop on purpose.
+     *
+     * Polling is paced by how fast the adapter can answer; the models are integrated on a
+     * fixed 80ms step because that is what the rolling-MPG window and the wear accumulators
+     * are calibrated against. Tying them together would make the physics depend on Bluetooth
+     * latency.
+     *
+     * It reads whatever the poll loop last wrote rather than waiting for fresh values, which
+     * is also what makes an unanswered PID harmless - the previous reading is still there.
+     */
+    private suspend fun runTelemetryLoop(elm: Elm327Client) {
+        var last = System.currentTimeMillis()
+        while (currentCoroutineContext().isActive) {
+            delay(CivicSpecs.TELEMETRY_TICK_MS.toLong())
+
+            val now = System.currentTimeMillis()
+            val dtSec = (now - last) / 1000.0
+            last = now
+
+            val snapshot = manager.tick(elm.data.value, dtSec, TelemetryState.connection.value)
+            TelemetryState.setMetrics(snapshot.metrics)
+            TelemetryState.setTrip(snapshot.trip)
+            TelemetryState.setOil(snapshot.oil)
+            TelemetryState.setLifetime(snapshot.lifetime)
+        }
+    }
+
     private suspend fun teardown(message: String) {
+        tickJob?.cancelAndJoin()
+        tickJob = null
         pollJob?.cancelAndJoin()
         pollJob = null
         runCatching { client?.disconnect() }
         client = null
+
+        // Saves are debounced to once per thirty seconds, so the end of a drive is exactly
+        // when the unwritten remainder is worth keeping.
+        if (::manager.isInitialized) {
+            runCatching { manager.flush() }
+            TelemetryState.setLifetime(manager.getLifetimeStats())
+        }
         TelemetryState.setStatusMessage(message)
         if (TelemetryState.connection.value != ConnectionStatus.ERROR) {
             TelemetryState.setConnection(ConnectionStatus.DISCONNECTED)

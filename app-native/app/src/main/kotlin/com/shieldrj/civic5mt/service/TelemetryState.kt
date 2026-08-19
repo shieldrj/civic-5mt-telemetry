@@ -1,8 +1,12 @@
 package com.shieldrj.civic5mt.service
 
 import com.shieldrj.civic5mt.core.ConnectionStatus
+import com.shieldrj.civic5mt.core.LifetimeStats
+import com.shieldrj.civic5mt.core.LiveMetrics
+import com.shieldrj.civic5mt.core.OilLifeProfile
 import com.shieldrj.civic5mt.core.ProtocolLogEntry
 import com.shieldrj.civic5mt.core.RawObdData
+import com.shieldrj.civic5mt.core.TripAnalytics
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,8 +29,22 @@ object TelemetryState {
     private val _connection = MutableStateFlow(ConnectionStatus.DISCONNECTED)
     val connection: StateFlow<ConnectionStatus> = _connection.asStateFlow()
 
+    /** What the adapter last said, before any physics is applied to it. */
     private val _data = MutableStateFlow(RawObdData())
     val data: StateFlow<RawObdData> = _data.asStateFlow()
+
+    /** What the gauges read: the raw PIDs with the models applied. */
+    private val _metrics = MutableStateFlow(LiveMetrics())
+    val metrics: StateFlow<LiveMetrics> = _metrics.asStateFlow()
+
+    private val _trip = MutableStateFlow(TripAnalytics())
+    val trip: StateFlow<TripAnalytics> = _trip.asStateFlow()
+
+    private val _oil = MutableStateFlow<OilLifeProfile?>(null)
+    val oil: StateFlow<OilLifeProfile?> = _oil.asStateFlow()
+
+    private val _lifetime = MutableStateFlow(LifetimeStats())
+    val lifetime: StateFlow<LifetimeStats> = _lifetime.asStateFlow()
 
     /** Human-readable progress during the handshake, and the failure text if it fails. */
     private val _statusMessage = MutableStateFlow("Not connected")
@@ -47,6 +65,22 @@ object TelemetryState {
         _data.value = data
     }
 
+    internal fun setMetrics(metrics: LiveMetrics) {
+        _metrics.value = metrics
+    }
+
+    internal fun setTrip(trip: TripAnalytics) {
+        _trip.value = trip
+    }
+
+    internal fun setOil(oil: OilLifeProfile) {
+        _oil.value = oil
+    }
+
+    internal fun setLifetime(stats: LifetimeStats) {
+        _lifetime.value = stats
+    }
+
     internal fun setStatusMessage(message: String) {
         _statusMessage.value = message
     }
@@ -61,7 +95,10 @@ object TelemetryState {
 
     internal fun reset() {
         _data.value = RawObdData()
+        _metrics.value = LiveMetrics()
         _resolvedPids.value = ResolvedPids()
+        // Trip, oil and the lifetime record deliberately survive a reconnect. A dropped
+        // Bluetooth link in a tunnel is not the end of a drive.
     }
 }
 

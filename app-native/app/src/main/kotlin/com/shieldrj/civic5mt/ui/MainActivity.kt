@@ -40,7 +40,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.shieldrj.civic5mt.core.ConnectionStatus
-import com.shieldrj.civic5mt.core.RawObdData
+import com.shieldrj.civic5mt.core.LiveMetrics
+import com.shieldrj.civic5mt.core.MpgDisplayState
+import com.shieldrj.civic5mt.core.OutsideAirSource
+import com.shieldrj.civic5mt.core.TripAnalytics
 import com.shieldrj.civic5mt.service.ResolvedPids
 import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
@@ -49,12 +52,16 @@ import com.shieldrj.civic5mt.transport.PairedDevice
 
 /**
  * The shell, and enough of a screen to prove the whole chain works end to end: a Bluetooth
- * socket, the ELM327 handshake, the poll loop in a service, and live readings on screen.
+ * socket, the ELM327 handshake, the poll loop and the models in a service, and the figures
+ * they produce on screen.
  *
- * This is not the Drive tab. It renders raw readings rather than a gauge on purpose - the
- * point of it is to be able to look at the phone in the car and see which PIDs answered and
- * which did not, before any of that is dressed up. The gauge comes next, and it comes from
- * the design system rather than from this layout.
+ * This is not the Drive tab. It is a list of numbers rather than a gauge on purpose - what it
+ * is for right now is being looked at in the car to see which readings arrived and which did
+ * not, before any of it is dressed up. A gauge that is wrong is much harder to catch than a
+ * row that says "—".
+ *
+ * It does already hold the two rules that survive into the real UI: MPG is the hero, and it
+ * is only drawn as a number when it is actually an economy figure.
  */
 class MainActivity : ComponentActivity() {
 
@@ -87,7 +94,8 @@ private fun ConnectionScreen() {
     val context = LocalContext.current
 
     val connection by TelemetryState.connection.collectAsStateWithLifecycle()
-    val data by TelemetryState.data.collectAsStateWithLifecycle()
+    val metrics by TelemetryState.metrics.collectAsStateWithLifecycle()
+    val trip by TelemetryState.trip.collectAsStateWithLifecycle()
     val status by TelemetryState.statusMessage.collectAsStateWithLifecycle()
     val resolved by TelemetryState.resolvedPids.collectAsStateWithLifecycle()
 
@@ -120,14 +128,31 @@ private fun ConnectionScreen() {
         )
         Spacer(Modifier.height(20.dp))
 
-        // The hero, as in the web build: the one number worth reading at a glance. It shows
-        // a dash until the car has actually said something - an absent reading renders as an
-        // absence, never as a plausible zero.
+        // MPG is the hero, as in the web build - the one number worth reading at a glance.
+        //
+        // It is only ever drawn as a number while actually driving. Standing at a light the
+        // figure is zero because the car is not moving, and on a closed throttle it is the
+        // 99.9 cap because the injectors are off; neither is "your car is getting N mpg", so
+        // neither gets drawn as one. That is what mpgDisplayState is for.
+        val live = connection == ConnectionStatus.CONNECTED
         Reading(
-            value = data.rpm.takeIf { connection == ConnectionStatus.CONNECTED && it > 0 }
-                ?.let { it.toInt().toString() },
-            unit = "RPM",
+            value = metrics.displayMpg
+                .takeIf { live && metrics.mpgDisplayState == MpgDisplayState.DRIVING }
+                ?.let { "%.1f".format(it) },
+            unit = "MPG",
         )
+        if (live) {
+            Spacer(Modifier.height(6.dp))
+            Text(
+                text = when (metrics.mpgDisplayState) {
+                    MpgDisplayState.IDLE -> "Stationary"
+                    MpgDisplayState.COASTING -> "Coasting · injectors off"
+                    MpgDisplayState.DRIVING -> "Gear ${metrics.currentGear} · ${metrics.rpm.toInt()} rpm"
+                },
+                color = CivicColors.Ink3,
+                fontSize = 13.sp,
+            )
+        }
 
         Spacer(Modifier.height(24.dp))
         Hairline()
@@ -156,7 +181,7 @@ private fun ConnectionScreen() {
         Hairline()
         Spacer(Modifier.height(16.dp))
 
-        LiveReadings(data, resolved, connection)
+        LiveReadings(metrics, trip, resolved, connection)
 
         // The failure messages tell you to check the adapter log, so the adapter log has to
         // be somewhere you can check. It was not, which made that sentence an instruction
@@ -235,26 +260,34 @@ private fun Reading(value: String?, unit: String) {
 
 @Composable
 private fun LiveReadings(
-    data: RawObdData,
+    metrics: LiveMetrics,
+    trip: TripAnalytics,
     resolved: ResolvedPids,
     connection: ConnectionStatus,
 ) {
     val live = connection == ConnectionStatus.CONNECTED
 
-    // Nullable readings print a dash and say which PID they would have come from. This is the
-    // screen that used to show a fabricated 22 °C outside temperature on a car with no PID 46.
+    // Nullable readings print a dash. This is the screen that used to show a fabricated
+    // 22 °C outside temperature on a car that has no PID 46 to read it from.
     val rows = listOf(
-        "Speed" to if (live) "${data.speedKmh.toInt()} km/h" else null,
-        "Coolant" to if (live) "${data.coolantC.toInt()} °C" else null,
-        "MAF" to if (live) "${data.maf} g/s" else null,
-        "Throttle" to if (live) "${data.throttlePos} %" else null,
-        "Battery" to if (live) "${data.batteryVoltage} V" else null,
-        "Lambda" to data.lambda?.let { "λ $it" },
-        "Sensor current" to data.o2Sensor1CurrentMa?.let { "$it mA" },
-        "Outside air" to data.ambientC?.let { c ->
-            val source = if (data.ambientSource?.name == "INTAKE") " (intake)" else ""
+        "Speed" to if (live) "${metrics.speedMph.toInt()} mph" else null,
+        "Air:fuel" to if (live) "%.1f:1".format(metrics.airFuelRatio) else null,
+        "Fuel flow" to if (live) "%.2f gal/hr".format(metrics.fuelFlowGalPerHour) else null,
+        "Range" to if (live) "${metrics.fuelRangeMiles} mi" else null,
+        "Coolant" to if (live) "${metrics.coolantTempC.toInt()} °C" else null,
+        "Battery" to if (live) "%.2f V".format(metrics.batteryVoltage) else null,
+        "Lambda" to metrics.equivalenceRatio?.let { "λ $it" },
+        "Sensor current" to metrics.o2Sensor1CurrentMa?.let { "$it mA" },
+        "Outside air" to metrics.outsideAirTempC?.let { c ->
+            // 0F is intake air, which after a few minutes of idling reads engine-bay heat
+            // rather than weather. It never appears under this heading unlabelled.
+            val source = if (metrics.outsideAirSource == OutsideAirSource.INTAKE) " (intake)" else ""
             "${c.toInt()} °C$source"
         },
+        "Trip" to if (live) "%.1f mi · %.1f mpg".format(trip.distanceMiles, trip.avgMpg) else null,
+        "Lifetime" to metrics.lifetimeMiles
+            .takeIf { it > 0 }
+            ?.let { "%.1f mi · %.1f mpg".format(it, metrics.lifetimeMpg) },
     )
 
     rows.forEach { (label, value) -> ReadingRow(label, value) }
