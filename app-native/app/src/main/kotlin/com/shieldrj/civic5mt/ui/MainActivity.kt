@@ -3,7 +3,9 @@ package com.shieldrj.civic5mt.ui
 import android.Manifest
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -17,6 +19,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
@@ -29,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -55,6 +60,18 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Draw behind the system bars, then pad the content back out of them. Without the
+        // second half the header sits underneath the status bar, which is what the first
+        // build on the phone did.
+        enableEdgeToEdge()
+
+        // The screen stays on while this is open. It is read at a glance while driving, and
+        // a gauge that has blanked itself is worse than no gauge - you look down, see
+        // nothing, and look again. It only applies while this Activity is in front; the
+        // service keeps logging regardless of the screen.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         setContent {
             Civic5MTTheme {
                 Surface(modifier = Modifier.fillMaxSize(), color = CivicColors.Ground) {
@@ -90,8 +107,9 @@ private fun ConnectionScreen() {
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 28.dp),
+            .padding(horizontal = 20.dp, vertical = 24.dp),
     ) {
         Text(
             text = "CIVIC 5MT",
@@ -139,6 +157,45 @@ private fun ConnectionScreen() {
         Spacer(Modifier.height(16.dp))
 
         LiveReadings(data, resolved, connection)
+
+        // The failure messages tell you to check the adapter log, so the adapter log has to
+        // be somewhere you can check. It was not, which made that sentence an instruction
+        // pointing at nothing - noticed because the ignition-off message said it on the car.
+        val log by TelemetryState.protocolLog.collectAsStateWithLifecycle()
+        if (log.isNotEmpty()) {
+            Spacer(Modifier.height(24.dp))
+            Hairline()
+            Spacer(Modifier.height(16.dp))
+            Text(
+                text = "ADAPTER LOG",
+                color = CivicColors.Ink3,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 2.sp,
+            )
+            Spacer(Modifier.height(12.dp))
+            // Newest first: the line that explains a failure is the last one written, and
+            // scrolling to the bottom of a sixty-line log to find it is not a thing anyone
+            // does in a car park.
+            log.asReversed().forEach { entry ->
+                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)) {
+                    Text(
+                        text = entry.cmd,
+                        color = CivicColors.Ink3,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                        modifier = Modifier.width(96.dp),
+                    )
+                    Text(
+                        text = entry.resp,
+                        color = CivicColors.Ink2,
+                        fontSize = 12.sp,
+                        fontFamily = FontFamily.Monospace,
+                    )
+                }
+            }
+            Spacer(Modifier.height(24.dp))
+        }
     }
 }
 
@@ -150,21 +207,28 @@ private fun rememberLauncher(onResult: () -> Unit) =
 
 @Composable
 private fun Reading(value: String?, unit: String) {
-    Row(verticalAlignment = Alignment.Bottom) {
+    // The unit sits on the numeral baseline rather than the row bottom edge, which is what
+    // alignByBaseline is for. Alignment.Bottom lined it up with the descender box instead and
+    // left it floating well below the digits.
+    //
+    // An absent reading is drawn small. At the hero size a dash is a wide rule across the
+    // screen that reads as a divider or a rendering fault, not as "nothing has arrived yet".
+    Row {
         Text(
             text = value ?: "—",
             color = if (value == null) CivicColors.Ink4 else CivicColors.Ink,
-            fontSize = 72.sp,
+            fontSize = if (value == null) 40.sp else 72.sp,
             fontWeight = FontWeight.Light,
-            letterSpacing = (-2).sp,
+            letterSpacing = if (value == null) 0.sp else (-2).sp,
+            modifier = Modifier.alignByBaseline(),
         )
-        Spacer(Modifier.height(0.dp))
+        Spacer(Modifier.width(10.dp))
         Text(
-            text = "  $unit",
+            text = unit,
             color = CivicColors.Ink3,
             fontSize = 12.sp,
             letterSpacing = 1.sp,
-            modifier = Modifier.padding(bottom = 16.dp),
+            modifier = Modifier.alignByBaseline(),
         )
     }
 }
