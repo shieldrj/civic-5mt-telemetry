@@ -26,6 +26,20 @@ android {
     }
 
     buildTypes {
+        debug {
+            // Installs alongside the Capacitor app rather than replacing it. They share an
+            // application ID otherwise, so putting a development build on the phone would
+            // uninstall the app that currently works in the car - and this one does not yet
+            // do most of what that one does.
+            //
+            // This costs nothing now only because the lifetime record was already rescued to
+            // a file. A separate application ID means a separate data directory, so the
+            // native app cannot inherit the WebView storage in place; it imports from that
+            // JSON instead, which is the path it was always going to take.
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            resValue("string", "app_name", "Civic 5MT dev")
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
