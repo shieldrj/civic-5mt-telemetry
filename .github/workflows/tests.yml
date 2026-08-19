@@ -68,3 +68,32 @@ jobs:
       - name: Physics model tests
         working-directory: app-native
         run: ./gradlew --no-daemon :core:test
+
+  # Compiles the Android module. It has no unit tests of its own by design - everything with
+  # logic in it lives in :core, which is plain JVM - so what this catches is the build
+  # breaking, which otherwise would not surface until someone tried to put a build on the
+  # phone. The APK is not kept; this is a check, not a release.
+  native-app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-app-${{ runner.os }}-${{ hashFiles('app-native/**/*.gradle.kts', 'app-native/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-app-${{ runner.os }}-
+
+      - name: Build debug APK
+        working-directory: app-native
+        run: ./gradlew --no-daemon :app:assembleDebug

@@ -1,0 +1,62 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Bluetooth Classic, not LE. The OBDLink MX+ advertises Classic only, which is why the
+      web build could never reach it: Web Bluetooth is LE-only by specification.
+
+      BLUETOOTH_CONNECT is the Android 12+ runtime permission; neverForLocation says plainly
+      that this app is not using Bluetooth to work out where the phone is, which is what the
+      permission is otherwise assumed to be for.
+    -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_CONNECT"
+        android:usesPermissionFlags="neverForLocation" />
+
+    <!--
+      The foreground service is the whole point of going native: logging has to continue with
+      the screen off. connectedDevice is the honest type - the service exists to hold a link
+      to a piece of hardware plugged into the car.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+
+    <!-- For oil-life-due, a new DTC, and unusual voltage. Runtime-requested on Android 13+. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-feature
+        android:name="android.hardware.bluetooth"
+        android:required="true" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Civic5MT">
+
+        <!--
+          allowBackup is off deliberately. Cloud backup would restore a stale lifetime record
+          over a newer one on reinstall, and that record is the one thing here that cannot be
+          regenerated - it accumulated from real driving.
+        -->
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:screenOrientation="portrait"
+            android:configChanges="orientation|screenSize|keyboardHidden|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".service.TelemetryService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+    </application>
+
+</manifest>

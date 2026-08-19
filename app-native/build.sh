@@ -33,5 +33,9 @@ tar -cf - -C "$SRC" --exclude=.gradle --exclude=build . | tar -xf - -C "$DST"
 chmod +x "$DST/gradlew"
 
 export JAVA_HOME="$JDK"
+# The Android SDK is not on PATH and not in the environment on this machine, and Gradle
+# needs it for the :app module. :core does not - it has no Android in it at all.
+export ANDROID_HOME="/c/Users/shiel/AppData/Local/Android/Sdk"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
 cd "$DST"
 exec ./gradlew --no-daemon "${@:-:core:test}"

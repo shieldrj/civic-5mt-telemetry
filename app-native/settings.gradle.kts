@@ -2,6 +2,7 @@ pluginManagement {
     repositories {
         gradlePluginPortal()
         mavenCentral()
+        google()
     }
 }
 
@@ -21,3 +22,4 @@ dependencyResolutionManagement {
 rootProject.name = "civic5mt-native"
 
 include(":core")
+include(":app")
