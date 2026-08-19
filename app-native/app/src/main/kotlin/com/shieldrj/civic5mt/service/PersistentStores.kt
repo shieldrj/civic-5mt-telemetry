@@ -95,7 +95,7 @@ private fun oilProfileToJson(p: OilLifeProfile): JSONObject = JSONObject()
     .put("shortTripsCount", p.shortTripsCount)
     .put("highThermalStressSec", p.highThermalStressSec)
     .put("estimatedMilesRemaining", p.estimatedMilesRemaining)
-    .put("estimatedDaysRemaining", p.estimatedDaysRemaining)
+    .put("estimatedDaysRemaining", p.estimatedDaysRemaining ?: JSONObject.NULL)
     .put("oilConditionGrade", p.oilConditionGrade.label)
     .put(
         "degradationBreakdown",
@@ -119,7 +119,9 @@ private fun parseOilProfile(json: JSONObject): OilLifeProfile {
         shortTripsCount = json.optInt("shortTripsCount", 0),
         highThermalStressSec = json.optDouble("highThermalStressSec", 0.0),
         estimatedMilesRemaining = json.optInt("estimatedMilesRemaining", 0),
-        estimatedDaysRemaining = json.optInt("estimatedDaysRemaining", 0),
+        estimatedDaysRemaining =
+            if (json.isNull("estimatedDaysRemaining")) null
+            else json.optInt("estimatedDaysRemaining").takeIf { it > 0 },
         oilConditionGrade = gradeFromLabel(json.optString("oilConditionGrade")),
         degradationBreakdown = DegradationBreakdown(
             revWearFactor = breakdown.optDouble("revWearFactor", 0.0),

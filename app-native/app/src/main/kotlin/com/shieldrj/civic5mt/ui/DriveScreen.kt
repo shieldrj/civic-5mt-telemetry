@@ -43,6 +43,7 @@ fun DriveScreen(
     connection: ConnectionStatus,
     shiftMode: ShiftMode,
     onToggleShiftMode: () -> Unit,
+    onOpen: (DetailScreen) -> Unit,
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -162,16 +163,35 @@ fun DriveScreen(
 
         Spacer(Modifier.height(14.dp))
 
-        Text(
-            text = "Stop",
-            color = CivicColors.Accent,
-            fontSize = 15.sp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable(onClick = onStop)
-                .padding(vertical = 12.dp),
-        )
+        // One line, because this screen is read through a windscreen and everything on it
+        // competes with the gauge. The detail screens are reachable while connected because
+        // that is when their live half means anything - the mixture, the burn rate and the
+        // idle cost are all readings, not records.
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            NavLink("Fuel") { onOpen(DetailScreen.Fuel) }
+            NavLink("Oil") { onOpen(DetailScreen.Oil) }
+            NavLink("Codes") { onOpen(DetailScreen.Codes) }
+            NavLink("Trips") { onOpen(DetailScreen.Trips) }
+            NavLink("Stop", CivicColors.Accent, onStop)
+        }
     }
+}
+
+@Composable
+private fun NavLink(
+    label: String,
+    color: androidx.compose.ui.graphics.Color = CivicColors.Ink2,
+    onClick: () -> Unit,
+) {
+    Text(
+        text = label,
+        color = color,
+        fontSize = 15.sp,
+        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 4.dp, vertical = 4.dp),
+    )
 }
 
 @Composable

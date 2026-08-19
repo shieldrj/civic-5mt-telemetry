@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import kotlin.math.abs
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -337,6 +338,258 @@ class TelemetryManagerTest {
 
             assertEquals(13.78, snapshot.metrics.airFuelRatio, 0.01)
             assertFalse(abs(snapshot.metrics.airFuelRatio - 14.7) < 0.01)
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    @Nested
+    @DisplayName("Oil life")
+    inner class Oil {
+
+        /** Warmed through, engine turning. */
+        private fun hot() = cruising()
+
+        /** A genuinely cold engine, idling on the driveway. */
+        private fun coldIdle() = RawObdData(
+            rpm = 1100.0,
+            speedKmh = 0.0,
+            maf = 3.0,
+            coolantC = 21.0,
+            engineLoad = 22.0,
+            throttlePos = 14.0,
+            lambda = 1.0,
+        )
+
+        /** Key on, engine not running: every PID answers, the crank is not turning. */
+        private fun ignitionOnly() = RawObdData(rpm = 0.0, coolantC = 21.0)
+
+        @Test
+        fun `A simulated drive leaves the oil record exactly where it was`() {
+            // The same rule the lifetime figure has, applied to the other permanent record.
+            // Oil life is the number someone changes their oil on, and a bench run is not
+            // wear on anyone's engine.
+            val m = manager()
+            val before = m.oilLife.getProfile()
+
+            repeat(200) { m.tick(hot(), 0.5, ConnectionStatus.SIMULATING) }
+
+            val after = m.oilLife.getProfile()
+            assertEquals(before.accumulatedRevolutions, after.accumulatedRevolutions)
+            assertEquals(before.currentOdometer, after.currentOdometer)
+            assertEquals(before.oilLifePercent, after.oilLifePercent)
+        }
+
+        @Test
+        fun `A real drive accrues revolutions and miles`() {
+            val m = manager()
+            val before = m.oilLife.getProfile()
+
+            repeat(200) { m.tick(hot(), 0.5, ConnectionStatus.CONNECTED) }
+
+            val after = m.oilLife.getProfile()
+            assertTrue(after.accumulatedRevolutions > before.accumulatedRevolutions)
+            assertTrue(after.currentOdometer > before.currentOdometer)
+        }
+
+        @Test
+        fun `Reconnecting to a hot engine is not a cold start`() {
+            // This is the bug being closed. The TypeScript read the coolant temperature at
+            // the moment the socket opened - before any PID had answered - so it read the
+            // zero-initialised default and logged a cold start on every single connection.
+            val m = manager()
+            val before = m.oilLife.getProfile().coldStartsCount
+
+            m.tick(ignitionOnly(), 0.5, ConnectionStatus.CONNECTED)
+            repeat(20) { m.tick(hot(), 0.5, ConnectionStatus.CONNECTED) }
+
+            assertEquals(before, m.oilLife.getProfile().coldStartsCount)
+        }
+
+        @Test
+        fun `A genuinely cold engine is counted once, not once per tick`() {
+            val m = manager()
+            val before = m.oilLife.getProfile().coldStartsCount
+
+            repeat(50) { m.tick(coldIdle(), 0.5, ConnectionStatus.CONNECTED) }
+
+            assertEquals(before + 1, m.oilLife.getProfile().coldStartsCount)
+        }
+
+        @Test
+        fun `A short cold trip is counted against the oil when the drive ends`() {
+            // Under fifteen minutes and never hot enough to boil the condensation out. The
+            // whole reason the counter exists, and it could not fire at all until now:
+            // nothing in the native build was calling registerEngineStop.
+            val m = manager()
+            val before = m.oilLife.getProfile().shortTripsCount
+
+            repeat(300) { m.tick(coldIdle(), 0.5, ConnectionStatus.CONNECTED) } // 150s
+            m.endDrive()
+
+            assertEquals(before + 1, m.oilLife.getProfile().shortTripsCount)
+        }
+
+        @Test
+        fun `Ending a simulated drive counts nothing`() {
+            val m = manager()
+            val before = m.oilLife.getProfile()
+
+            repeat(300) { m.tick(coldIdle(), 0.5, ConnectionStatus.SIMULATING) }
+            m.endDrive()
+
+            assertEquals(before.shortTripsCount, m.oilLife.getProfile().shortTripsCount)
+            assertEquals(before.coldStartsCount, m.oilLife.getProfile().coldStartsCount)
+        }
+
+        @Test
+        fun `Loading a record recomputes what is derived from it`() {
+            // The stored percentage, grade and miles-remaining are views of the stored
+            // measurements, exactly as lifetime mpg is a view of miles over gallons. A record
+            // written by an older calculation must not keep showing that calculation's answer.
+            val store = InMemoryOilProfileStore(
+                OilLifeProfile(
+                    lastResetTimestamp = 1_700_000_000_000 - 45L * 24 * 60 * 60 * 1000,
+                    lastResetOdometer = 114_254.0,
+                    currentOdometer = 115_583.0,
+                    oilLifePercent = 12.0,          // nonsense, next to the measurements
+                    accumulatedRevolutions = 665_008.0,
+                    coldStartsCount = 0,
+                    timeBelowOperatingTempSec = 2294.0,
+                    shortTripsCount = 0,
+                    highThermalStressSec = 0.0,
+                    estimatedMilesRemaining = 26_122,
+                    estimatedDaysRemaining = 45,
+                    oilConditionGrade = OilConditionGrade.DEGRADED,
+                    degradationBreakdown = DegradationBreakdown(0.0, 0.0, 0.0, 0.0),
+                )
+            )
+
+            // No tick, no drive - construction alone.
+            val p = OilLifeEngine(store, MutableClock(1_700_000_000_000)).getProfile()
+
+            assertTrue(p.oilLifePercent > 90, "got ${p.oilLifePercent}%")
+            assertEquals(OilConditionGrade.EXCELLENT, p.oilConditionGrade)
+            assertTrue(
+                p.estimatedMilesRemaining <= CivicSpecs.BASELINE_OIL_LIFE_MILES.toInt(),
+                "got ${p.estimatedMilesRemaining} mi",
+            )
+        }
+
+        @Test
+        fun `The interval estimate never projects past the service interval`() {
+            // Light wear over a short distance extrapolates enormously: 1,300 miles at 5%
+            // degradation projects to 26,000. That is what the rescued record was showing,
+            // and 26,000 miles is not an oil change interval anybody should be offered.
+            val store = InMemoryOilProfileStore(
+                OilLifeProfile(
+                    lastResetTimestamp = 1_700_000_000_000 - 45L * 24 * 60 * 60 * 1000,
+                    lastResetOdometer = 114_254.0,
+                    currentOdometer = 115_583.0,
+                    oilLifePercent = 95.2,
+                    accumulatedRevolutions = 665_008.0,
+                    coldStartsCount = 0,
+                    timeBelowOperatingTempSec = 2294.0,
+                    shortTripsCount = 0,
+                    highThermalStressSec = 0.0,
+                    estimatedMilesRemaining = 26_122,
+                    estimatedDaysRemaining = 45,
+                    oilConditionGrade = OilConditionGrade.EXCELLENT,
+                    degradationBreakdown = DegradationBreakdown(4.6, 0.3, 0.0, 0.0),
+                )
+            )
+            val clock = MutableClock(1_700_000_000_000)
+            val engine = OilLifeEngine(store, clock)
+            engine.recordTelemetryStep(2500.0, 88.0, 35.0, 60.0, 0.5)
+
+            val p = engine.getProfile()
+            assertTrue(
+                p.estimatedMilesRemaining <= CivicSpecs.BASELINE_OIL_LIFE_MILES.toInt(),
+                "projected ${p.estimatedMilesRemaining} mi remaining",
+            )
+            // Still proportional to what is left, rather than pinned to the cap.
+            assertTrue(p.estimatedMilesRemaining > 6_000, "got ${p.estimatedMilesRemaining}")
+        }
+
+        @Test
+        fun `A days-remaining figure waits until there is a rate behind it`() {
+            // Miles remaining over miles per day. Measured across three days of a record that
+            // happens to include a long trip, that divisor is noise - it read "about 12 days"
+            // on oil at 95%, which would need thirteen hundred miles a day to be true.
+            fun profileAgedDays(days: Long) = OilLifeProfile(
+                lastResetTimestamp = 1_700_000_000_000 - days * 24 * 60 * 60 * 1000,
+                lastResetOdometer = 114_254.0,
+                currentOdometer = 115_583.0,
+                oilLifePercent = 95.2,
+                accumulatedRevolutions = 665_008.0,
+                coldStartsCount = 0,
+                timeBelowOperatingTempSec = 2294.0,
+                shortTripsCount = 0,
+                highThermalStressSec = 0.0,
+                estimatedMilesRemaining = 7_137,
+                estimatedDaysRemaining = 12,
+                oilConditionGrade = OilConditionGrade.EXCELLENT,
+                degradationBreakdown = DegradationBreakdown(4.6, 0.3, 0.0, 0.0),
+            )
+
+            val fresh = OilLifeEngine(
+                InMemoryOilProfileStore(profileAgedDays(3)),
+                MutableClock(1_700_000_000_000),
+            ).getProfile()
+            assertNull(fresh.estimatedDaysRemaining, "three days is not a driving habit")
+
+            val settled = OilLifeEngine(
+                InMemoryOilProfileStore(profileAgedDays(90)),
+                MutableClock(1_700_000_000_000),
+            ).getProfile()
+            assertNotNull(settled.estimatedDaysRemaining)
+            assertTrue(settled.estimatedDaysRemaining!! > 0)
+        }
+
+        @Test
+        fun `A fresh reset has no days estimate to give`() {
+            val engine = OilLifeEngine(InMemoryOilProfileStore(), MutableClock(1_700_000_000_000))
+            assertNull(engine.resetOilLife(120_000.0).estimatedDaysRemaining)
+        }
+
+        @Test
+        fun `Harsh use still shortens the interval below the baseline`() {
+            // The cap is one-sided on purpose: it clips optimism, not the warning.
+            val store = InMemoryOilProfileStore(
+                OilLifeProfile(
+                    lastResetTimestamp = 1_700_000_000_000 - 200L * 24 * 60 * 60 * 1000,
+                    lastResetOdometer = 100_000.0,
+                    currentOdometer = 103_000.0,
+                    oilLifePercent = 40.0,
+                    accumulatedRevolutions = 8_000_000.0,
+                    coldStartsCount = 120,
+                    timeBelowOperatingTempSec = 90_000.0,
+                    shortTripsCount = 60,
+                    highThermalStressSec = 4_000.0,
+                    estimatedMilesRemaining = 0,
+                    estimatedDaysRemaining = 0,
+                    oilConditionGrade = OilConditionGrade.FAIR,
+                    degradationBreakdown = DegradationBreakdown(0.0, 0.0, 0.0, 0.0),
+                )
+            )
+            val engine = OilLifeEngine(store, MutableClock(1_700_000_000_000))
+            engine.recordTelemetryStep(2500.0, 88.0, 35.0, 60.0, 0.5)
+
+            assertTrue(
+                engine.getProfile().estimatedMilesRemaining < 3_000,
+                "got ${engine.getProfile().estimatedMilesRemaining}",
+            )
+        }
+
+        @Test
+        fun `Ending the same drive twice does not count it twice`() {
+            val m = manager()
+            repeat(300) { m.tick(coldIdle(), 0.5, ConnectionStatus.CONNECTED) }
+
+            m.endDrive()
+            val afterFirst = m.oilLife.getProfile().shortTripsCount
+            m.endDrive()
+
+            assertEquals(afterFirst, m.oilLife.getProfile().shortTripsCount)
         }
     }
 }

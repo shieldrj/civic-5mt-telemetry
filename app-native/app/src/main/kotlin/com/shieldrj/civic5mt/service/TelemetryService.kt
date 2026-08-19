@@ -96,9 +96,7 @@ class TelemetryService : Service() {
         manager = TelemetryManager(
             lifetimeStore = PrefsLifetimeStore(applicationContext),
             oilLife = OilLifeEngine(PrefsOilProfileStore(applicationContext)),
-        ).apply {
-            setFuelBlend(loadFuelBlend(applicationContext))
-        }
+        )
         TelemetryState.setLifetime(manager.getLifetimeStats())
         TelemetryState.setOil(manager.oilLife.getProfile())
 
@@ -106,6 +104,21 @@ class TelemetryService : Service() {
 
         TelemetryState.setOverlayEnabled(loadOverlayEnabled(applicationContext))
         observeOverlay()
+        observeFuelBlend()
+    }
+
+    /**
+     * Follows the blend the driver picked on the Fuel screen.
+     *
+     * The screen writes the preference and the flow; this only reads. One writer for a
+     * setting that is stored on disk and also held in a running model, because the other
+     * arrangement - screen writes prefs, service writes prefs, both hold a copy - is how a
+     * setting ends up meaning two different things in the same process.
+     */
+    private fun observeFuelBlend() {
+        scope.launch {
+            TelemetryState.fuelBlend.collect { manager.setFuelBlend(it) }
+        }
     }
 
     /**
@@ -156,6 +169,11 @@ class TelemetryService : Service() {
             }
 
             ACTION_SCAN_DTC -> scanForCodes()
+
+            ACTION_RESET_OIL -> {
+                resetOilLife()
+                stopIfIdle()
+            }
 
             ACTION_CLEAR_DTC -> clearCodes()
 
@@ -284,6 +302,33 @@ class TelemetryService : Service() {
     }
 
     /**
+     * Starts the oil interval again at 100%.
+     *
+     * Routed through the service rather than written straight to preferences from the screen,
+     * which is the opposite of how the fuel blend is handled and for a concrete reason: a
+     * running OilLifeEngine holds the profile in memory and writes it back every thirty
+     * seconds. A reset that only touched the file would be quietly overwritten by the engine's
+     * next save, with the screen showing 100% until something reloaded it.
+     */
+    private fun resetOilLife() {
+        TelemetryState.setOil(manager.oilLife.resetOilLife())
+        TelemetryState.setStatusMessage("Oil life reset to 100%")
+    }
+
+    /**
+     * Stops the service if it was only started to carry out a one-off.
+     *
+     * A reset arriving with no adapter connected starts this service purely to reach the
+     * model that owns the record. Leaving it running afterwards would keep a started service
+     * alive with no notification and nothing to do.
+     */
+    private fun stopIfIdle() {
+        if (client == null && connectJob?.isActive != true) {
+            stopSelf()
+        }
+    }
+
+    /**
      * Drives the models from the bench instead of from the car.
      *
      * The whole stack downstream of the adapter is the same code the car drives: the same
@@ -363,6 +408,9 @@ class TelemetryService : Service() {
         // Saves are debounced to once per thirty seconds, so the end of a drive is exactly
         // when the unwritten remainder is worth keeping.
         if (::manager.isInitialized) {
+            // Before the flush: this is what counts a short cold trip, and the flush is what
+            // writes the result out.
+            runCatching { manager.endDrive() }
             runCatching { manager.flush() }
             TelemetryState.setLifetime(manager.getLifetimeStats())
             if (::recorder.isInitialized) {
@@ -442,6 +490,7 @@ class TelemetryService : Service() {
         const val ACTION_SIMULATE = "com.shieldrj.civic5mt.SIMULATE"
         const val ACTION_SCAN_DTC = "com.shieldrj.civic5mt.SCAN_DTC"
         const val ACTION_CLEAR_DTC = "com.shieldrj.civic5mt.CLEAR_DTC"
+        const val ACTION_RESET_OIL = "com.shieldrj.civic5mt.RESET_OIL"
         const val ACTION_DISCONNECT = "com.shieldrj.civic5mt.DISCONNECT"
         const val EXTRA_DEVICE_ADDRESS = "deviceAddress"
 
@@ -469,6 +518,12 @@ class TelemetryService : Service() {
         fun clearCodes(context: Context) {
             context.startService(
                 Intent(context, TelemetryService::class.java).apply { action = ACTION_CLEAR_DTC }
+            )
+        }
+
+        fun resetOilLife(context: Context) {
+            context.startService(
+                Intent(context, TelemetryService::class.java).apply { action = ACTION_RESET_OIL }
             )
         }
 

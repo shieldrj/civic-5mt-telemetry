@@ -2,6 +2,7 @@ package com.shieldrj.civic5mt.service
 
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.DtcScanReport
+import com.shieldrj.civic5mt.core.FuelBlendId
 import com.shieldrj.civic5mt.core.LifetimeStats
 import com.shieldrj.civic5mt.core.LiveMetrics
 import com.shieldrj.civic5mt.core.OilLifeProfile
@@ -82,6 +83,21 @@ object TelemetryState {
 
     internal fun setScanning(scanning: Boolean) {
         _scanning.value = scanning
+    }
+
+    /**
+     * What is in the tank.
+     *
+     * Held here, and written by the screen rather than by the service, deliberately: it is a
+     * preference someone sets at a pump roughly once a year, and it has to be legible and
+     * changeable with nothing connected. The service observes it and hands it to the fuel
+     * model, so a blend picked mid-drive takes effect on the next tick.
+     */
+    private val _fuelBlend = MutableStateFlow(FuelBlendId.E10)
+    val fuelBlend: StateFlow<FuelBlendId> = _fuelBlend.asStateFlow()
+
+    fun setFuelBlend(id: FuelBlendId) {
+        _fuelBlend.value = id
     }
 
     /** Whether the driver wants the heads-up display over whatever else is on screen. */

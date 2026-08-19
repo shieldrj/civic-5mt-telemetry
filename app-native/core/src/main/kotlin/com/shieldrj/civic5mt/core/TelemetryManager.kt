@@ -36,6 +36,17 @@ class TelemetryManager(
     private var trip: TripAnalytics = TripAnalytics(tripStartTime = clock.nowMillis())
 
     /**
+     * Whether this drive's engine start has been counted against the oil yet.
+     *
+     * It is not counted at connect time, which is what the TypeScript did: it read the
+     * coolant temperature the instant the socket opened, before a single PID had been
+     * answered, so the reading was the zero-initialised default. Below the cold threshold,
+     * every time - which made every connection a cold start, including pulling over and
+     * reconnecting to an engine that had been at temperature for an hour.
+     */
+    private var engineStartCounted = false
+
+    /**
      * One step.
      *
      * @param rawDtSec wall-clock seconds since the previous tick. Two different step values
@@ -74,17 +85,33 @@ class TelemetryManager(
         val instantMpg = fuelModel.calculateInstantMpg(speedMph, flow.fuelFlowGalPerHour, isDfco)
         val rollingMpg = fuelModel.updateRollingMpg(instantMpg)
         val displayMpg = fuelModel.updateDisplayMpg(instantMpg, speedMph, isDfco, dtSec)
-        val fuelRange = fuelModel.calculateFuelRange(
-            raw.fuelLevelPercent,
-            CivicSpecs.FUEL_TANK_CAPACITY_GALLONS,
-            rollingMpg,
-        )
+        // No tank level, no range. A distance-to-empty derived from an assumed tank is a
+        // number someone drives past a petrol station on.
+        val fuelRange = raw.fuelLevelPercent?.let {
+            fuelModel.calculateFuelRange(it, CivicSpecs.FUEL_TANK_CAPACITY_GALLONS, rollingMpg)
+        }
 
         // 5. Integrate the trip, and the permanent record if this is a real adapter.
         updateTrip(integrationDtSec, speedMphRaw, flow.fuelFlowGalPerHour, isDfco, raw.rpm, status)
 
-        // 6. Engine wear.
-        val oilProfile = oilLife.recordTelemetryStep(raw.rpm, raw.coolantC, raw.engineLoad, speedMph, dtSec)
+        // 6. Engine wear - real driving only.
+        //
+        // Gated by the same rule the lifetime record uses, and for the same reason. This
+        // step was unconditional in the TypeScript, so a bench run added crank revolutions,
+        // odometer miles and cold-running seconds to a maintenance record and wrote them to
+        // disk thirty seconds later. Oil life is a figure someone changes their oil on.
+        val isRealDrive = IntegrationRules.shouldRecordLifetime(status)
+        val oilProfile = if (isRealDrive) {
+            // The first tick with the engine actually turning is the first moment there is a
+            // real coolant reading to judge a cold start by.
+            if (!engineStartCounted && raw.rpm >= CivicSpecs.ENGINE_RUNNING_RPM) {
+                engineStartCounted = true
+                oilLife.registerEngineStart(raw.coolantC)
+            }
+            oilLife.recordTelemetryStep(raw.rpm, raw.coolantC, raw.engineLoad, speedMph, dtSec)
+        } else {
+            oilLife.getProfile()
+        }
 
         val metrics = LiveMetrics(
             rpm = raw.rpm,
@@ -100,7 +127,7 @@ class TelemetryManager(
             timingAdvanceDeg = raw.timingAdvance,
             equivalenceRatio = raw.lambda,
             batteryVoltage = roundTo(raw.batteryVoltage, 2),
-            fuelLevelPercent = roundTo(raw.fuelLevelPercent, 1),
+            fuelLevelPercent = raw.fuelLevelPercent?.let { roundTo(it, 1) },
             outsideAirTempC = raw.ambientC,
             outsideAirTempF = outsideAirF,
             outsideAirSource = raw.ambientSource,
@@ -119,7 +146,7 @@ class TelemetryManager(
             rolling30sMpg = roundTo(rollingMpg, 1),
             lifetimeMpg = roundTo(lifetime.lifetimeMpg, 1),
             lifetimeMiles = lifetime.totalMiles,
-            fuelRangeMiles = fuelRange.roundToInt(),
+            fuelRangeMiles = fuelRange?.roundToInt(),
             currentGear = gear.currentGear,
             gearRatio = roundTo(gear.calculatedRatio, 2),
             isClutchSlipping = gear.isClutchSlipping,
@@ -240,6 +267,22 @@ class TelemetryManager(
 
     fun resetTrip() {
         trip = TripAnalytics(tripStartTime = clock.nowMillis())
+    }
+
+    /**
+     * Closes the drive off as far as the oil model is concerned.
+     *
+     * Separate from [flush], which just writes out what is already accumulated and may run
+     * at any time. This one has a side effect: a short trip that never got the oil hot is
+     * counted here, and counting it twice would be counting a drive that did not happen.
+     *
+     * Does nothing if no engine start was counted, so ending a simulated drive - or a
+     * connection that never saw the engine turn - leaves the record alone.
+     */
+    fun endDrive() {
+        if (!engineStartCounted) return
+        engineStartCounted = false
+        oilLife.registerEngineStop()
     }
 
     /**

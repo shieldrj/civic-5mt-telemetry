@@ -60,6 +60,15 @@ import com.shieldrj.civic5mt.service.loadOverlayEnabled
 import com.shieldrj.civic5mt.service.saveOverlayEnabled
 import com.shieldrj.civic5mt.transport.PairedDevice
 import com.shieldrj.civic5mt.ui.overlay.OverlayHost
+import kotlin.math.roundToInt
+
+/**
+ * The screens that sit in front of whatever the connection implies.
+ *
+ * Lives here rather than in each screen file because it is the shape of the navigation, and
+ * the navigation is one decision: exactly one of these is in front, or none of them is.
+ */
+enum class DetailScreen { Trips, Codes, Fuel, Oil }
 
 /**
  * The shell, and enough of a screen to prove the whole chain works end to end: a Bluetooth
@@ -112,11 +121,15 @@ private fun ConnectionScreen() {
     val resolved by TelemetryState.resolvedPids.collectAsStateWithLifecycle()
     val shiftMode by TelemetryState.shiftMode.collectAsStateWithLifecycle()
     val overlayEnabled by TelemetryState.overlayEnabled.collectAsStateWithLifecycle()
+    val oil by TelemetryState.oil.collectAsStateWithLifecycle()
+
+    // Which detail screen is in front, or null for whatever the connection implies - the
+    // Drive screen while something is connected, the adapter list otherwise. Two booleans got
+    // as far as two screens; four of them would allow a state where both are true.
+    var detail by remember { mutableStateOf<DetailScreen?>(null) }
 
     // Overlay permission is granted on a Settings screen, not in a dialog, so the only way to
     // know it changed is to look again when the app comes back to the front.
-    var showTrips by remember { mutableStateOf(false) }
-    var showCodes by remember { mutableStateOf(false) }
     val tripCount by remember { TripDatabase.get(context).tripDao().observeRealTripCount() }
         .collectAsStateWithLifecycle(0)
 
@@ -137,14 +150,13 @@ private fun ConnectionScreen() {
         adapters = BluetoothClassicTransport.pairedAdapters(context)
     }
 
-    if (showCodes) {
-        CodesScreen(onBack = { showCodes = false })
-        return
-    }
-
-    if (showTrips) {
-        TripsScreen(onBack = { showTrips = false })
-        return
+    val closeDetail = { detail = null }
+    when (detail) {
+        DetailScreen.Codes -> { CodesScreen(onBack = closeDetail); return }
+        DetailScreen.Trips -> { TripsScreen(onBack = closeDetail); return }
+        DetailScreen.Fuel -> { FuelScreen(onBack = closeDetail); return }
+        DetailScreen.Oil -> { OilScreen(onBack = closeDetail); return }
+        null -> {}
     }
 
     if (connection == ConnectionStatus.CONNECTED || connection == ConnectionStatus.SIMULATING) {
@@ -155,6 +167,7 @@ private fun ConnectionScreen() {
             connection = connection,
             shiftMode = shiftMode,
             onToggleShiftMode = { TelemetryState.toggleShiftMode() },
+            onOpen = { detail = it },
             onStop = { TelemetryService.disconnect(context) },
         )
         return
@@ -229,9 +242,17 @@ private fun ConnectionScreen() {
 
                 ActionRow(
                     if (tripCount > 0) "Trip history · $tripCount drives" else "Trip history"
-                ) { showTrips = true }
+                ) { detail = DetailScreen.Trips }
 
-                ActionRow("Diagnostics") { showCodes = true }
+                ActionRow("Diagnostics") { detail = DetailScreen.Codes }
+
+                ActionRow("Fuel") { detail = DetailScreen.Fuel }
+
+                // Reachable with nothing connected on purpose: it is a persisted record, and
+                // the moment someone wants it is standing next to a parked car.
+                ActionRow(
+                    oil?.let { "Oil life · " + it.oilLifePercent.roundToInt() + "%" } ?: "Oil life"
+                ) { detail = DetailScreen.Oil }
 
                 ActionRow(
                     when {
@@ -354,7 +375,7 @@ private fun LiveReadings(
         "Speed" to if (live) "${metrics.speedMph.toInt()} mph" else null,
         "Air:fuel" to if (live) "%.1f:1".format(metrics.airFuelRatio) else null,
         "Fuel flow" to if (live) "%.2f gal/hr".format(metrics.fuelFlowGalPerHour) else null,
-        "Range" to if (live) "${metrics.fuelRangeMiles} mi" else null,
+        "Range" to metrics.fuelRangeMiles?.let { "$it mi" },
         "Coolant" to if (live) "${metrics.coolantTempC.toInt()} °C" else null,
         "Battery" to if (live) "%.2f V".format(metrics.batteryVoltage) else null,
         "Lambda" to metrics.equivalenceRatio?.let { "λ $it" },

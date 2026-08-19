@@ -108,6 +108,17 @@ object CivicSpecs {
     const val REDLINE_RPM: Int = 6700
     const val REV_LIMITER_RPM: Int = 6800
     const val IDLE_RPM: Int = 750
+
+    /**
+     * Above this the engine is turning under its own power rather than cranking, or coasting
+     * to a stop.
+     *
+     * The oil model uses it to decide whether a tick counts as engine running time at all,
+     * and the manager uses it to decide when a coolant reading is real enough to judge a cold
+     * start by. Both had the number written out separately, which is one figure in two places
+     * waiting to disagree.
+     */
+    const val ENGINE_RUNNING_RPM: Double = 400.0
     const val VTEC_SWITCH_RPM: Int = 4800 // Dynamic i-VTEC economy-to-power cam switch
 
     // 5-Speed Manual Transmission Gear Ratios

@@ -289,8 +289,17 @@ class PrimetimeValidationTest {
         }
 
         @Test
-        fun `Fuel level default in valid percent range`() {
-            assertTrue(defaults.fuelLevelPercent in 0.0..100.0, "got ${defaults.fuelLevelPercent}%")
+        fun `An unreported tank level is absent, not a five-eighths tank`() {
+            // It used to default to 65.0, which on a car with no PID 2F rendered as a tank
+            // level and a range to empty that had never been measured.
+            assertNull(defaults.fuelLevelPercent)
+        }
+
+        @Test
+        fun `No tank level means no range to empty`() {
+            val m = TelemetryManager(lifetimeStore = InMemoryLifetimeStore())
+            val snapshot = m.tick(RawObdData(rpm = 2500.0, speedKmh = 90.0), 0.08, ConnectionStatus.CONNECTED)
+            assertNull(snapshot.metrics.fuelRangeMiles)
         }
 
         @Test

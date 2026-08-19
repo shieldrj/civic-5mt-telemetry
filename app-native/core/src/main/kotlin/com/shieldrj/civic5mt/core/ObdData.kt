@@ -30,7 +30,15 @@ data class RawObdData(
     /** Wide-range lambda from PID 24 or 34, or null when the car has neither. */
     val lambda: Double? = null,
     val batteryVoltage: Double = 14.2,
-    val fuelLevelPercent: Double = 65.0,
+    /**
+     * PID 2F, tank level. Null when the car does not answer it.
+     *
+     * This was 65.0, and it is the same bug as the 22 degree outside air: a car with no
+     * tank-level PID showed a five-eighths tank and a range to match, forever, with nothing
+     * on screen to say it had never been measured. The doc above says a default here
+     * reintroduces the bug; this one was the exception nobody noticed.
+     */
+    val fuelLevelPercent: Double? = null,
     /** Outside air, or null when neither PID 46 nor 0F answered. */
     val ambientC: Double? = null,
     /** Which PID the figure above came from, so it can be labelled truthfully. */

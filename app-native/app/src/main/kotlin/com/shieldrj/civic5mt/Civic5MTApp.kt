@@ -2,10 +2,12 @@ package com.shieldrj.civic5mt
 
 import android.app.Application
 import android.util.Log
+import com.shieldrj.civic5mt.core.OilLifeEngine
 import com.shieldrj.civic5mt.service.PrefsLifetimeStore
 import com.shieldrj.civic5mt.service.PrefsOilProfileStore
 import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.service.importRescuedRecordsOnce
+import com.shieldrj.civic5mt.service.loadFuelBlend
 
 /**
  * Runs before any Activity or Service, which is the only place the migration belongs.
@@ -27,7 +29,14 @@ class Civic5MTApp : Application() {
         // persisted facts rather than live readings - they should be legible with the car
         // parked, the adapter unplugged and Bluetooth off.
         PrefsLifetimeStore(this).load()?.let { TelemetryState.setLifetime(it) }
-        PrefsOilProfileStore(this).load()?.let { TelemetryState.setOil(it) }
+        // Through the engine rather than straight off the file, so what the Oil screen
+        // shows is the recomputed view of the stored measurements. Reading the file
+        // directly published the derived figures exactly as they were last written, which
+        // is how a corrected interval estimate stayed invisible behind the old one.
+        if (PrefsOilProfileStore(this).load() != null) {
+            TelemetryState.setOil(OilLifeEngine(PrefsOilProfileStore(this)).getProfile())
+        }
+        TelemetryState.setFuelBlend(loadFuelBlend(this))
     }
 
     private companion object {

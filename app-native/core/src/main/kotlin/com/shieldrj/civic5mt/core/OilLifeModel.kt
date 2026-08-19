@@ -44,7 +44,14 @@ data class OilLifeProfile(
 
     // Projected wear
     val estimatedMilesRemaining: Int,
-    val estimatedDaysRemaining: Int,
+    /**
+     * Null until there is enough history for a daily mileage rate to mean anything.
+     *
+     * It is miles remaining divided by miles per day, and over a short window that divisor is
+     * noise. On a record three days old it read "about 12 days" - the car would have had to
+     * cover thirteen hundred miles a day for that to be true.
+     */
+    val estimatedDaysRemaining: Int?,
     val oilConditionGrade: OilConditionGrade,
     val degradationBreakdown: DegradationBreakdown,
 )
@@ -72,6 +79,9 @@ class InMemoryOilProfileStore(private var stored: OilLifeProfile? = null) : OilP
 /** Round to one decimal, the way the TypeScript's `parseFloat(x.toFixed(1))` did. */
 private fun round1(value: Double): Double = toFixed(value, 1).toDouble()
 
+/** Below this, a daily mileage figure is an artefact of the sample window, not a habit. */
+private const val MIN_DAYS_FOR_RATE = 7.0
+
 class OilLifeEngine(
     private val store: OilProfileStore = InMemoryOilProfileStore(),
     private val clock: MillisClock = SystemMillisClock,
@@ -83,6 +93,16 @@ class OilLifeEngine(
 
     init {
         profile = store.load() ?: defaultProfile().also { store.save(it) }
+
+        // Recompute the derived half of what was just loaded, rather than trusting it.
+        //
+        // The same rule the lifetime record follows: revolutions, cold starts, short trips and
+        // the odometer are the measurements; the percentage, the grade, the breakdown and the
+        // miles remaining are views of them. Trusting the stored views meant a change to how
+        // any of them is worked out did not reach a record already on disk until the next
+        // drive - so a corrected projection sat behind the old one, on the screen someone
+        // reads while deciding whether to change their oil.
+        recalculateOilHealth()
     }
 
     private fun defaultProfile(): OilLifeProfile = OilLifeProfile(
@@ -138,7 +158,7 @@ class OilLifeEngine(
         speedMph: Double,
         dtSec: Double,
     ): OilLifeProfile {
-        if (rpm < 400) {
+        if (rpm < CivicSpecs.ENGINE_RUNNING_RPM) {
             // Engine is not running.
             return profile
         }
@@ -214,7 +234,8 @@ class OilLifeEngine(
             shortTripsCount = 0,
             highThermalStressSec = 0.0,
             estimatedMilesRemaining = CivicSpecs.BASELINE_OIL_LIFE_MILES.toInt(),
-            estimatedDaysRemaining = 180, // ~6 months
+            // No history yet, so no rate to project from. It fills in once there is one.
+            estimatedDaysRemaining = null,
             oilConditionGrade = OilConditionGrade.EXCELLENT,
             degradationBreakdown = DegradationBreakdown(0.0, 0.0, 0.0, 0.0),
         )
@@ -245,17 +266,32 @@ class OilLifeEngine(
         // Estimated miles remaining.
         val milesDriven = max(0.0, profile.currentOdometer - profile.lastResetOdometer)
         val degradationRatio = if (totalDegradation > 0) totalDegradation / 100 else 0.01
-        val effectiveTotalMiles =
+        // Capped at the service interval, and only the optimistic side is capped.
+        //
+        // The extrapolation is worth keeping - gentle driving genuinely does use oil up more
+        // slowly, and harsh driving pushes this below the baseline, which is the direction
+        // that needs to move. But uncapped it produced "26,122 miles remaining" on a record
+        // showing 95% life, because 1,300 miles of very light wear projects to an interval no
+        // 0W-20 in a Civic would survive. Oil is contamination- and time-limited as well as
+        // wear-limited, and a maintenance figure that reads three times the manufacturer's
+        // interval is one somebody acts on.
+        val projectedTotalMiles =
             if (milesDriven > 50) milesDriven / degradationRatio else CivicSpecs.BASELINE_OIL_LIFE_MILES
+        val effectiveTotalMiles = min(CivicSpecs.BASELINE_OIL_LIFE_MILES, projectedTotalMiles)
         val estimatedMilesRemaining =
             max(0L, ((remainingPercent / 100) * effectiveTotalMiles).roundToLong()).toInt()
 
-        // Days remaining, from the daily mileage burn rate.
+        // Days remaining, from the daily mileage burn rate - but only once that rate is
+        // measured over long enough to be a rate rather than an accident of when the app
+        // happened to be running.
         val daysSinceReset =
             max(1.0, (clock.nowMillis() - profile.lastResetTimestamp) / (24.0 * 60 * 60 * 1000))
         val dailyMileage = milesDriven / daysSinceReset
-        val estimatedDaysRemaining =
-            if (dailyMileage > 0.1) (estimatedMilesRemaining / dailyMileage).roundToInt() else 180
+        val estimatedDaysRemaining = if (daysSinceReset >= MIN_DAYS_FOR_RATE && dailyMileage > 0.1) {
+            (estimatedMilesRemaining / dailyMileage).roundToInt()
+        } else {
+            null
+        }
 
         val grade = when {
             remainingPercent > 70 -> OilConditionGrade.EXCELLENT

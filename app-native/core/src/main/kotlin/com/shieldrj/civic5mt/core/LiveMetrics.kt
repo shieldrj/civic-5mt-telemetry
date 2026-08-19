@@ -23,7 +23,8 @@ data class LiveMetrics(
     /** PID 24 or 34. Null means the car has neither. */
     val equivalenceRatio: Double? = null,
     val batteryVoltage: Double = 0.0,
-    val fuelLevelPercent: Double = 0.0,
+    /** Null when the car does not report a tank level. */
+    val fuelLevelPercent: Double? = null,
     /** PID 46, else 0F. Null means neither exists. */
     val outsideAirTempC: Double? = null,
     val outsideAirTempF: Int? = null,
@@ -50,7 +51,8 @@ data class LiveMetrics(
     val lifetimeMpg: Double = 0.0,
     /** Real vehicle miles behind [lifetimeMpg]. Zero means never connected to a car. */
     val lifetimeMiles: Double = 0.0,
-    val fuelRangeMiles: Int = 0,
+    /** Null when there is no tank level to compute it from. */
+    val fuelRangeMiles: Int? = null,
 
     // Manual transmission dynamics
     val currentGear: GearSelection = GearSelection.Neutral,
