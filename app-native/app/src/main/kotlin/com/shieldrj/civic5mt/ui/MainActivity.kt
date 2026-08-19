@@ -2,7 +2,10 @@ package com.shieldrj.civic5mt.ui
 
 import android.Manifest
 import android.os.Build
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
@@ -38,6 +41,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.LifetimeStats
@@ -50,7 +55,10 @@ import com.shieldrj.civic5mt.service.ResolvedPids
 import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.transport.BluetoothClassicTransport
+import com.shieldrj.civic5mt.service.loadOverlayEnabled
+import com.shieldrj.civic5mt.service.saveOverlayEnabled
 import com.shieldrj.civic5mt.transport.PairedDevice
+import com.shieldrj.civic5mt.ui.overlay.OverlayHost
 
 /**
  * The shell, and enough of a screen to prove the whole chain works end to end: a Bluetooth
@@ -102,6 +110,13 @@ private fun ConnectionScreen() {
     val status by TelemetryState.statusMessage.collectAsStateWithLifecycle()
     val resolved by TelemetryState.resolvedPids.collectAsStateWithLifecycle()
     val shiftMode by TelemetryState.shiftMode.collectAsStateWithLifecycle()
+    val overlayEnabled by TelemetryState.overlayEnabled.collectAsStateWithLifecycle()
+
+    // Overlay permission is granted on a Settings screen, not in a dialog, so the only way to
+    // know it changed is to look again when the app comes back to the front.
+    var permissionEpoch by remember { mutableStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { permissionEpoch++ }
+    val canOverlay = remember(permissionEpoch) { OverlayHost.canDrawOverlays(context) }
 
     var adapters by remember { mutableStateOf(emptyList<PairedDevice>()) }
 
@@ -195,6 +210,27 @@ private fun ConnectionScreen() {
                 // The bench. Every screen can be built and looked at away from the car, which
                 // matters when the car is a 2013 Civic parked outside with the ignition off.
                 ActionRow("Run simulated drive") { TelemetryService.simulate(context) }
+
+                ActionRow(
+                    when {
+                        !canOverlay -> "Heads-up display · grant permission"
+                        overlayEnabled -> "Heads-up display · on"
+                        else -> "Heads-up display · off"
+                    }
+                ) {
+                    if (!canOverlay) {
+                        context.startActivity(
+                            Intent(
+                                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:" + context.packageName),
+                            )
+                        )
+                    } else {
+                        val next = !overlayEnabled
+                        TelemetryState.setOverlayEnabled(next)
+                        saveOverlayEnabled(context, next)
+                    }
+                }
             }
         }
 

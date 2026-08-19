@@ -77,6 +77,9 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("androidx.lifecycle:lifecycle-service:2.8.7")
     implementation("androidx.activity:activity-compose:1.9.3")
+    // Hosting Compose in a WindowManager window needs a SavedStateRegistryOwner wired onto
+    // the view by hand; without it the ComposeView throws as soon as it composes.
+    implementation("androidx.savedstate:savedstate-ktx:1.2.1")
 
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)

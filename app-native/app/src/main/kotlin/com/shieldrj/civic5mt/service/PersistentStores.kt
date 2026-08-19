@@ -30,6 +30,7 @@ private const val KEY_LIFETIME = "civic_2013_lifetime_stats_v2"
 private const val KEY_OIL = "civic_2013_oil_profile_v1"
 private const val KEY_FUEL_BLEND = "civic_2013_fuel_blend_v1"
 private const val KEY_MIGRATION_DONE = "rescued_localstorage_imported_v1"
+private const val KEY_OVERLAY_ENABLED = "overlay_enabled"
 
 private const val TAG = "PersistentStores"
 
@@ -141,6 +142,15 @@ fun loadFuelBlend(context: Context): FuelBlendId {
 
 fun saveFuelBlend(context: Context, id: FuelBlendId) {
     telemetryPrefs(context).edit().putString(KEY_FUEL_BLEND, id.name).apply()
+}
+
+// ── Overlay preference ───────────────────────────────────────────────────────────
+
+fun loadOverlayEnabled(context: Context): Boolean =
+    telemetryPrefs(context).getBoolean(KEY_OVERLAY_ENABLED, false)
+
+fun saveOverlayEnabled(context: Context, enabled: Boolean) {
+    telemetryPrefs(context).edit().putBoolean(KEY_OVERLAY_ENABLED, enabled).apply()
 }
 
 // ── The one-time migration ───────────────────────────────────────────────────────

@@ -20,6 +20,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
+    <!--
+      Draw over other apps, for the heads-up display on top of Google Maps. A special
+      permission: it cannot be requested with a dialog, only by sending the user to a Settings
+      screen and re-checking when they come back.
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <!-- For oil-life-due, a new DTC, and unusual voltage. Runtime-requested on Android 13+. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 

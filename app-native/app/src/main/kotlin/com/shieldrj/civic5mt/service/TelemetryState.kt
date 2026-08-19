@@ -68,6 +68,14 @@ object TelemetryState {
             if (_shiftMode.value == ShiftMode.ECO) ShiftMode.POWER else ShiftMode.ECO
     }
 
+    /** Whether the driver wants the heads-up display over whatever else is on screen. */
+    private val _overlayEnabled = MutableStateFlow(false)
+    val overlayEnabled: StateFlow<Boolean> = _overlayEnabled.asStateFlow()
+
+    fun setOverlayEnabled(enabled: Boolean) {
+        _overlayEnabled.value = enabled
+    }
+
     /** Which PID each ambiguous reading resolved to, once the bitmaps have been read. */
     private val _resolvedPids = MutableStateFlow(ResolvedPids())
     val resolvedPids: StateFlow<ResolvedPids> = _resolvedPids.asStateFlow()

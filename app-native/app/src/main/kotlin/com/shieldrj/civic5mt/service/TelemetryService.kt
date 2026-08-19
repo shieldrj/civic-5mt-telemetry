@@ -20,6 +20,8 @@ import com.shieldrj.civic5mt.core.ObdTransportError
 import com.shieldrj.civic5mt.core.OilLifeEngine
 import com.shieldrj.civic5mt.core.TelemetryManager
 import com.shieldrj.civic5mt.transport.BluetoothClassicTransport
+import com.shieldrj.civic5mt.ui.overlay.HudContent
+import com.shieldrj.civic5mt.ui.overlay.OverlayHost
 import com.shieldrj.civic5mt.ui.MainActivity
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -30,7 +32,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.plus
+import kotlinx.coroutines.withContext
 
 /**
  * Owns the adapter connection and the poll loop, for as long as the car is running.
@@ -64,6 +68,16 @@ class TelemetryService : Service() {
      */
     private lateinit var manager: TelemetryManager
 
+    /**
+     * The heads-up display, owned here rather than by an Activity.
+     *
+     * That is the whole point of it: the window it draws into sits on top of Google Maps, so
+     * there is no Activity of ours on screen to own anything. It follows the connection - a
+     * HUD showing the last reading from a link that dropped ten minutes ago is worse than no
+     * HUD at all.
+     */
+    private var overlay: OverlayHost? = null
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -81,6 +95,38 @@ class TelemetryService : Service() {
         }
         TelemetryState.setLifetime(manager.getLifetimeStats())
         TelemetryState.setOil(manager.oilLife.getProfile())
+
+        TelemetryState.setOverlayEnabled(loadOverlayEnabled(applicationContext))
+        observeOverlay()
+    }
+
+    /**
+     * Shows the HUD only while there is something to show.
+     *
+     * Both conditions matter. Without the preference it appears uninvited over whatever is on
+     * screen; without the connection check it keeps displaying a frozen reading after the
+     * adapter drops, which is the failure that makes a driver stop trusting a gauge.
+     */
+    private fun observeOverlay() {
+        scope.launch {
+            combine(
+                TelemetryState.overlayEnabled,
+                TelemetryState.connection,
+            ) { enabled, connection ->
+                enabled && (connection == ConnectionStatus.CONNECTED ||
+                    connection == ConnectionStatus.SIMULATING)
+            }.collect { shouldShow ->
+                // WindowManager is main-thread only, and the service scope is Default.
+                withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    if (shouldShow) {
+                        if (overlay == null) overlay = OverlayHost(this@TelemetryService) { HudContent() }
+                        overlay?.show()
+                    } else {
+                        overlay?.hide()
+                    }
+                }
+            }
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -251,6 +297,8 @@ class TelemetryService : Service() {
     }
 
     override fun onDestroy() {
+        overlay?.hide()
+        overlay = null
         serviceJob.cancel()
         super.onDestroy()
     }
