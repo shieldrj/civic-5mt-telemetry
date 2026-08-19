@@ -116,6 +116,7 @@ private fun ConnectionScreen() {
     // Overlay permission is granted on a Settings screen, not in a dialog, so the only way to
     // know it changed is to look again when the app comes back to the front.
     var showTrips by remember { mutableStateOf(false) }
+    var showCodes by remember { mutableStateOf(false) }
     val tripCount by remember { TripDatabase.get(context).tripDao().observeRealTripCount() }
         .collectAsStateWithLifecycle(0)
 
@@ -134,6 +135,11 @@ private fun ConnectionScreen() {
 
     val requestPermissions = rememberLauncher {
         adapters = BluetoothClassicTransport.pairedAdapters(context)
+    }
+
+    if (showCodes) {
+        CodesScreen(onBack = { showCodes = false })
+        return
     }
 
     if (showTrips) {
@@ -224,6 +230,8 @@ private fun ConnectionScreen() {
                 ActionRow(
                     if (tripCount > 0) "Trip history · $tripCount drives" else "Trip history"
                 ) { showTrips = true }
+
+                ActionRow("Diagnostics") { showCodes = true }
 
                 ActionRow(
                     when {

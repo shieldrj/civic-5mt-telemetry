@@ -1,6 +1,7 @@
 package com.shieldrj.civic5mt.service
 
 import com.shieldrj.civic5mt.core.ConnectionStatus
+import com.shieldrj.civic5mt.core.DtcScanReport
 import com.shieldrj.civic5mt.core.LifetimeStats
 import com.shieldrj.civic5mt.core.LiveMetrics
 import com.shieldrj.civic5mt.core.OilLifeProfile
@@ -66,6 +67,21 @@ object TelemetryState {
     fun toggleShiftMode() {
         _shiftMode.value =
             if (_shiftMode.value == ShiftMode.ECO) ShiftMode.POWER else ShiftMode.ECO
+    }
+
+    /** The last diagnostic scan, and whether one is running. */
+    private val _dtcReport = MutableStateFlow<DtcScanReport?>(null)
+    val dtcReport: StateFlow<DtcScanReport?> = _dtcReport.asStateFlow()
+
+    private val _scanning = MutableStateFlow(false)
+    val scanning: StateFlow<Boolean> = _scanning.asStateFlow()
+
+    internal fun setDtcReport(report: DtcScanReport?) {
+        _dtcReport.value = report
+    }
+
+    internal fun setScanning(scanning: Boolean) {
+        _scanning.value = scanning
     }
 
     /** Whether the driver wants the heads-up display over whatever else is on screen. */

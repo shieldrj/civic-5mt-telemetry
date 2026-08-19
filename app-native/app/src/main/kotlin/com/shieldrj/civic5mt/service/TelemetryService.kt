@@ -17,6 +17,7 @@ import com.shieldrj.civic5mt.data.TripRecorder
 import com.shieldrj.civic5mt.core.CivicSimulatorEngine
 import com.shieldrj.civic5mt.core.CivicSpecs
 import com.shieldrj.civic5mt.core.ConnectionStatus
+import com.shieldrj.civic5mt.core.DtcScanner
 import com.shieldrj.civic5mt.core.Elm327Client
 import com.shieldrj.civic5mt.core.ObdTransportError
 import com.shieldrj.civic5mt.core.OilLifeEngine
@@ -154,6 +155,10 @@ class TelemetryService : Service() {
                 simulate()
             }
 
+            ACTION_SCAN_DTC -> scanForCodes()
+
+            ACTION_CLEAR_DTC -> clearCodes()
+
             ACTION_DISCONNECT -> {
                 scope.launch { teardown("Disconnected") }
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -218,6 +223,62 @@ class TelemetryService : Service() {
                 TelemetryState.setConnection(ConnectionStatus.ERROR)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
+            }
+        }
+    }
+
+    /**
+     * Runs a diagnostic scan through the same command queue the gauges use.
+     *
+     * That sharing is the point: an ELM327 has one command in flight and no way to label
+     * which reply belongs to which request, so a scan opening its own conversation beside
+     * the poll loop is the collision that used to freeze every gauge on its last good
+     * value. The gauges simply slow down while this runs.
+     */
+    private fun scanForCodes() {
+        val elm = client
+        if (elm == null) {
+            TelemetryState.setStatusMessage("Connect to the adapter before scanning.")
+            return
+        }
+        scope.launch {
+            TelemetryState.setScanning(true)
+            try {
+                TelemetryState.setDtcReport(DtcScanner(elm).performFullScan())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "DTC scan failed", e)
+                TelemetryState.setStatusMessage("Scan failed: " + e.message)
+            } finally {
+                TelemetryState.setScanning(false)
+            }
+        }
+    }
+
+    /**
+     * Mode 04.
+     *
+     * Also wipes the readiness monitors, so the car fails an emissions test until it has
+     * driven a full drive cycle. The screen says so before offering the button; this just
+     * carries it out and re-scans, so what is shown afterwards is what the ECU reports
+     * rather than what the app assumed happened.
+     */
+    private fun clearCodes() {
+        val elm = client ?: return
+        scope.launch {
+            TelemetryState.setScanning(true)
+            try {
+                val scanner = DtcScanner(elm)
+                scanner.clearAllCodes()
+                TelemetryState.setDtcReport(scanner.performFullScan())
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Clearing codes failed", e)
+                TelemetryState.setStatusMessage("Could not clear codes: " + e.message)
+            } finally {
+                TelemetryState.setScanning(false)
             }
         }
     }
@@ -379,6 +440,8 @@ class TelemetryService : Service() {
 
         const val ACTION_CONNECT = "com.shieldrj.civic5mt.CONNECT"
         const val ACTION_SIMULATE = "com.shieldrj.civic5mt.SIMULATE"
+        const val ACTION_SCAN_DTC = "com.shieldrj.civic5mt.SCAN_DTC"
+        const val ACTION_CLEAR_DTC = "com.shieldrj.civic5mt.CLEAR_DTC"
         const val ACTION_DISCONNECT = "com.shieldrj.civic5mt.DISCONNECT"
         const val EXTRA_DEVICE_ADDRESS = "deviceAddress"
 
@@ -395,6 +458,18 @@ class TelemetryService : Service() {
                 action = ACTION_SIMULATE
             }
             context.startForegroundService(intent)
+        }
+
+        fun scanForCodes(context: Context) {
+            context.startService(
+                Intent(context, TelemetryService::class.java).apply { action = ACTION_SCAN_DTC }
+            )
+        }
+
+        fun clearCodes(context: Context) {
+            context.startService(
+                Intent(context, TelemetryService::class.java).apply { action = ACTION_CLEAR_DTC }
+            )
         }
 
         fun disconnect(context: Context) {
