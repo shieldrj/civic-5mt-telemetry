@@ -55,6 +55,7 @@ import com.shieldrj.civic5mt.service.ResolvedPids
 import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.transport.BluetoothClassicTransport
+import com.shieldrj.civic5mt.data.TripDatabase
 import com.shieldrj.civic5mt.service.loadOverlayEnabled
 import com.shieldrj.civic5mt.service.saveOverlayEnabled
 import com.shieldrj.civic5mt.transport.PairedDevice
@@ -114,6 +115,10 @@ private fun ConnectionScreen() {
 
     // Overlay permission is granted on a Settings screen, not in a dialog, so the only way to
     // know it changed is to look again when the app comes back to the front.
+    var showTrips by remember { mutableStateOf(false) }
+    val tripCount by remember { TripDatabase.get(context).tripDao().observeRealTripCount() }
+        .collectAsStateWithLifecycle(0)
+
     var permissionEpoch by remember { mutableStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { permissionEpoch++ }
     val canOverlay = remember(permissionEpoch) { OverlayHost.canDrawOverlays(context) }
@@ -129,6 +134,11 @@ private fun ConnectionScreen() {
 
     val requestPermissions = rememberLauncher {
         adapters = BluetoothClassicTransport.pairedAdapters(context)
+    }
+
+    if (showTrips) {
+        TripsScreen(onBack = { showTrips = false })
+        return
     }
 
     if (connection == ConnectionStatus.CONNECTED || connection == ConnectionStatus.SIMULATING) {
@@ -210,6 +220,10 @@ private fun ConnectionScreen() {
                 // The bench. Every screen can be built and looked at away from the car, which
                 // matters when the car is a 2013 Civic parked outside with the ignition off.
                 ActionRow("Run simulated drive") { TelemetryService.simulate(context) }
+
+                ActionRow(
+                    if (tripCount > 0) "Trip history · $tripCount drives" else "Trip history"
+                ) { showTrips = true }
 
                 ActionRow(
                     when {

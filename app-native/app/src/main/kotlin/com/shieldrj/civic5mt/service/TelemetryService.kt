@@ -12,6 +12,8 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import com.shieldrj.civic5mt.R
+import com.shieldrj.civic5mt.data.TripDatabase
+import com.shieldrj.civic5mt.data.TripRecorder
 import com.shieldrj.civic5mt.core.CivicSimulatorEngine
 import com.shieldrj.civic5mt.core.CivicSpecs
 import com.shieldrj.civic5mt.core.ConnectionStatus
@@ -78,6 +80,9 @@ class TelemetryService : Service() {
      */
     private var overlay: OverlayHost? = null
 
+    /** Writes each drive to the database while it is happening. */
+    private lateinit var recorder: TripRecorder
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
@@ -95,6 +100,8 @@ class TelemetryService : Service() {
         }
         TelemetryState.setLifetime(manager.getLifetimeStats())
         TelemetryState.setOil(manager.oilLife.getProfile())
+
+        recorder = TripRecorder(TripDatabase.get(applicationContext).tripDao())
 
         TelemetryState.setOverlayEnabled(loadOverlayEnabled(applicationContext))
         observeOverlay()
@@ -190,6 +197,9 @@ class TelemetryService : Service() {
                 TelemetryState.setConnection(ConnectionStatus.CONNECTED)
                 updateNotification("Logging")
 
+                manager.resetTrip()
+                recorder.start(System.currentTimeMillis(), simulated = false)
+
                 pollJob = launch { elm.runPollLoop() }
                 tickJob = launch { runTelemetryLoop(elm) }
             } catch (e: CancellationException) {
@@ -228,6 +238,9 @@ class TelemetryService : Service() {
             TelemetryState.setStatusMessage("Simulated drive — the lifetime record is not touched")
 
             val sim = CivicSimulatorEngine()
+            manager.resetTrip()
+            recorder.start(System.currentTimeMillis(), simulated = true)
+
             var last = System.currentTimeMillis()
 
             while (currentCoroutineContext().isActive) {
@@ -244,6 +257,7 @@ class TelemetryService : Service() {
                 TelemetryState.setMetrics(snapshot.metrics)
                 TelemetryState.setTrip(snapshot.trip)
                 TelemetryState.setOil(snapshot.oil)
+                recorder.record(now, snapshot.metrics, snapshot.trip)
             }
         }
     }
@@ -273,6 +287,7 @@ class TelemetryService : Service() {
             TelemetryState.setTrip(snapshot.trip)
             TelemetryState.setOil(snapshot.oil)
             TelemetryState.setLifetime(snapshot.lifetime)
+            recorder.record(now, snapshot.metrics, snapshot.trip)
         }
     }
 
@@ -289,6 +304,9 @@ class TelemetryService : Service() {
         if (::manager.isInitialized) {
             runCatching { manager.flush() }
             TelemetryState.setLifetime(manager.getLifetimeStats())
+            if (::recorder.isInitialized) {
+                runCatching { recorder.finish(System.currentTimeMillis(), manager.getTrip()) }
+            }
         }
         TelemetryState.setStatusMessage(message)
         if (TelemetryState.connection.value != ConnectionStatus.ERROR) {
