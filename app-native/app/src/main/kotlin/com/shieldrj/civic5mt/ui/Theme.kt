@@ -28,6 +28,20 @@ object CivicColors {
     val Ink4 = Color(0xFF464C53)
     val Hairline = Color(0x12FFFFFF)
     val HairlineStrong = Color(0x21FFFFFF)
+
+    /**
+     * Amber, and the only colour here that is not accent or ink.
+     *
+     * It earns its place by meaning one thing: you are past the shift point but not at the
+     * limiter. Red already means "stop doing that", so the intermediate state needed its own
+     * colour rather than a lighter red, which reads as a dimmer alarm rather than a different
+     * one.
+     */
+    val Warn = Color(0xFFC8952E)
+
+    /** The unfilled part of a gauge or meter. A hairline, never a filled band. */
+    val GaugeTrack = Color(0x17FFFFFF)
+    val GaugeTick = Color(0x33FFFFFF)
 }
 
 /**

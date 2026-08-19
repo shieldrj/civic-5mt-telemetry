@@ -194,7 +194,7 @@ class TelemetryService : Service() {
                 val raw = sim.tick(dtSec)
                 TelemetryState.setData(raw)
 
-                val snapshot = manager.tick(raw, dtSec, ConnectionStatus.SIMULATING)
+                val snapshot = manager.also { it.shiftMode = TelemetryState.shiftMode.value }.tick(raw, dtSec, ConnectionStatus.SIMULATING)
                 TelemetryState.setMetrics(snapshot.metrics)
                 TelemetryState.setTrip(snapshot.trip)
                 TelemetryState.setOil(snapshot.oil)
@@ -222,7 +222,7 @@ class TelemetryService : Service() {
             val dtSec = (now - last) / 1000.0
             last = now
 
-            val snapshot = manager.tick(elm.data.value, dtSec, TelemetryState.connection.value)
+            val snapshot = manager.also { it.shiftMode = TelemetryState.shiftMode.value }.tick(elm.data.value, dtSec, TelemetryState.connection.value)
             TelemetryState.setMetrics(snapshot.metrics)
             TelemetryState.setTrip(snapshot.trip)
             TelemetryState.setOil(snapshot.oil)

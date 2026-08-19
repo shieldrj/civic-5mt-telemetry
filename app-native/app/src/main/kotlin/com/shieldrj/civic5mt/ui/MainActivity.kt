@@ -44,6 +44,7 @@ import com.shieldrj.civic5mt.core.LifetimeStats
 import com.shieldrj.civic5mt.core.LiveMetrics
 import com.shieldrj.civic5mt.core.MpgDisplayState
 import com.shieldrj.civic5mt.core.OutsideAirSource
+import com.shieldrj.civic5mt.core.ShiftMode
 import com.shieldrj.civic5mt.core.TripAnalytics
 import com.shieldrj.civic5mt.service.ResolvedPids
 import com.shieldrj.civic5mt.service.TelemetryService
@@ -100,6 +101,7 @@ private fun ConnectionScreen() {
     val lifetime by TelemetryState.lifetime.collectAsStateWithLifecycle()
     val status by TelemetryState.statusMessage.collectAsStateWithLifecycle()
     val resolved by TelemetryState.resolvedPids.collectAsStateWithLifecycle()
+    val shiftMode by TelemetryState.shiftMode.collectAsStateWithLifecycle()
 
     var adapters by remember { mutableStateOf(emptyList<PairedDevice>()) }
 
@@ -112,6 +114,19 @@ private fun ConnectionScreen() {
 
     val requestPermissions = rememberLauncher {
         adapters = BluetoothClassicTransport.pairedAdapters(context)
+    }
+
+    if (connection == ConnectionStatus.CONNECTED || connection == ConnectionStatus.SIMULATING) {
+        DriveScreen(
+            metrics = metrics,
+            trip = trip,
+            lifetime = lifetime,
+            connection = connection,
+            shiftMode = shiftMode,
+            onToggleShiftMode = { TelemetryState.toggleShiftMode() },
+            onStop = { TelemetryService.disconnect(context) },
+        )
+        return
     }
 
     Column(

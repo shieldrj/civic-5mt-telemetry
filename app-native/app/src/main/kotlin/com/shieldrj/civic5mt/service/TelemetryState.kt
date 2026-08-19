@@ -6,6 +6,7 @@ import com.shieldrj.civic5mt.core.LiveMetrics
 import com.shieldrj.civic5mt.core.OilLifeProfile
 import com.shieldrj.civic5mt.core.ProtocolLogEntry
 import com.shieldrj.civic5mt.core.RawObdData
+import com.shieldrj.civic5mt.core.ShiftMode
 import com.shieldrj.civic5mt.core.TripAnalytics
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,6 +53,20 @@ object TelemetryState {
 
     private val _protocolLog = MutableStateFlow<List<ProtocolLogEntry>>(emptyList())
     val protocolLog: StateFlow<List<ProtocolLogEntry>> = _protocolLog.asStateFlow()
+
+    /**
+     * Economy or power shift points.
+     *
+     * Lives here rather than in the service because it is a preference the driver sets, and
+     * it has to survive the service being stopped and started between drives.
+     */
+    private val _shiftMode = MutableStateFlow(ShiftMode.ECO)
+    val shiftMode: StateFlow<ShiftMode> = _shiftMode.asStateFlow()
+
+    fun toggleShiftMode() {
+        _shiftMode.value =
+            if (_shiftMode.value == ShiftMode.ECO) ShiftMode.POWER else ShiftMode.ECO
+    }
 
     /** Which PID each ambiguous reading resolved to, once the bitmaps have been read. */
     private val _resolvedPids = MutableStateFlow(ResolvedPids())
