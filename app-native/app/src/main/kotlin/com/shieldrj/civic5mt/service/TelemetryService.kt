@@ -69,11 +69,9 @@ class TelemetryService : Service() {
         super.onCreate()
         createNotificationChannel()
 
-        // Before anything can write to storage. The rescued records are the only copy of
-        // figures that accumulated over real driving, and an import that runs after the first
-        // write has nothing left to import into.
-        importRescuedRecordsOnce(applicationContext)?.let { Log.i(TAG, it) }
-
+        // The migration runs in Civic5MTApp, not here: this service only starts once you
+        // connect to an adapter, so a phone that had never managed a connection would have
+        // left the rescued record un-imported.
         manager = TelemetryManager(
             lifetimeStore = PrefsLifetimeStore(applicationContext),
             oilLife = OilLifeEngine(PrefsOilProfileStore(applicationContext)),

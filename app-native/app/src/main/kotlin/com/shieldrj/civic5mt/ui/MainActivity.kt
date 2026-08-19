@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.shieldrj.civic5mt.core.ConnectionStatus
+import com.shieldrj.civic5mt.core.LifetimeStats
 import com.shieldrj.civic5mt.core.LiveMetrics
 import com.shieldrj.civic5mt.core.MpgDisplayState
 import com.shieldrj.civic5mt.core.OutsideAirSource
@@ -96,6 +97,7 @@ private fun ConnectionScreen() {
     val connection by TelemetryState.connection.collectAsStateWithLifecycle()
     val metrics by TelemetryState.metrics.collectAsStateWithLifecycle()
     val trip by TelemetryState.trip.collectAsStateWithLifecycle()
+    val lifetime by TelemetryState.lifetime.collectAsStateWithLifecycle()
     val status by TelemetryState.statusMessage.collectAsStateWithLifecycle()
     val resolved by TelemetryState.resolvedPids.collectAsStateWithLifecycle()
 
@@ -181,7 +183,7 @@ private fun ConnectionScreen() {
         Hairline()
         Spacer(Modifier.height(16.dp))
 
-        LiveReadings(metrics, trip, resolved, connection)
+        LiveReadings(metrics, trip, lifetime, resolved, connection)
 
         // The failure messages tell you to check the adapter log, so the adapter log has to
         // be somewhere you can check. It was not, which made that sentence an instruction
@@ -262,6 +264,7 @@ private fun Reading(value: String?, unit: String) {
 private fun LiveReadings(
     metrics: LiveMetrics,
     trip: TripAnalytics,
+    lifetime: LifetimeStats,
     resolved: ResolvedPids,
     connection: ConnectionStatus,
 ) {
@@ -285,9 +288,12 @@ private fun LiveReadings(
             "${c.toInt()} °C$source"
         },
         "Trip" to if (live) "%.1f mi · %.1f mpg".format(trip.distanceMiles, trip.avgMpg) else null,
-        "Lifetime" to metrics.lifetimeMiles
+        // Read from the stored record rather than from the tick loop. It is a persisted
+        // fact, not a live reading, and should be legible with the car parked and the
+        // adapter unplugged - which is exactly when someone wants to look at it.
+        "Lifetime" to lifetime.totalMiles
             .takeIf { it > 0 }
-            ?.let { "%.1f mi · %.1f mpg".format(it, metrics.lifetimeMpg) },
+            ?.let { "%.1f mi · %.1f mpg".format(it, lifetime.lifetimeMpg) },
     )
 
     rows.forEach { (label, value) -> ReadingRow(label, value) }
