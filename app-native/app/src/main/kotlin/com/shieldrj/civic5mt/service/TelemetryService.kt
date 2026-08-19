@@ -12,6 +12,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import com.shieldrj.civic5mt.R
+import com.shieldrj.civic5mt.core.CivicSimulatorEngine
 import com.shieldrj.civic5mt.core.CivicSpecs
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.Elm327Client
@@ -95,6 +96,11 @@ class TelemetryService : Service() {
                 connect(address)
             }
 
+            ACTION_SIMULATE -> {
+                startForegroundWithStatus("Simulating")
+                simulate()
+            }
+
             ACTION_DISCONNECT -> {
                 scope.launch { teardown("Disconnected") }
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -156,6 +162,42 @@ class TelemetryService : Service() {
                 TelemetryState.setConnection(ConnectionStatus.ERROR)
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
+            }
+        }
+    }
+
+    /**
+     * Drives the models from the bench instead of from the car.
+     *
+     * The whole stack downstream of the adapter is the same code the car drives: the same
+     * manager, the same models, the same screen. What differs is the one thing that must -
+     * the status is SIMULATING, and IntegrationRules refuses to let that near the permanent
+     * record however long it runs.
+     */
+    private fun simulate() {
+        connectJob?.cancel()
+        connectJob = scope.launch {
+            TelemetryState.reset()
+            TelemetryState.setConnection(ConnectionStatus.SIMULATING)
+            TelemetryState.setStatusMessage("Simulated drive — the lifetime record is not touched")
+
+            val sim = CivicSimulatorEngine()
+            var last = System.currentTimeMillis()
+
+            while (currentCoroutineContext().isActive) {
+                delay(CivicSpecs.TELEMETRY_TICK_MS.toLong())
+
+                val now = System.currentTimeMillis()
+                val dtSec = (now - last) / 1000.0
+                last = now
+
+                val raw = sim.tick(dtSec)
+                TelemetryState.setData(raw)
+
+                val snapshot = manager.tick(raw, dtSec, ConnectionStatus.SIMULATING)
+                TelemetryState.setMetrics(snapshot.metrics)
+                TelemetryState.setTrip(snapshot.trip)
+                TelemetryState.setOil(snapshot.oil)
             }
         }
     }
@@ -270,6 +312,7 @@ class TelemetryService : Service() {
         private const val NOTIFICATION_ID = 1
 
         const val ACTION_CONNECT = "com.shieldrj.civic5mt.CONNECT"
+        const val ACTION_SIMULATE = "com.shieldrj.civic5mt.SIMULATE"
         const val ACTION_DISCONNECT = "com.shieldrj.civic5mt.DISCONNECT"
         const val EXTRA_DEVICE_ADDRESS = "deviceAddress"
 
@@ -277,6 +320,13 @@ class TelemetryService : Service() {
             val intent = Intent(context, TelemetryService::class.java).apply {
                 action = ACTION_CONNECT
                 putExtra(EXTRA_DEVICE_ADDRESS, address)
+            }
+            context.startForegroundService(intent)
+        }
+
+        fun simulate(context: Context) {
+            val intent = Intent(context, TelemetryService::class.java).apply {
+                action = ACTION_SIMULATE
             }
             context.startForegroundService(intent)
         }

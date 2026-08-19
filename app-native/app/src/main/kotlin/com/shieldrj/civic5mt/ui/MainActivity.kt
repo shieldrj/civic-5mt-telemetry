@@ -136,7 +136,8 @@ private fun ConnectionScreen() {
         // figure is zero because the car is not moving, and on a closed throttle it is the
         // 99.9 cap because the injectors are off; neither is "your car is getting N mpg", so
         // neither gets drawn as one. That is what mpgDisplayState is for.
-        val live = connection == ConnectionStatus.CONNECTED
+        val live = connection == ConnectionStatus.CONNECTED ||
+            connection == ConnectionStatus.SIMULATING
         Reading(
             value = metrics.displayMpg
                 .takeIf { live && metrics.mpgDisplayState == MpgDisplayState.DRIVING }
@@ -164,8 +165,8 @@ private fun ConnectionScreen() {
         Spacer(Modifier.height(16.dp))
 
         when (connection) {
-            ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING -> {
-                ActionRow("Disconnect") { TelemetryService.disconnect(context) }
+            ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING, ConnectionStatus.SIMULATING -> {
+                ActionRow("Stop") { TelemetryService.disconnect(context) }
             }
             else -> {
                 ActionRow("Find paired adapters") {
@@ -176,6 +177,9 @@ private fun ConnectionScreen() {
                         TelemetryService.connect(context, device.address)
                     }
                 }
+                // The bench. Every screen can be built and looked at away from the car, which
+                // matters when the car is a 2013 Civic parked outside with the ignition off.
+                ActionRow("Run simulated drive") { TelemetryService.simulate(context) }
             }
         }
 
@@ -268,7 +272,8 @@ private fun LiveReadings(
     resolved: ResolvedPids,
     connection: ConnectionStatus,
 ) {
-    val live = connection == ConnectionStatus.CONNECTED
+    val live = connection == ConnectionStatus.CONNECTED ||
+        connection == ConnectionStatus.SIMULATING
 
     // Nullable readings print a dash. This is the screen that used to show a fabricated
     // 22 °C outside temperature on a car that has no PID 46 to read it from.
