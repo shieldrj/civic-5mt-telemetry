@@ -25,6 +25,7 @@ class TelemetryManager(
     private val lifetimeStore: LifetimeStore = InMemoryLifetimeStore(),
     val oilLife: OilLifeEngine = OilLifeEngine(clock = clock),
     val fuelModel: FuelModelEngine = FuelModelEngine(),
+    val tank: TankTracker = TankTracker(clock = clock),
     private val gearCalculator: GearCalculatorEngine = GearCalculatorEngine(clock),
 ) {
     var shiftMode: ShiftMode = ShiftMode.ECO
@@ -85,16 +86,39 @@ class TelemetryManager(
         val instantMpg = fuelModel.calculateInstantMpg(speedMph, flow.fuelFlowGalPerHour, isDfco)
         val rollingMpg = fuelModel.updateRollingMpg(instantMpg)
         val displayMpg = fuelModel.updateDisplayMpg(instantMpg, speedMph, isDfco, dtSec)
-        // No tank level, no range. A distance-to-empty derived from an assumed tank is a
-        // number someone drives past a petrol station on.
-        val fuelRange = raw.fuelLevelPercent?.let {
-            fuelModel.calculateFuelRange(it, CivicSpecs.FUEL_TANK_CAPACITY_GALLONS, rollingMpg)
-        }
+        // Range comes from the tank tracker now, further down, once this step has been added
+        // to it. It used to be tank level times a 30-second average MPG, and that average is
+        // what made it swing: it is a record of the last hill, not an economy figure.
 
         // 5. Integrate the trip, and the permanent record if this is a real adapter.
         updateTrip(integrationDtSec, speedMphRaw, flow.fuelFlowGalPerHour, isDfco, raw.rpm, status)
 
-        // 6. Engine wear - real driving only.
+        // 6. The tank. Real driving only, for the same reason the lifetime record is: a bench
+        //    run must not report that fuel was burned or that a tank was filled.
+        if (IntegrationRules.shouldRecordLifetime(status) && integrationDtSec > 0 && raw.rpm >= 350) {
+            tank.record(
+                levelPercent = raw.fuelLevelPercent,
+                milesStep = (speedMphRaw / 3600) * integrationDtSec,
+                gallonsStep = (flow.fuelFlowGalPerHour / 3600) * integrationDtSec,
+                dtSec = integrationDtSec,
+            )
+        }
+        val tankState = tank.get()
+
+        // Two ways to have no range, and both must read as absent rather than as zero.
+        //
+        // No tank level means the car does not report one, and a distance to empty derived
+        // from an assumed tank is a number someone drives past a filling station on. No tank
+        // record means nothing has been tracked yet - a bench run, or the first seconds of a
+        // real drive - and "0 miles to empty" there is an alarm about nothing.
+        val tankKnown = raw.fuelLevelPercent != null && tankState.fillTimestamp != 0L
+        val fuelRange = if (tankKnown) {
+            rangeMiles(tankState, lifetime.lifetimeMpg, lifetime.totalMiles)
+        } else {
+            null
+        }
+
+        // 7. Engine wear - real driving only.
         //
         // Gated by the same rule the lifetime record uses, and for the same reason. This
         // step was unconditional in the TypeScript, so a bench run added crank revolutions,
@@ -146,7 +170,11 @@ class TelemetryManager(
             rolling30sMpg = roundTo(rollingMpg, 1),
             lifetimeMpg = roundTo(lifetime.lifetimeMpg, 1),
             lifetimeMiles = lifetime.totalMiles,
-            fuelRangeMiles = fuelRange?.roundToInt(),
+            fuelRangeMiles = fuelRange,
+            tankMpg = tankState.tankMpg,
+            tankMilesSinceFill = if (tankKnown) tankState.milesSinceFill else null,
+            tankGallonsRemaining = if (tankKnown) tankState.gallonsRemaining else null,
+            tankCalibrated = tankState.calibrated,
             currentGear = gear.currentGear,
             gearRatio = roundTo(gear.calculatedRatio, 2),
             isClutchSlipping = gear.isClutchSlipping,
@@ -263,6 +291,7 @@ class TelemetryManager(
     fun flush() {
         lifetimeStore.save(lifetime)
         oilLife.saveProfile()
+        tank.flush()
     }
 
     fun resetTrip() {

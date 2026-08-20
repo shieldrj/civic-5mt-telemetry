@@ -69,40 +69,51 @@ fun DriveScreen(
         Spacer(Modifier.weight(1f))
 
         /*
-         * The hero.
+         * The hero is the tank, not the moment.
          *
-         * Two of the three states this can be in are not economy figures at all, and neither
-         * is drawn as a number: standing still the value is zero because the car is not
-         * moving, and on a closed throttle it is the 99.9 cap because the injectors are off.
-         * A driver who sees "99.9" learns to distrust the gauge; a driver who sees "coasting"
-         * learns what the car is doing.
+         * Instant MPG used to be here. It is already on the dashboard, it changes every
+         * second, and a number that changes every second cannot be compared to anything - so
+         * it answered no question. Miles per gallon for the whole tank has one answer, moves
+         * slowly, and is the figure a driver actually wants to know.
+         *
+         * The scale stops at 50 rather than 60. This car does not exceed the low 40s on a
+         * tank, so a scale to 60 spent its top third on readings that cannot occur and made
+         * every real one look poor.
          */
-        val isEconomyReading = metrics.mpgDisplayState == MpgDisplayState.DRIVING
         RadialGauge(
-            value = metrics.displayMpg.toFloat(),
+            value = (metrics.tankMpg ?: 0.0).toFloat(),
             min = 0f,
-            max = 60f,
-            title = "Economy",
+            max = 50f,
+            title = "This tank",
             unit = "MPG",
-            overrideValue = when (metrics.mpgDisplayState) {
-                MpgDisplayState.IDLE -> "Stationary"
-                MpgDisplayState.COASTING -> "Coasting"
-                MpgDisplayState.DRIVING -> null
-            },
-            // Short enough to sit inside the dial. A longer line runs out across the bottom
-            // of the arc, where the ring is narrowest - the trip average belongs here, but
-            // spelled out it collides with the thing it is annotating.
-            subValue = if (isEconomyReading) {
-                "%.1f avg".format(trip.avgMpg)
-            } else if (metrics.mpgDisplayState == MpgDisplayState.COASTING) {
-                "Injectors off"
-            } else {
-                null
-            },
-            ticks = listOf(0f, 30f, 60f),
+            // Nothing is shown until enough fuel has gone through to divide by. Right after a
+            // fill, distance over fuel is arithmetic on rounding error.
+            overrideValue = if (metrics.tankMpg == null) "—" else null,
+            subValue = metrics.tankMilesSinceFill?.let { "%.0f mi on this tank".format(it) },
+            ticks = listOf(0f, 25f, 50f),
             size = 260.dp,
             isHero = true,
         )
+
+        Spacer(Modifier.height(12.dp))
+
+        // Range, directly under the tank figure, because they answer the same question from
+        // opposite ends: how this tank is going, and how much of it is left.
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = metrics.fuelRangeMiles?.toString() ?: "—",
+                color = CivicColors.Ink,
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Light,
+                modifier = Modifier.alignByBaseline(),
+            )
+            Text(
+                text = " miles to empty",
+                color = CivicColors.Ink3,
+                fontSize = 13.sp,
+                modifier = Modifier.alignByBaseline(),
+            )
+        }
 
         Spacer(Modifier.weight(1f))
 

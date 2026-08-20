@@ -22,6 +22,7 @@ import com.shieldrj.civic5mt.core.Elm327Client
 import com.shieldrj.civic5mt.core.ObdTransportError
 import com.shieldrj.civic5mt.core.ReconnectPolicy
 import com.shieldrj.civic5mt.core.OilLifeEngine
+import com.shieldrj.civic5mt.core.TankTracker
 import com.shieldrj.civic5mt.core.TelemetryManager
 import com.shieldrj.civic5mt.transport.BluetoothClassicTransport
 import com.shieldrj.civic5mt.ui.overlay.HudContent
@@ -106,6 +107,7 @@ class TelemetryService : Service() {
         manager = TelemetryManager(
             lifetimeStore = PrefsLifetimeStore(applicationContext),
             oilLife = OilLifeEngine(PrefsOilProfileStore(applicationContext)),
+            tank = TankTracker(PrefsTankStore(applicationContext)),
         )
         TelemetryState.setLifetime(manager.getLifetimeStats())
         TelemetryState.setOil(manager.oilLife.getProfile())
@@ -179,6 +181,11 @@ class TelemetryService : Service() {
             }
 
             ACTION_SCAN_DTC -> scanForCodes()
+
+            ACTION_MARK_FILLED -> {
+                markFilled()
+                stopIfIdle()
+            }
 
             ACTION_RESET_OIL -> {
                 resetOilLife()
@@ -433,6 +440,24 @@ class TelemetryService : Service() {
     }
 
     /**
+     * Records a fill the app did not see.
+     *
+     * A fill is normally spotted on its own, from the level rising. This is for the one that
+     * is too small to look like a fill, or that happened while something else was using the
+     * adapter. It uses the level the car is reporting now, so it is worth doing with the
+     * ignition on rather than from the driveway.
+     */
+    private fun markFilled() {
+        val level = TelemetryState.metrics.value.fuelLevelPercent
+        if (level == null) {
+            TelemetryState.setStatusMessage("No tank level from the car, so there is nothing to reset.")
+            return
+        }
+        manager.tank.markFilled(level)
+        TelemetryState.setStatusMessage("Started a new tank at " + level.toInt() + "%")
+    }
+
+    /**
      * Starts the oil interval again at 100%.
      *
      * Routed through the service rather than written straight to preferences from the screen,
@@ -622,6 +647,7 @@ class TelemetryService : Service() {
         const val ACTION_SCAN_DTC = "com.shieldrj.civic5mt.SCAN_DTC"
         const val ACTION_CLEAR_DTC = "com.shieldrj.civic5mt.CLEAR_DTC"
         const val ACTION_RESET_OIL = "com.shieldrj.civic5mt.RESET_OIL"
+        const val ACTION_MARK_FILLED = "com.shieldrj.civic5mt.MARK_FILLED"
         const val ACTION_DISCONNECT = "com.shieldrj.civic5mt.DISCONNECT"
         const val EXTRA_DEVICE_ADDRESS = "deviceAddress"
 
@@ -649,6 +675,12 @@ class TelemetryService : Service() {
         fun clearCodes(context: Context) {
             context.startService(
                 Intent(context, TelemetryService::class.java).apply { action = ACTION_CLEAR_DTC }
+            )
+        }
+
+        fun markFilled(context: Context) {
+            context.startService(
+                Intent(context, TelemetryService::class.java).apply { action = ACTION_MARK_FILLED }
             )
         }
 

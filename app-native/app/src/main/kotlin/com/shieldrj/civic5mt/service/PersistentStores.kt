@@ -11,6 +11,8 @@ import com.shieldrj.civic5mt.core.LifetimeStore
 import com.shieldrj.civic5mt.core.OilConditionGrade
 import com.shieldrj.civic5mt.core.OilLifeProfile
 import com.shieldrj.civic5mt.core.OilProfileStore
+import com.shieldrj.civic5mt.core.TankState
+import com.shieldrj.civic5mt.core.TankStore
 import org.json.JSONObject
 
 /**
@@ -32,6 +34,7 @@ private const val KEY_FUEL_BLEND = "civic_2013_fuel_blend_v1"
 private const val KEY_MIGRATION_DONE = "rescued_localstorage_imported_v1"
 private const val KEY_OVERLAY_ENABLED = "overlay_enabled"
 private const val KEY_LAST_ADAPTER = "last_adapter_address"
+private const val KEY_TANK = "civic_2013_tank_v1"
 
 private const val TAG = "PersistentStores"
 
@@ -145,6 +148,50 @@ fun loadFuelBlend(context: Context): FuelBlendId {
 
 fun saveFuelBlend(context: Context, id: FuelBlendId) {
     telemetryPrefs(context).edit().putString(KEY_FUEL_BLEND, id.name).apply()
+}
+
+// ── The current tank ─────────────────────────────────────────────────────────────
+
+/**
+ * Where the tank in the car is kept between runs.
+ *
+ * It has to survive the app being closed, which is most of the point: a tank lasts a fortnight
+ * and the app is not open for all of it. The gallons-per-percent figure matters even more -
+ * it is measured once per tank, so losing it means going back to the nominal number and
+ * measuring again from scratch.
+ */
+class PrefsTankStore(context: Context) : TankStore {
+    private val prefs = telemetryPrefs(context)
+
+    override fun load(): TankState? {
+        val raw = prefs.getString(KEY_TANK, null) ?: return null
+        return runCatching {
+            val j = JSONObject(raw)
+            TankState(
+                fillTimestamp = j.optLong("fillTimestamp", 0L),
+                levelPercentAtFill = j.optDouble("levelPercentAtFill", 0.0),
+                milesSinceFill = j.optDouble("milesSinceFill", 0.0),
+                gallonsUsedSinceFill = j.optDouble("gallonsUsedSinceFill", 0.0),
+                gallonsPerPercent = j.optDouble("gallonsPerPercent", 0.132),
+                calibrated = j.optBoolean("calibrated", false),
+                smoothedLevelPercent = j.optDouble("smoothedLevelPercent", 0.0),
+                lowestLevelPercent = j.optDouble("lowestLevelPercent", 100.0),
+            )
+        }.onFailure { Log.w(TAG, "Tank record unreadable, ignoring", it) }.getOrNull()
+    }
+
+    override fun save(state: TankState) {
+        val j = JSONObject()
+            .put("fillTimestamp", state.fillTimestamp)
+            .put("levelPercentAtFill", state.levelPercentAtFill)
+            .put("milesSinceFill", state.milesSinceFill)
+            .put("gallonsUsedSinceFill", state.gallonsUsedSinceFill)
+            .put("gallonsPerPercent", state.gallonsPerPercent)
+            .put("calibrated", state.calibrated)
+            .put("smoothedLevelPercent", state.smoothedLevelPercent)
+            .put("lowestLevelPercent", state.lowestLevelPercent)
+        prefs.edit().putString(KEY_TANK, j.toString()).apply()
+    }
 }
 
 // ── The adapter last used ────────────────────────────────────────────────────────

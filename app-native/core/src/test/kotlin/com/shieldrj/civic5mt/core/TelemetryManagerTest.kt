@@ -343,6 +343,78 @@ class TelemetryManagerTest {
 
     // ═══════════════════════════════════════════════════════════════════════════════
     @Nested
+    @DisplayName("The tank")
+    inner class Tank {
+
+        private fun withFuel(level: Double?) = cruising().copy(fuelLevelPercent = level)
+
+        @Test
+        fun `A bench run reports no range rather than zero miles to empty`() {
+            // Zero reads as an alarm. The simulator reports a tank level, but nothing has been
+            // tracked against it, so there is no answer to give.
+            val m = manager()
+            val snapshot = m.tick(withFuel(68.0), 0.08, ConnectionStatus.SIMULATING)
+
+            assertNull(snapshot.metrics.fuelRangeMiles)
+            assertNull(snapshot.metrics.tankMpg)
+            assertNull(snapshot.metrics.tankGallonsRemaining)
+        }
+
+        @Test
+        fun `A bench run does not consume anyone's tank`() {
+            val m = manager()
+            repeat(200) { m.tick(withFuel(68.0), 0.5, ConnectionStatus.SIMULATING) }
+
+            assertEquals(0.0, m.tank.get().milesSinceFill)
+            assertEquals(0.0, m.tank.get().gallonsUsedSinceFill)
+        }
+
+        @Test
+        fun `A real drive fills in the range straight away`() {
+            val m = manager()
+            val snapshot = m.tick(withFuel(68.0), 0.5, ConnectionStatus.CONNECTED)
+
+            assertNotNull(snapshot.metrics.fuelRangeMiles)
+            assertTrue(snapshot.metrics.fuelRangeMiles!! > 100, "got ${snapshot.metrics.fuelRangeMiles}")
+        }
+
+        @Test
+        fun `A car with no tank level gets no range at all`() {
+            val m = manager()
+            repeat(50) { m.tick(withFuel(null), 0.5, ConnectionStatus.CONNECTED) }
+
+            val snapshot = m.tick(withFuel(null), 0.5, ConnectionStatus.CONNECTED)
+            assertNull(snapshot.metrics.fuelRangeMiles)
+            assertNull(snapshot.metrics.tankGallonsRemaining)
+        }
+
+        @Test
+        fun `Range holds steady while economy moves`() {
+            // The complaint. Range used to be the tank level times a 30-second average, so it
+            // tracked every hill.
+            val m = manager()
+            // Long enough that this tank has an economy figure of its own to stand on.
+            repeat(20_000) { m.tick(withFuel(68.0), 0.5, ConnectionStatus.CONNECTED) }
+            val steady = m.tick(withFuel(68.0), 0.5, ConnectionStatus.CONNECTED).metrics.fuelRangeMiles!!
+            assertNotNull(m.tank.get().tankMpg)
+
+            // Two minutes crawling in first with the throttle open: economy collapses.
+            val labouring = RawObdData(
+                rpm = 3200.0, speedKmh = 20.0, maf = 22.0, coolantC = 88.0,
+                engineLoad = 85.0, throttlePos = 60.0, lambda = 0.88, fuelLevelPercent = 68.0,
+            )
+            repeat(240) { m.tick(labouring, 0.5, ConnectionStatus.CONNECTED) }
+            val after = m.tick(labouring, 0.5, ConnectionStatus.CONNECTED).metrics.fuelRangeMiles!!
+
+            assertTrue(
+                abs(after - steady) < steady * 0.2,
+                "range moved from $steady to $after",
+            )
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    @Nested
     @DisplayName("Oil life")
     inner class Oil {
 

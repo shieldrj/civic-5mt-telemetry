@@ -54,6 +54,23 @@ data class LiveMetrics(
     /** Null when there is no tank level to compute it from. */
     val fuelRangeMiles: Int? = null,
 
+    /**
+     * The figures for this tank of fuel.
+     *
+     * These are what a driver actually checks. Instant MPG is on the dashboard already and
+     * changes every second, so it answers no question; miles per gallon over a whole tank
+     * has one answer and moves slowly.
+     */
+    val tankMpg: Double? = null,
+    val tankMilesSinceFill: Double? = null,
+    val tankGallonsRemaining: Double? = null,
+    /**
+     * Whether gallons per percent has been measured on this car yet, or is still the nominal
+     * figure from the tank capacity. Range is usable either way and better once measured, so
+     * the screen says which it is.
+     */
+    val tankCalibrated: Boolean = false,
+
     // Manual transmission dynamics
     val currentGear: GearSelection = GearSelection.Neutral,
     val gearRatio: Double = 0.0,

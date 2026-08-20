@@ -36,6 +36,7 @@ import com.shieldrj.civic5mt.core.LITERS_PER_US_GALLON
 import com.shieldrj.civic5mt.core.LiveMetrics
 import com.shieldrj.civic5mt.core.TripAnalytics
 import com.shieldrj.civic5mt.core.fuelBlend
+import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.service.saveFuelBlend
 import kotlin.math.roundToInt
@@ -105,6 +106,27 @@ fun FuelScreen(
             },
         )
 
+        if (live && metrics.fuelLevelPercent != null) {
+            Spacer(Modifier.height(24.dp))
+            SectionHeading("Just filled up?", null)
+            Text(
+                text = "A fill is normally noticed on its own, from the level rising. Use this " +
+                    "for a few gallons rather than a tankful, or if the count looks wrong. It " +
+                    "restarts the miles and the fuel for this tank.",
+                color = CivicColors.Ink3,
+                fontSize = 12.5.sp,
+            )
+            Text(
+                text = "Start a new tank",
+                color = CivicColors.Accent,
+                fontSize = 15.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { TelemetryService.markFilled(context) }
+                    .padding(vertical = 12.dp),
+            )
+        }
+
         if (live) {
             Spacer(Modifier.height(24.dp))
             OxygenSection(metrics)
@@ -129,54 +151,25 @@ fun FuelScreen(
 private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Double) {
     val isDfco = metrics.isDfcoActive
 
+    // This tank, and how much of it is left. Instant MPG used to be here and is gone: it is
+    // on the dashboard already, and a figure that changes every second cannot be compared to
+    // anything. Burn rate stays, further down, because gallons per hour at a standstill is a
+    // different question and has a real answer.
     Row(modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.weight(1f)) {
-            Label("INSTANT")
+            Label("THIS TANK")
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 Text(
-                    // On a closed throttle the injectors are off, so there is no economy
-                    // figure to print - the underlying number is the 99.9 display cap. It
-                    // says so underneath instead.
-                    text = if (isDfco) "—" else "%.1f".format(metrics.displayMpg),
-                    color = if (isDfco) CivicColors.Ink2 else CivicColors.Ink,
-                    fontSize = 40.sp,
-                    fontWeight = FontWeight.Light,
-                    modifier = Modifier.alignByBaseline(),
-                )
-                if (!isDfco) {
-                    Spacer(Modifier.width(5.dp))
-                    Text(
-                        text = "mpg",
-                        color = CivicColors.Ink3,
-                        fontSize = 13.sp,
-                        modifier = Modifier.alignByBaseline(),
-                    )
-                }
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = if (isDfco) "Coasting — no fuel"
-                else "%.1f over 30s".format(metrics.rolling30sMpg),
-                color = CivicColors.Ink3,
-                fontSize = 12.sp,
-            )
-        }
-
-        Column(Modifier.weight(1f)) {
-            Label("BURN RATE")
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    text = "%.2f".format(metrics.fuelFlowGalPerHour),
-                    color = CivicColors.Ink,
+                    text = metrics.tankMpg?.let { "%.1f".format(it) } ?: "—",
+                    color = if (metrics.tankMpg == null) CivicColors.Ink3 else CivicColors.Ink,
                     fontSize = 40.sp,
                     fontWeight = FontWeight.Light,
                     modifier = Modifier.alignByBaseline(),
                 )
                 Spacer(Modifier.width(5.dp))
                 Text(
-                    text = "gal/hr",
+                    text = "mpg",
                     color = CivicColors.Ink3,
                     fontSize = 13.sp,
                     modifier = Modifier.alignByBaseline(),
@@ -184,7 +177,44 @@ private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Doubl
             }
             Spacer(Modifier.height(4.dp))
             Text(
-                text = "%.2f L/hr".format(metrics.fuelFlowLitersPerHour),
+                // Three different reasons for having no figure, and they are not the same
+                // thing. The bench reports a tank level and is simply not allowed to spend
+                // anyone's fuel; a car with no PID 2F has nothing to report at all.
+                text = when {
+                    metrics.tankMilesSinceFill != null ->
+                        "%.0f mi since the fill".format(metrics.tankMilesSinceFill)
+                    metrics.fuelLevelPercent == null -> "no tank level from this car"
+                    else -> "not tracked on a simulated drive"
+                },
+                color = CivicColors.Ink3,
+                fontSize = 12.sp,
+            )
+        }
+
+        Column(Modifier.weight(1f)) {
+            Label("TO EMPTY")
+            Spacer(Modifier.height(6.dp))
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    text = metrics.fuelRangeMiles?.toString() ?: "—",
+                    color = CivicColors.Ink,
+                    fontSize = 40.sp,
+                    fontWeight = FontWeight.Light,
+                    modifier = Modifier.alignByBaseline(),
+                )
+                Spacer(Modifier.width(5.dp))
+                Text(
+                    text = "mi",
+                    color = CivicColors.Ink3,
+                    fontSize = 13.sp,
+                    modifier = Modifier.alignByBaseline(),
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = metrics.tankGallonsRemaining
+                    ?.let { "%.1f gal left".format(it) }
+                    ?: "",
                 color = CivicColors.Ink3,
                 fontSize = 12.sp,
             )
@@ -223,6 +253,11 @@ private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Doubl
         color = if (offStoich) CivicColors.Warn else CivicColors.Ink,
     )
     Spacer(Modifier.height(12.dp))
+    ValueRow(
+        label = "Burn rate",
+        value = "%.2f gal/hr".format(metrics.fuelFlowGalPerHour),
+        note = "%.2f L/hr".format(metrics.fuelFlowLitersPerHour),
+    )
     ValueRow(
         label = "ECU fuel trims",
         value = "Short %s%.1f%%   Long %s%.1f%%".format(
