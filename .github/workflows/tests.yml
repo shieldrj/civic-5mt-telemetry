@@ -69,10 +69,15 @@ jobs:
         working-directory: app-native
         run: ./gradlew --no-daemon :core:test
 
-  # Compiles the Android module. It has no unit tests of its own by design - everything with
-  # logic in it lives in :core, which is plain JVM - so what this catches is the build
-  # breaking, which otherwise would not surface until someone tried to put a build on the
-  # phone. The APK is not kept; this is a check, not a release.
+  # Compiles the Android module, and runs the few unit tests it has.
+  #
+  # The rule is still that logic belongs in :core, which is plain JVM and needs no device.
+  # The exception is code that has to touch an Android type to exist at all - the CSV export
+  # maps Room entities, so it cannot live in :core - and that code is still logic worth
+  # pinning. A wrong column order in an export produces a file that opens perfectly and is
+  # wrong from that column rightwards.
+  #
+  # The APK is not kept; this is a check, not a release.
   native-app:
     runs-on: ubuntu-latest
     steps:
@@ -97,3 +102,7 @@ jobs:
       - name: Build debug APK
         working-directory: app-native
         run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Android module unit tests
+        working-directory: app-native
+        run: ./gradlew --no-daemon :app:testDebugUnitTest

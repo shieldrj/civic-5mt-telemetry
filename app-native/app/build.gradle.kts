@@ -61,6 +61,15 @@ android {
     }
 
     sourceSets["main"].java.srcDirs("src/main/kotlin")
+    sourceSets["test"].java.srcDirs("src/test/kotlin")
+
+    testOptions {
+        unitTests.all { it.useJUnitPlatform() }
+        // Room entities are plain data classes and the CSV mapper never opens a database, so
+        // these run on the JVM in a second. Anything needing a real Android framework class
+        // belongs in an instrumented test, not here.
+        unitTests.isReturnDefaultValues = true
+    }
 
     // Export the schema to a file that gets committed. A migration is then something you can
     // see in a diff rather than something you find out about when a phone fails to open the
@@ -94,6 +103,10 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
+
+    testImplementation(kotlin("test"))
+    testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")
     implementation(composeBom)

@@ -89,6 +89,22 @@ interface TripDao {
     suspend fun getSamples(tripId: Long): List<TripSampleEntity>
 
     /**
+     * Everything, oldest first, for the CSV export.
+     *
+     * Ascending rather than newest-first like the list: a file is read forwards and plotted
+     * left to right, and a chart of a drive running backwards in time is a chart nobody
+     * reaches for twice.
+     *
+     * Unbounded, unlike [observeRecentTrips] - an export capped at fifty would silently be
+     * a partial export, which is worse than no export.
+     */
+    @Query("SELECT * FROM trips ORDER BY started_at ASC")
+    suspend fun getAllTrips(): List<TripEntity>
+
+    @Query("SELECT * FROM trip_samples ORDER BY trip_id ASC, at ASC")
+    suspend fun getAllSamples(): List<TripSampleEntity>
+
+    /**
      * Real drives only.
      *
      * The lifetime figure in SharedPreferences is the permanent record and this does not
