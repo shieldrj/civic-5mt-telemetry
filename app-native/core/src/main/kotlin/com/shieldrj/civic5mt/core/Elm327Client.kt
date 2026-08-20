@@ -30,6 +30,22 @@ object ObdTimeouts {
 
     /** Steady-state PID polling, once the bus is known good. */
     const val PID_MS = 1200L
+
+    /**
+     * How long every request may go unanswered before the adapter counts as gone.
+     *
+     * A socket that closes is easy - the transport says so. This is the other failure, and
+     * the one that actually happens: the ignition goes off, the MX+ drops into low power,
+     * and the socket stays open while every request times out. The poll loop had no opinion
+     * about that and would sit there answering nothing indefinitely.
+     *
+     * Measured rather than guessed. Across two real drives - 2,733 and 3,460 samples over
+     * 108 minutes - the longest gap between successful reads was 1.3 seconds. A third
+     * session, left connected in a car park, ran two hours with gaps up to 216 seconds and
+     * 23 of them over a minute. Thirty seconds is far outside anything a running engine
+     * produces and well inside what a sleeping adapter does.
+     */
+    const val SILENT_ADAPTER_MS = 30_000L
 }
 
 /** One command and whatever came back, for the on-screen adapter log. */
@@ -94,6 +110,16 @@ class Elm327Client(
 
     @Volatile
     var isPolling: Boolean = false
+
+    /**
+     * Whether polling stopped because nothing was answering, rather than because the socket
+     * went away. Both end the drive the same way; they do not read the same to a driver.
+     */
+    var wentSilent: Boolean = false
+        private set
+
+    /** When the adapter last actually replied to anything. */
+    private var lastReplyAt: Long = 0L
         private set
 
     /** PIDs the car reported via 0100/0120/... An empty set means "unknown, poll everything". */
@@ -189,6 +215,8 @@ class Elm327Client(
             log(cmd, "")
             return ""
         }
+
+        lastReplyAt = clock.nowMillis()
 
         // Polling runs several commands a second, so logging all of it would bury the
         // handshake within seconds. Each PID is recorded once, the first time it is asked:
@@ -366,6 +394,8 @@ class Elm327Client(
      */
     suspend fun runPollLoop(idleDelayMs: Long = 15) {
         isPolling = true
+        wentSilent = false
+        lastReplyAt = clock.nowMillis()
         var cycle = 0L
 
         while (isPolling) {
@@ -446,6 +476,16 @@ class Elm327Client(
             }
 
             cycle++
+
+            // Checked once a cycle rather than per command: a single timed-out PID is
+            // ordinary, and a car that answers eleven of twelve requests is a car that is
+            // talking. What ends the loop is nothing answering at all, for long enough that
+            // no running engine explains it.
+            if (clock.nowMillis() - lastReplyAt >= ObdTimeouts.SILENT_ADAPTER_MS) {
+                wentSilent = true
+                isPolling = false
+            }
+
             if (idleDelayMs > 0) delay(idleDelayMs)
         }
     }

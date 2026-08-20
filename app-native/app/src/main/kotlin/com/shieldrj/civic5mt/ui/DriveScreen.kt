@@ -161,6 +161,26 @@ fun DriveScreen(
             )
         }
 
+        // The screen stays up through a reconnect because the drive is still open - the
+        // distance and fuel on it are intact and will carry on. What must not stay up is the
+        // impression that these numbers are current: they are the last thing the adapter
+        // said, and a driver who is not told that reads them as live.
+        if (connection == ConnectionStatus.RECONNECTING) {
+            Text(
+                text = "ADAPTER LOST — RECONNECTING",
+                color = CivicColors.Warn,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 1.6.sp,
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = "Readings below are the last ones received. The drive is still open.",
+                color = CivicColors.Ink3,
+                fontSize = 12.sp,
+            )
+        }
+
         Spacer(Modifier.height(14.dp))
 
         // One line, because this screen is read through a windscreen and everything on it

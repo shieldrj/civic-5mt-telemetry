@@ -20,6 +20,7 @@ import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.DtcScanner
 import com.shieldrj.civic5mt.core.Elm327Client
 import com.shieldrj.civic5mt.core.ObdTransportError
+import com.shieldrj.civic5mt.core.ReconnectPolicy
 import com.shieldrj.civic5mt.core.OilLifeEngine
 import com.shieldrj.civic5mt.core.TelemetryManager
 import com.shieldrj.civic5mt.transport.BluetoothClassicTransport
@@ -62,6 +63,15 @@ class TelemetryService : Service() {
     private var pollJob: Job? = null
     private var connectJob: Job? = null
     private var tickJob: Job? = null
+
+    /**
+     * The adapter this drive is attached to, kept so a dropped link can be chased.
+     *
+     * Also written to preferences, which is what lets the app offer the adapter it used last
+     * rather than a list to hunt through - the phone is paired with more than one Bluetooth
+     * device and only one of them is in the car.
+     */
+    private var currentAddress: String? = null
 
     /**
      * The models, and the trip and lifetime figures they accumulate into.
@@ -178,6 +188,8 @@ class TelemetryService : Service() {
             ACTION_CLEAR_DTC -> clearCodes()
 
             ACTION_DISCONNECT -> {
+                // Stopping on purpose is not a link to chase.
+                currentAddress = null
                 scope.launch { teardown("Disconnected") }
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -191,7 +203,15 @@ class TelemetryService : Service() {
     }
 
     private fun connect(address: String) {
+        // The loops outlive connectJob now - they are launched on the service scope so the
+        // reconnect path can restart them - so a fresh connect has to stop them by name.
+        // Cancelling them also marks the poll job cancelled, which is what stops the watcher
+        // from treating this as a link that dropped.
         connectJob?.cancel()
+        pollJob?.cancel()
+        tickJob?.cancel()
+        currentAddress = address
+        saveLastAdapter(applicationContext, address)
         connectJob = scope.launch {
             TelemetryState.setConnection(ConnectionStatus.CONNECTING)
             TelemetryState.reset()
@@ -223,8 +243,8 @@ class TelemetryService : Service() {
                 manager.resetTrip()
                 recorder.start(System.currentTimeMillis(), simulated = false)
 
-                pollJob = launch { elm.runPollLoop() }
-                tickJob = launch { runTelemetryLoop(elm) }
+                startLoops(elm)
+                return@launch
             } catch (e: CancellationException) {
                 throw e
             } catch (e: ObdTransportError) {
@@ -243,6 +263,117 @@ class TelemetryService : Service() {
                 stopSelf()
             }
         }
+    }
+
+    /**
+     * Starts polling and ticking, and watches for the link going away underneath them.
+     *
+     * That watch is the point. [Elm327Client.runPollLoop] returns when the transport reports
+     * a disconnect - and until now nothing noticed. The tick loop carried on at 80ms against
+     * the last values the adapter ever sent, so the gauges held a steady 65 mph and the
+     * permanent record kept integrating distance and fuel from a car that was no longer
+     * talking. A frozen gauge is at least visible; miles booked against a link that had
+     * already gone are not.
+     */
+    private fun startLoops(elm: Elm327Client) {
+        tickJob = scope.launch { runTelemetryLoop(elm) }
+
+        val poll = scope.launch { elm.runPollLoop() }
+        pollJob = poll
+
+        // The watcher is a sibling of the poll job, not part of it. Doing this inside the
+        // poll job meant the recovery path cancelled the very coroutine it was running in,
+        // the moment it reached teardown.
+        scope.launch {
+            poll.join()
+            // Completing rather than being cancelled means the transport went away.
+            // Cancellation is the driver pressing Stop, and is not something to chase.
+            if (!poll.isCancelled) onLinkLost()
+        }
+    }
+
+    /**
+     * Chases a link that disappeared mid-drive.
+     *
+     * The trip and the recorder are deliberately left open. A drive does not end because a
+     * tunnel happened, and the alternative - closing it and opening another on the far side -
+     * turns one commute into two trips with a gap in the middle where the interesting part
+     * was.
+     *
+     * What must stop immediately is the tick loop, for the reason in [startLoops].
+     */
+    private suspend fun onLinkLost() {
+        val address = currentAddress ?: return
+
+        // Two different things end the poll loop and they do not read the same. A socket
+        // that closed is a knock to the adapter or a phone that walked out of range; an
+        // adapter that stopped answering with the socket still open is almost always the
+        // ignition having gone off. Saying "lost the adapter" for the second one sends
+        // someone out to check a connector that is fine.
+        val silent = client?.wentSilent == true
+        tickJob?.cancelAndJoin()
+        tickJob = null
+        runCatching { client?.disconnect() }
+        client = null
+
+        TelemetryState.setConnection(ConnectionStatus.RECONNECTING)
+
+        val droppedAt = System.currentTimeMillis()
+        var attempt = 0
+
+        while (currentCoroutineContext().isActive) {
+            val elapsed = System.currentTimeMillis() - droppedAt
+            if (!ReconnectPolicy.shouldRetry(elapsed)) break
+
+            attempt++
+            val wait = ReconnectPolicy.delayMs(attempt)
+            val message = (if (silent) "The adapter stopped answering" else "Lost the adapter") +
+                " - trying again in " + (wait / 1000) + "s"
+            TelemetryState.setStatusMessage(message)
+            updateNotification(message)
+            delay(wait)
+
+            val transport = BluetoothClassicTransport(applicationContext, address)
+            val elm = Elm327Client(transport)
+
+            val reconnected = runCatching {
+                elm.connect { TelemetryState.setStatusMessage(it) }
+                true
+            }.getOrElse {
+                Log.w(TAG, "Reconnect attempt $attempt failed", it)
+                runCatching { elm.disconnect() }
+                false
+            }
+
+            if (reconnected) {
+                client = elm
+                TelemetryState.setResolvedPids(
+                    ResolvedPids(elm.lambdaPid, elm.preCatPid, elm.outsideAirPid)
+                )
+                TelemetryState.setConnection(ConnectionStatus.CONNECTED)
+                TelemetryState.setStatusMessage("Back on the adapter - the drive continued")
+                updateNotification("Logging")
+
+                scope.launch {
+                    launch { elm.data.collect { TelemetryState.setData(it) } }
+                    launch { elm.protocolLog.collect { TelemetryState.setProtocolLog(it) } }
+                }
+                // Not resetTrip: the drive never ended.
+                startLoops(elm)
+                return
+            }
+        }
+
+        teardown(
+            if (silent) {
+                "The adapter stopped answering, which usually means the ignition is off. " +
+                    "The drive has been saved."
+            } else {
+                ReconnectPolicy.gaveUpMessage()
+            }
+        )
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
     }
 
     /**

@@ -56,6 +56,7 @@ import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.transport.BluetoothClassicTransport
 import com.shieldrj.civic5mt.data.TripDatabase
+import com.shieldrj.civic5mt.service.loadLastAdapter
 import com.shieldrj.civic5mt.service.loadOverlayEnabled
 import com.shieldrj.civic5mt.service.saveOverlayEnabled
 import com.shieldrj.civic5mt.transport.PairedDevice
@@ -122,6 +123,7 @@ private fun ConnectionScreen() {
     val shiftMode by TelemetryState.shiftMode.collectAsStateWithLifecycle()
     val overlayEnabled by TelemetryState.overlayEnabled.collectAsStateWithLifecycle()
     val oil by TelemetryState.oil.collectAsStateWithLifecycle()
+    val lastAdapter = remember { loadLastAdapter(context) }
 
     // Which detail screen is in front, or null for whatever the connection implies - the
     // Drive screen while something is connected, the adapter list otherwise. Two booleans got
@@ -159,7 +161,13 @@ private fun ConnectionScreen() {
         null -> {}
     }
 
-    if (connection == ConnectionStatus.CONNECTED || connection == ConnectionStatus.SIMULATING) {
+    // RECONNECTING keeps this screen rather than dropping back to the adapter list. Being
+    // thrown to a list of Bluetooth devices halfway through a drive, because of a tunnel, is
+    // how a driver concludes the app crashed.
+    if (connection == ConnectionStatus.CONNECTED ||
+        connection == ConnectionStatus.SIMULATING ||
+        connection == ConnectionStatus.RECONNECTING
+    ) {
         DriveScreen(
             metrics = metrics,
             trip = trip,
@@ -224,10 +232,20 @@ private fun ConnectionScreen() {
         Spacer(Modifier.height(16.dp))
 
         when (connection) {
-            ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING, ConnectionStatus.SIMULATING -> {
+            ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING,
+            ConnectionStatus.SIMULATING, ConnectionStatus.RECONNECTING -> {
                 ActionRow("Stop") { TelemetryService.disconnect(context) }
             }
             else -> {
+                // The adapter that answered last sits above the list, because a phone is
+                // bonded to headphones, a watch and a car stereo, and exactly one of them
+                // speaks OBD-II. Finding it again should not mean reading a list every time.
+                lastAdapter?.let { address ->
+                    ActionRow("Connect to the adapter used last") {
+                        TelemetryService.connect(context, address)
+                    }
+                }
+
                 ActionRow("Find paired adapters") {
                     requestPermissions.launch(permissions)
                 }

@@ -355,6 +355,60 @@ class ProtocolTest {
         }
 
         @Test
+        fun `Polling gives up on an adapter that has gone quiet without dropping`() = runTest {
+            // The failure that actually happens on this car. The ignition goes off, the MX+
+            // drops into low power, and the Bluetooth socket stays open while every request
+            // times out - so nothing reports a disconnect and the loop had no reason to stop.
+            // A real session left connected in a car park ran two hours that way.
+            val clock = MutableClock(1_700_000_000_000)
+            val t = FakeObdTransport()
+            var answering = true
+            t.autoRespond = { cmd ->
+                // Every command costs wall-clock time whether or not it is answered. Driving
+                // the clock from here is what lets a thirty-second silence happen in a test
+                // that finishes instantly.
+                clock.advanceMillis(if (answering) 60 else ObdTimeouts.PID_MS)
+                if (answering) "41 0C 1A F8\r>" else null
+            }
+            val client = Elm327Client(t, clock)
+
+            val job = launch { client.runPollLoop(idleDelayMs = 1) }
+            advanceTimeBy(200)
+            assertTrue(client.isPolling, "still talking")
+
+            answering = false
+            advanceTimeBy(120_000)
+            job.cancelAndJoin()
+
+            assertFalse(client.isPolling, "gave up on a silent adapter")
+            assertTrue(client.wentSilent, "and knows why, so the driver can be told")
+        }
+
+        @Test
+        fun `An occasional timed-out PID is not a silent adapter`() = runTest {
+            // A car that answers eleven of twelve requests is a car that is talking. Ending
+            // the drive over one dropped reply would end it in a tunnel, at a red light, and
+            // any time the bus was busy.
+            val clock = MutableClock(1_700_000_000_000)
+            val t = FakeObdTransport()
+            var n = 0
+            t.autoRespond = { _ ->
+                n++
+                clock.advanceMillis(if (n % 12 == 0) ObdTimeouts.PID_MS else 60)
+                if (n % 12 == 0) null else "41 0C 1A F8\r>"
+            }
+            val client = Elm327Client(t, clock)
+
+            val job = launch { client.runPollLoop(idleDelayMs = 1) }
+            advanceTimeBy(120_000)
+
+            assertTrue(client.isPolling, "kept polling through the odd timeout")
+            assertFalse(client.wentSilent)
+            client.stopPolling()
+            job.cancelAndJoin()
+        }
+
+        @Test
         fun `Polling stops when the transport reports the link dropped`() = runTest {
             val t = FakeObdTransport()
             t.autoRespond = { "OK\r>" }

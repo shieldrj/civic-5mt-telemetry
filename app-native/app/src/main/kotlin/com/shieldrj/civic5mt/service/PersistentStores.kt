@@ -31,6 +31,7 @@ private const val KEY_OIL = "civic_2013_oil_profile_v1"
 private const val KEY_FUEL_BLEND = "civic_2013_fuel_blend_v1"
 private const val KEY_MIGRATION_DONE = "rescued_localstorage_imported_v1"
 private const val KEY_OVERLAY_ENABLED = "overlay_enabled"
+private const val KEY_LAST_ADAPTER = "last_adapter_address"
 
 private const val TAG = "PersistentStores"
 
@@ -144,6 +145,26 @@ fun loadFuelBlend(context: Context): FuelBlendId {
 
 fun saveFuelBlend(context: Context, id: FuelBlendId) {
     telemetryPrefs(context).edit().putString(KEY_FUEL_BLEND, id.name).apply()
+}
+
+// ── The adapter last used ────────────────────────────────────────────────────────
+
+/**
+ * Which paired device turned out to be the one in the car.
+ *
+ * A phone is bonded to headphones, a watch, a speaker and a car stereo, and exactly one of
+ * them answers an ELM327 handshake. Remembering the one that did turns connecting from
+ * reading a list into pressing the thing at the top - and it is what the reconnect logic
+ * chases after a link drops.
+ *
+ * The address only, never a name: names come from the Bluetooth stack at read time and
+ * change when a device is renamed, while the address is what actually opens a socket.
+ */
+fun loadLastAdapter(context: Context): String? =
+    telemetryPrefs(context).getString(KEY_LAST_ADAPTER, null)
+
+fun saveLastAdapter(context: Context, address: String) {
+    telemetryPrefs(context).edit().putString(KEY_LAST_ADAPTER, address).apply()
 }
 
 // ── Overlay preference ───────────────────────────────────────────────────────────

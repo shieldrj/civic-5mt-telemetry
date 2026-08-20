@@ -1,6 +1,14 @@
 package com.shieldrj.civic5mt.core
 
-enum class ConnectionStatus { DISCONNECTED, CONNECTING, CONNECTED, SIMULATING, ERROR }
+/**
+ * RECONNECTING is deliberately its own state rather than reusing CONNECTING.
+ *
+ * They differ in what is behind them: CONNECTING has no drive yet, RECONNECTING has one open
+ * and paused with its distance and fuel intact. A screen that cannot tell them apart either
+ * throws the driver back to an adapter list in the middle of a drive, or claims to be logging
+ * while nothing is arriving.
+ */
+enum class ConnectionStatus { DISCONNECTED, CONNECTING, CONNECTED, RECONNECTING, SIMULATING, ERROR }
 
 /**
  * The two rules that decide what is allowed to reach the permanent record.
