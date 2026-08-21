@@ -121,8 +121,7 @@ fun DriveScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceEvenly,
         ) {
-            Stat("Speed", "${metrics.speedMph.toInt()}", "mph")
-            Stat("Coolant", "${metrics.coolantTempC.toInt()}", "°C")
+            Stat("Coolant", "${metrics.coolantTempF}", "°F")
             Stat(
                 label = "Mixture",
                 // Absent rather than assumed. On a car with no wideband this is the reading

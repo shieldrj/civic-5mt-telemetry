@@ -1,17 +1,10 @@
 package com.shieldrj.civic5mt.ui.overlay
 
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -27,135 +20,104 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.shieldrj.civic5mt.core.CivicSpecs
-import com.shieldrj.civic5mt.core.GearSelection
-import com.shieldrj.civic5mt.core.MpgDisplayState
 import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.ui.CivicColors
 
 /**
- * The heads-up display: what is worth seeing while something else owns the screen.
+ * The heads-up display: three economy figures, and nothing else.
  *
- * Almost everything is left out. The Drive screen has room to explain itself; this has to be
- * readable in the half-second of peripheral attention left over from navigating, and it is
- * sitting on top of a map someone is relying on. So: the gear, the shift bar, and economy.
- * Coolant, trims, fuel level and the rest are things you go and look at, not things you
- * glance at, and each one added here costs map.
+ * It used to carry the gear, a shift bar and live MPG - the Drive screen in miniature. Those
+ * are all fast-moving numbers, and a fast-moving number on top of a map someone is navigating
+ * by pulls the eye away every second. These three move slowly. Two of them barely move at all
+ * inside one drive.
  *
- * The two rules from the full screen still hold, and matter more at this size. MPG is drawn
- * as a state rather than a numeral when it is not an economy figure, and the shift bar is one
- * colour at a time.
+ * They are also the three that answer a question rather than describe a moment. Instant MPG
+ * says what the last two seconds cost, which nobody can act on. Miles per gallon over this
+ * tank, miles per gallon over the life of the car, and how far is left have one answer each.
+ *
+ * Absent readings render as a dash. Tank MPG and range are both null until the car has
+ * reported a fuel level and a fill has been seen, and a fabricated number here is one someone
+ * drives past a filling station on.
  */
 @Composable
 fun HudContent() {
     val metrics by TelemetryState.metrics.collectAsStateWithLifecycle()
 
-    val ratio by animateFloatAsState(
-        targetValue = (metrics.rpm / CivicSpecs.REV_LIMITER_RPM).coerceIn(0.0, 1.0).toFloat(),
-        animationSpec = tween(durationMillis = 90, easing = LinearEasing),
-        label = "hudShiftFill",
-    )
-    val atLimiter = metrics.shiftLightStage >= 5
-    val fillColor by animateColorAsState(
-        targetValue = when {
-            atLimiter -> CivicColors.Accent
-            metrics.shouldShiftUp -> CivicColors.Warn
-            else -> CivicColors.Ink
-        },
-        animationSpec = tween(durationMillis = 220),
-        label = "hudShiftColour",
-    )
-
     Column(
         modifier = Modifier
-            .width(150.dp)
+            .width(132.dp)
             .clip(RoundedCornerShape(14.dp))
             // Not the app's solid ground: this sits on a map, and an opaque panel is a hole
             // punched in the thing being navigated by. Dark enough to read white text on,
             // sheer enough to see the road under it.
             .background(Color(0xE00E1013))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .padding(horizontal = 12.dp, vertical = 11.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            Text(
-                text = gearLabel(metrics.currentGear),
-                color = CivicColors.Ink,
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Light,
-                modifier = Modifier.alignByBaseline(),
-            )
-            Text(
-                text = "${metrics.rpm.toInt()}",
-                color = CivicColors.Ink2,
-                fontSize = 13.sp,
-                modifier = Modifier.alignByBaseline(),
-            )
-        }
+        HudEconomy(
+            label = "THIS TANK",
+            value = metrics.tankMpg?.let { "%.1f".format(it) },
+            unit = "MPG",
+        )
 
-        Spacer(Modifier.height(7.dp))
+        Spacer(Modifier.height(11.dp))
 
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(3.dp)
-                .clip(RoundedCornerShape(1.5.dp))
-                .background(CivicColors.GaugeTrack),
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth(ratio)
-                    .fillMaxHeight()
-                    .background(fillColor),
-            )
-        }
+        HudEconomy(
+            label = "LIFETIME",
+            // Zero miles means no car has ever been connected, which is an absence rather
+            // than an economy of nothing.
+            value = metrics.lifetimeMiles
+                .takeIf { it > 0 }
+                ?.let { "%.1f".format(metrics.lifetimeMpg) },
+            unit = "MPG",
+        )
 
-        Spacer(Modifier.height(9.dp))
+        Spacer(Modifier.height(11.dp))
 
-        Row(verticalAlignment = Alignment.Bottom) {
-            when (metrics.mpgDisplayState) {
-                MpgDisplayState.DRIVING -> {
-                    Text(
-                        text = "%.1f".format(metrics.displayMpg),
-                        color = CivicColors.Ink,
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.Light,
-                        modifier = Modifier.alignByBaseline(),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = "MPG",
-                        color = CivicColors.Ink3,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Medium,
-                        letterSpacing = 1.4.sp,
-                        modifier = Modifier.alignByBaseline(),
-                    )
-                }
-                MpgDisplayState.COASTING -> HudState("COASTING")
-                MpgDisplayState.IDLE -> HudState("STATIONARY")
-            }
-        }
+        HudEconomy(
+            label = "TO EMPTY",
+            value = metrics.fuelRangeMiles?.toString(),
+            unit = "MI",
+        )
     }
 }
 
+/**
+ * One figure, with its heading above it.
+ *
+ * The heading is small and the number is large on purpose: at a glance the eye finds the row
+ * by position, and reads the heading only when it is not sure which row it landed on.
+ */
 @Composable
-private fun HudState(label: String) {
+private fun HudEconomy(label: String, value: String?, unit: String) {
     Text(
         text = label,
         color = CivicColors.Ink3,
-        fontSize = 12.sp,
+        fontSize = 9.sp,
         fontWeight = FontWeight.Medium,
-        letterSpacing = 1.4.sp,
-        modifier = Modifier.padding(vertical = 7.dp),
+        letterSpacing = 1.3.sp,
     )
-}
-
-private fun gearLabel(gear: GearSelection): String = when (gear) {
-    is GearSelection.Gear -> gear.number.toString()
-    GearSelection.Neutral -> "N"
-    GearSelection.Clutch -> "—"
+    Spacer(Modifier.height(1.dp))
+    Row(
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.Start,
+    ) {
+        Text(
+            text = value ?: "—",
+            color = if (value != null) CivicColors.Ink else CivicColors.Ink4,
+            fontSize = 23.sp,
+            fontWeight = FontWeight.Light,
+            modifier = Modifier.alignByBaseline(),
+        )
+        if (value != null) {
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = unit,
+                color = CivicColors.Ink3,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 1.1.sp,
+                modifier = Modifier.alignByBaseline(),
+            )
+        }
+    }
 }

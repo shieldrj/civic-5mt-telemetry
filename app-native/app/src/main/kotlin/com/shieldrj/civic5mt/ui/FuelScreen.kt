@@ -32,7 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.FUEL_BLENDS
 import com.shieldrj.civic5mt.core.FuelBlendId
-import com.shieldrj.civic5mt.core.LITERS_PER_US_GALLON
+import com.shieldrj.civic5mt.core.OUNCES_PER_US_GALLON
 import com.shieldrj.civic5mt.core.LiveMetrics
 import com.shieldrj.civic5mt.core.TripAnalytics
 import com.shieldrj.civic5mt.core.fuelBlend
@@ -257,7 +257,9 @@ private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Doubl
     ValueRow(
         label = "Burn rate",
         value = "%.2f gal/hr".format(metrics.fuelFlowGalPerHour),
-        note = "%.2f L/hr".format(metrics.fuelFlowLitersPerHour),
+        // Ounces a minute rather than litres an hour. Gallons an hour is a small number at
+        // idle, where this reading is most often looked at.
+        note = "%.1f fl oz/min".format(metrics.fuelFlowGalPerHour * OUNCES_PER_US_GALLON / 60),
     )
     ValueRow(
         label = "ECU fuel trims",
@@ -289,13 +291,14 @@ private fun IdleSection(trip: TripAnalytics) {
     val total = trip.idleTimeSec.roundToInt()
     SectionHeading("Idling", "${total / 60}m ${total % 60}s this trip")
 
-    // Millilitres, properly converted. The web build printed gallons multiplied by a
-    // thousand and labelled the result mL, which understated it by a factor of 3.79 - so a
-    // long wait at a level crossing looked like a thimble of petrol.
-    val millilitres = trip.idleFuelGallons * LITERS_PER_US_GALLON * 1000
+    // US fluid ounces. The web build printed gallons multiplied by a thousand and labelled
+    // the result mL, which understated it by a factor of 3.79 - so a long wait at a level
+    // crossing looked like a thimble of fuel. Ounces now, because that is what the rest of
+    // this app measures in.
+    val ounces = trip.idleFuelGallons * OUNCES_PER_US_GALLON
     ValueRow(
         label = "Burned at a standstill",
-        value = "%.0f mL".format(millilitres),
+        value = "%.1f fl oz".format(ounces),
         note = "$%.2f".format(trip.idleCostDollars),
     )
 }

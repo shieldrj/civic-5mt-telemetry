@@ -376,6 +376,16 @@ private fun Reading(value: String?, unit: String) {
     }
 }
 
+/**
+ * What to call the air temperature, decided by which PID answered.
+ *
+ * PID 46 is the real outside temperature. PID 0F is intake air, a different quantity: after a
+ * few minutes of idling it reports engine-bay heat. This car has only 0F, so the row is always
+ * intake air, and a heading saying "outside" would be a claim nothing measured.
+ */
+private fun airLabel(source: OutsideAirSource?): String =
+    if (source == OutsideAirSource.AMBIENT) "Outside air" else "Intake air"
+
 @Composable
 private fun LiveReadings(
     metrics: LiveMetrics,
@@ -390,11 +400,10 @@ private fun LiveReadings(
     // Nullable readings print a dash. This is the screen that used to show a fabricated
     // 22 °C outside temperature on a car that has no PID 46 to read it from.
     val rows = listOf(
-        "Speed" to if (live) "${metrics.speedMph.toInt()} mph" else null,
         "Air:fuel" to if (live) "%.1f:1".format(metrics.airFuelRatio) else null,
         "Fuel flow" to if (live) "%.2f gal/hr".format(metrics.fuelFlowGalPerHour) else null,
         "Range" to metrics.fuelRangeMiles?.let { "$it mi" },
-        "Coolant" to if (live) "${metrics.coolantTempC.toInt()} °C" else null,
+        "Coolant" to if (live) "${metrics.coolantTempF} °F" else null,
         "Battery" to if (live) "%.2f V".format(metrics.batteryVoltage) else null,
         "Lambda" to metrics.equivalenceRatio?.let { "λ $it" },
         "Sensor current" to metrics.o2Sensor1CurrentMa?.let { "$it mA" },
@@ -403,12 +412,10 @@ private fun LiveReadings(
         // PID 45 is zeroed at the closed-throttle rest point; PID 11 above reads about 14%
         // there on this car. Shown side by side because the difference is the whole point.
         "Throttle (rel)" to metrics.relativeThrottlePosPercent?.let { "%.1f %%".format(it) },
-        "Outside air" to metrics.outsideAirTempC?.let { c ->
-            // 0F is intake air, which after a few minutes of idling reads engine-bay heat
-            // rather than weather. It never appears under this heading unlabelled.
-            val source = if (metrics.outsideAirSource == OutsideAirSource.INTAKE) " (intake)" else ""
-            "${c.toInt()} °C$source"
-        },
+        // The heading follows the PID rather than the other way round. This car has no 46, so
+        // this is always intake air - engine-bay heat after a few minutes of idling, not
+        // weather. Calling that "outside" is the 22 C default one step further along.
+        airLabel(metrics.outsideAirSource) to metrics.outsideAirTempF?.let { "$it °F" },
         "Trip" to if (live) "%.1f mi · %.1f mpg".format(trip.distanceMiles, trip.avgMpg) else null,
         // Read from the stored record rather than from the tick loop. It is a persisted
         // fact, not a live reading, and should be legible with the car parked and the

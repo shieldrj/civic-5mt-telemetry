@@ -137,6 +137,22 @@ class TripCsvTest {
         }
 
         @Test
+        fun `Coolant is exported in Fahrenheit, under a column that says so`() {
+            /*
+             * The database stores Celsius, because that is what PID 05 reports. Everything a
+             * person reads is Fahrenheit, and this file is something a person reads.
+             *
+             * The column name carries the unit, so the name and the conversion have to change
+             * together or the file states something untrue. That is what this pins: 88.5 C is
+             * 191.3 F, and the heading is coolant_f. Files exported before this change say
+             * coolant_c and hold Celsius.
+             */
+            val doc = TripCsv.samples(listOf(sample(null)))
+            assertEquals("191.3", field(doc, "coolant_f"))
+            assertTrue(!TripCsv.SAMPLE_COLUMNS.contains("coolant_c"), "the old heading is gone")
+        }
+
+        @Test
         fun `Samples carry the trip they belong to`() {
             assertEquals("7", field(TripCsv.samples(listOf(sample(null))), "trip_id"))
         }
