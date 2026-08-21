@@ -51,6 +51,30 @@ data class RawObdData(
     val o2Sensor1CurrentMa: Double? = null,
     val o2Sensor2Voltage: Double = 0.65,
     val engineRuntimeSec: Double = 0.0,
+
+    /**
+     * PID 03, fuel system 1 status. Null on a car that does not report it.
+     *
+     * Read [FUEL_SYSTEM_STATUS_LABELS] for what a value means. Closed loop is the state the
+     * fuel model assumes; open loop means the mixture readings are following an enrichment
+     * map rather than correcting towards stoichiometric.
+     */
+    val fuelSystemStatus: Int? = null,
+
+    /** PID 45, throttle relative to its closed-throttle rest point. Null when unsupported. */
+    val relativeThrottlePos: Double? = null,
+
+    /**
+     * When 010C or 010D last actually parsed. Null means never - not "long ago".
+     *
+     * Provenance, not a reading, which is why it does not violate the rule above: there is no
+     * plausible-looking timestamp to seed it with. It exists because every field here carries
+     * forward on a non-answer, so the values alone cannot say whether the car is idling or the
+     * ECU went to sleep half a minute ago holding them. [IntegrationRules.isFreshEnoughToIntegrate]
+     * is what reads it, and it is the only thing standing between a sleeping ECU and the
+     * lifetime fuel total.
+     */
+    val motionSampledAtMillis: Long? = null,
 )
 
 /**

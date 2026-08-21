@@ -53,6 +53,23 @@ class CivicSimulatorTest {
             // a fabricated outside temperature on the screen.
             val data = run(CivicSimulatorEngine(), 10.0)
             assertEquals(OutsideAirSource.INTAKE, data.ambientSource)
+
+        @Test
+        fun `Every bench sample is stamped as freshly measured`() {
+            /*
+             * Without the stamp the freshness guard refuses every sample and a simulated
+             * drive silently reports zero miles - which looks like broken physics rather than
+             * a missing field, and is exactly the kind of failure that costs an afternoon.
+             *
+             * The bench measures every field on every step, so "just now" is the truth here.
+             */
+            val clock = MutableClock(1_700_000_000_000)
+            val data = run(CivicSimulatorEngine(clock), 10.0)
+            assertEquals(clock.nowMillis(), data.motionSampledAtMillis)
+            assertTrue(
+                IntegrationRules.isFreshEnoughToIntegrate(data.motionSampledAtMillis, clock.nowMillis()),
+            )
+        }
         }
 
         @Test
@@ -166,6 +183,11 @@ class CivicSimulatorTest {
     @DisplayName("Driven through the models")
     inner class ThroughTheModels {
 
+        // The bench shares the manager's clock on purpose. It stamps every snapshot as freshly
+        // measured, and the freshness guard compares that stamp against the manager's idea of
+        // now - so two different clocks make every simulated sample look stale and the bench
+        // silently reports zero miles.
+
         @Test
         fun `A city commute produces a plausible economy figure`() {
             // End to end: the bench feeds the same manager the car does.
@@ -175,7 +197,7 @@ class CivicSimulatorTest {
                 lifetimeStore = InMemoryLifetimeStore(),
                 oilLife = OilLifeEngine(InMemoryOilProfileStore(), clock),
             )
-            val sim = CivicSimulatorEngine()
+            val sim = CivicSimulatorEngine(clock)
 
             repeat(1500) { // Two minutes of city driving at 80ms
                 clock.advanceMillis(80)
@@ -197,7 +219,7 @@ class CivicSimulatorTest {
                 lifetimeStore = InMemoryLifetimeStore(),
                 oilLife = OilLifeEngine(InMemoryOilProfileStore(), clock),
             )
-            val sim = CivicSimulatorEngine()
+            val sim = CivicSimulatorEngine(clock)
             sim.scenario = SimulatorScenario.HIGHWAY_CRUISE
 
             repeat(3000) {
@@ -218,7 +240,7 @@ class CivicSimulatorTest {
                 lifetimeStore = InMemoryLifetimeStore(),
                 oilLife = OilLifeEngine(InMemoryOilProfileStore(), clock),
             )
-            val sim = CivicSimulatorEngine()
+            val sim = CivicSimulatorEngine(clock)
 
             var sawDfco = false
             repeat(1500) {

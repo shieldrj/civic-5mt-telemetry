@@ -398,6 +398,11 @@ private fun LiveReadings(
         "Battery" to if (live) "%.2f V".format(metrics.batteryVoltage) else null,
         "Lambda" to metrics.equivalenceRatio?.let { "λ $it" },
         "Sensor current" to metrics.o2Sensor1CurrentMa?.let { "$it mA" },
+        // Both null on a car that does not report them, and a dash is the right answer there.
+        "Fuel system" to metrics.fuelSystemStatusLabel,
+        // PID 45 is zeroed at the closed-throttle rest point; PID 11 above reads about 14%
+        // there on this car. Shown side by side because the difference is the whole point.
+        "Throttle (rel)" to metrics.relativeThrottlePosPercent?.let { "%.1f %%".format(it) },
         "Outside air" to metrics.outsideAirTempC?.let { c ->
             // 0F is intake air, which after a few minutes of idling reads engine-bay heat
             // rather than weather. It never appears under this heading unlabelled.

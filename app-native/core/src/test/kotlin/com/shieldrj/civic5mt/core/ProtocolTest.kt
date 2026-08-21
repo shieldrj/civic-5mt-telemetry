@@ -341,7 +341,7 @@ class ProtocolTest {
             val client = Elm327Client(t)
             client.connect()
 
-            val job = launch { client.runPollLoop(idleDelayMs = 1) }
+            val job = launch { client.runPollLoop(budgetMs = 1) }
             advanceTimeBy(200)
             client.stopPolling()
             job.cancelAndJoin()
@@ -372,7 +372,7 @@ class ProtocolTest {
             }
             val client = Elm327Client(t, clock)
 
-            val job = launch { client.runPollLoop(idleDelayMs = 1) }
+            val job = launch { client.runPollLoop(budgetMs = 1) }
             advanceTimeBy(200)
             assertTrue(client.isPolling, "still talking")
 
@@ -399,7 +399,7 @@ class ProtocolTest {
             }
             val client = Elm327Client(t, clock)
 
-            val job = launch { client.runPollLoop(idleDelayMs = 1) }
+            val job = launch { client.runPollLoop(budgetMs = 1) }
             advanceTimeBy(120_000)
 
             assertTrue(client.isPolling, "kept polling through the odd timeout")
@@ -414,7 +414,7 @@ class ProtocolTest {
             t.autoRespond = { "OK\r>" }
             val client = Elm327Client(t)
 
-            val job = launch { client.runPollLoop(idleDelayMs = 1) }
+            val job = launch { client.runPollLoop(budgetMs = 1) }
             advanceTimeBy(50)
             assertTrue(client.isPolling)
 
@@ -423,6 +423,222 @@ class ProtocolTest {
             job.cancelAndJoin()
 
             assertFalse(client.isPolling)
+        }
+
+        @Test
+        fun `Every PID that drives a gauge is asked for within one rotation`() = runTest {
+            /*
+             * The slow readings are spread one per cycle now rather than firing together on a
+             * modulo counter, so "is it still being polled at all" stopped being obvious from
+             * reading the loop. This pins the rotation against the same two lists the
+             * discovery screen ticks PIDs from, so the screen cannot claim a gauge the loop
+             * never reads - which is the disagreement the shared candidate lists exist to
+             * prevent, applied to the fixed PIDs as well.
+             */
+            val t = FakeObdTransport()
+            t.autoRespond = { cmd ->
+                when (cmd) {
+                    "AT Z" -> "ELM327 v1.5\r>"
+                    // Every bitmap reports everything supported, so nothing is skipped for
+                    // being absent and the rotation is the only thing deciding what is sent.
+                    "0100", "0120", "0140", "0160", "0180", "01A0", "01C0" ->
+                        "41 " + cmd.substring(2) + " FFFFFFFF\r>"
+                    "010C" -> "41 0C 1A F8\r>"
+                    else -> "OK\r>"
+                }
+            }
+            val client = Elm327Client(t)
+            client.connect()
+            client.loadSupportedPids()
+
+            val job = launch { client.runPollLoop(budgetMs = 1) }
+            advanceTimeBy(2_000)
+            client.stopPolling()
+            job.cancelAndJoin()
+
+            val expected = (ALWAYS_POLLED_PIDS + OPTIONAL_POLLED_PIDS).map { pidCommand(it) }
+            val missing = expected.filterNot { t.written.contains(it) }
+            assertTrue(missing.isEmpty(), "a whole rotation went by without asking for: $missing")
+        }
+
+        @Test
+        fun `A car that is switched off drops to about one command a second`() = runTest {
+            // Key on, engine off, ECU still answering - sitting in the car with the radio on,
+            // or connecting before starting up, which is not exotic since the handshake needs
+            // the ignition on. This used to poll flat out for as long as it lasted.
+            val clock = MutableClock(1_700_000_000_000)
+            val t = FakeObdTransport()
+            t.autoRespond = { cmd ->
+                clock.advanceMillis(15)
+                when (cmd) {
+                    "010C" -> "41 0C 00 00\r>" // crank not turning
+                    "010D" -> "41 0D 00\r>" // and not rolling
+                    else -> "OK\r>"
+                }
+            }
+            val client = Elm327Client(t, clock)
+
+            val job = launch { client.runPollLoop(budgetMs = 125) }
+            advanceTimeBy(10_000)
+            assertTrue(client.isEngineOffTier, "a sustained genuine zero at a standstill")
+
+            val before = t.written.size
+            advanceTimeBy(5_000)
+            val issued = t.written.size - before
+            client.stopPolling()
+            job.cancelAndJoin()
+
+            assertTrue(issued in 3..8, "expected roughly five commands in five seconds, got $issued")
+            assertContains(t.written.takeLast(issued).distinct(), "010C", "and only the one that matters")
+            assertEquals(1, t.written.takeLast(issued).distinct().size, "nothing else is worth a round trip")
+        }
+
+        @Test
+        fun `An adapter answering nothing is never mistaken for a switched-off engine`() = runTest {
+            /*
+             * The most important test here, because the whole tier rests on it.
+             *
+             * Every field on RawObdData carries forward on a non-answer, so the snapshot alone
+             * cannot tell an idling engine from an ECU that fell asleep holding 750 rpm. The
+             * detector is fed the fresh PARSE rather than the snapshot for exactly this
+             * reason: a null is "the car did not answer", which is not evidence of anything.
+             * Reading the snapshot instead would back the loop off on a moving car whenever
+             * the bus got busy, and - worse - would let the tier be entered without the
+             * just-measured zero that keeps the integrators gated off.
+             */
+            val clock = MutableClock(1_700_000_000_000)
+            val t = FakeObdTransport()
+            t.autoRespond = { clock.advanceMillis(ObdTimeouts.PID_MS); null }
+            val client = Elm327Client(t, clock)
+
+            val job = launch { client.runPollLoop(budgetMs = 125) }
+            advanceTimeBy(200_000)
+            job.cancelAndJoin()
+
+            assertFalse(client.isEngineOffTier, "silence is not a switched-off engine")
+            assertTrue(client.wentSilent, "it is a dead adapter, and that is what ends the drive")
+        }
+
+        @Test
+        fun `The engine starting leaves the tier without waiting out the idle budget`() = runTest {
+            // The lag here is what a driver would notice, so the wake skips the rest of the
+            // idle sleep and runs a full cycle at once rather than dribbling one reading in
+            // per second while the tachometer is already sweeping.
+            val clock = MutableClock(1_700_000_000_000)
+            val t = FakeObdTransport()
+            var running = false
+            t.autoRespond = { cmd ->
+                clock.advanceMillis(15)
+                when {
+                    cmd == "010C" && running -> "41 0C 1A F8\r>" // 1726 rpm
+                    cmd == "010C" -> "41 0C 00 00\r>"
+                    cmd == "010D" -> "41 0D 00\r>"
+                    else -> "OK\r>"
+                }
+            }
+            val client = Elm327Client(t, clock)
+
+            val job = launch { client.runPollLoop(budgetMs = 125) }
+            advanceTimeBy(10_000)
+            assertTrue(client.isEngineOffTier)
+
+            running = true
+            val before = t.written.size
+            advanceTimeBy(1_100)
+            val issued = t.written.size - before
+            client.stopPolling()
+            job.cancelAndJoin()
+
+            assertFalse(client.isEngineOffTier, "back to full rate on the first real reading")
+            assertEquals(1726.0, client.data.value.rpm, "and the reading that woke it is kept")
+            assertTrue(
+                issued >= 5,
+                "one idle poll plus a whole fast set, not one reading a second - got $issued",
+            )
+        }
+
+        @Test
+        fun `A silent adapter still ends the drive from inside the engine-off tier`() = runTest {
+            // Backing off must not cost the loop its ability to notice the adapter died. The
+            // check is wall-clock against the last reply and runs once a cycle either way, so
+            // all the tier changes is how long the cycle is.
+            val clock = MutableClock(1_700_000_000_000)
+            val t = FakeObdTransport()
+            var answering = true
+            t.autoRespond = { cmd ->
+                clock.advanceMillis(if (answering) 15 else ObdTimeouts.PID_MS)
+                when {
+                    !answering -> null
+                    cmd == "010C" -> "41 0C 00 00\r>"
+                    cmd == "010D" -> "41 0D 00\r>"
+                    else -> "OK\r>"
+                }
+            }
+            val client = Elm327Client(t, clock)
+
+            val job = launch { client.runPollLoop(budgetMs = 125) }
+            advanceTimeBy(10_000)
+            assertTrue(client.isEngineOffTier, "parked with the ECU still answering")
+
+            answering = false
+            advanceTimeBy(300_000)
+            job.cancelAndJoin()
+
+            assertFalse(client.isPolling)
+            assertTrue(client.wentSilent)
+        }
+
+        @Test
+        fun `Speed going quiet makes the snapshot stale even while rpm keeps answering`() = runTest {
+            /*
+             * The unbounded half of the carry-forward problem, and the reason the stamp is the
+             * OLDER of the two motion readings rather than the newer.
+             *
+             * On a marginal link 010C can keep answering while 010D times out over and over.
+             * Rpm then stays fresh and above the integration gate while speed carries forward
+             * at a cruise - so distance and fuel accrue from a speed nobody measured, for as
+             * long as the asymmetry lasts. Stamping on whichever reading arrived last would
+             * have left that wide open while looking like it had been fixed.
+             */
+            val clock = MutableClock(1_700_000_000_000)
+            val t = FakeObdTransport()
+            var speedAnswers = true
+            t.autoRespond = { cmd ->
+                val answered = !(cmd == "010D" && !speedAnswers)
+                // A timeout costs real wall-clock time on the car, and the stamp is measured
+                // against wall clock, so the fake has to charge for it.
+                clock.advanceMillis(if (answered) 15 else ObdTimeouts.PID_MS)
+                when {
+                    !answered -> null
+                    cmd == "010C" -> "41 0C 1A F8\r>" // 1726 rpm, engine clearly running
+                    cmd == "010D" -> "41 0D 50\r>" // 80 km/h
+                    else -> "OK\r>"
+                }
+            }
+            val client = Elm327Client(t, clock)
+
+            val job = launch { client.runPollLoop(budgetMs = 125) }
+            advanceTimeBy(1_000)
+            assertTrue(
+                IntegrationRules.isFreshEnoughToIntegrate(
+                    client.data.value.motionSampledAtMillis,
+                    clock.nowMillis(),
+                ),
+                "both answering, so the snapshot is fit to integrate",
+            )
+
+            speedAnswers = false
+            advanceTimeBy(30_000)
+            val stamp = client.data.value.motionSampledAtMillis
+            val rpm = client.data.value.rpm
+            client.stopPolling()
+            job.cancelAndJoin()
+
+            assertEquals(1726.0, rpm, "rpm is still arriving, and still says the engine is running")
+            assertFalse(
+                IntegrationRules.isFreshEnoughToIntegrate(stamp, clock.nowMillis()),
+                "but rpm alone must not keep the snapshot looking measured",
+            )
         }
     }
 }

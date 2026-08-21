@@ -36,6 +36,7 @@ import com.shieldrj.civic5mt.core.LITERS_PER_US_GALLON
 import com.shieldrj.civic5mt.core.LiveMetrics
 import com.shieldrj.civic5mt.core.TripAnalytics
 import com.shieldrj.civic5mt.core.fuelBlend
+import com.shieldrj.civic5mt.core.isClosedLoop
 import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.service.saveFuelBlend
@@ -267,6 +268,18 @@ private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Doubl
             metrics.longTermFuelTrim,
         ),
     )
+
+    // Absent rather than assumed: a car with no PID 03 shows no row at all. It sits directly
+    // under the trims because it is what says how to read them - in closed loop they are a
+    // correction towards stoichiometric, and in open loop the ECU is following an enrichment
+    // map instead and the air:fuel figure above is not what the trims describe.
+    metrics.fuelSystemStatusLabel?.let { status ->
+        ValueRow(
+            label = "Fuel system",
+            value = status,
+            note = if (isClosedLoop(metrics.fuelSystemStatus)) null else "trims are not feedback here",
+        )
+    }
 }
 
 // ── Idling ──────────────────────────────────────────────────────────────────────

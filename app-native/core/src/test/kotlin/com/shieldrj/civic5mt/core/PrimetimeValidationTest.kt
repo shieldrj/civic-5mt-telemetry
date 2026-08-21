@@ -622,6 +622,85 @@ class PrimetimeValidationTest {
         fun `A non-finite step contributes nothing`() {
             assertEquals(0.0, IntegrationRules.resolveIntegrationStep(Double.NaN))
         }
+
+        /*
+         * A reading old enough to be a carry-forward does not integrate either.
+         *
+         * The same rule as above applied to the other kind of gap. resolveIntegrationStep
+         * refuses a stretch of wall clock nobody observed; this refuses a reading nobody
+         * measured. They sit together because they are one idea - the permanent record takes
+         * only what was actually seen - and because the failure they prevent is the same
+         * shape: an integrator adding up a number that was true some time ago.
+         */
+
+        private val now = 1_700_000_000_000L
+
+        @Test
+        fun `A reading measured this instant integrates`() {
+            assertTrue(IntegrationRules.isFreshEnoughToIntegrate(now, now))
+        }
+
+        @Test
+        fun `A reading inside the window integrates`() {
+            assertTrue(IntegrationRules.isFreshEnoughToIntegrate(now - 500, now))
+        }
+
+        @Test
+        fun `A reading exactly at the age limit still integrates`() {
+            assertTrue(
+                IntegrationRules.isFreshEnoughToIntegrate(
+                    now - IntegrationRules.MAX_READING_AGE_MS,
+                    now,
+                ),
+            )
+        }
+
+        @Test
+        fun `One millisecond past the age limit does not`() {
+            assertFalse(
+                IntegrationRules.isFreshEnoughToIntegrate(
+                    now - IntegrationRules.MAX_READING_AGE_MS - 1,
+                    now,
+                ),
+            )
+        }
+
+        @Test
+        fun `A thirty-second-old reading does not integrate`() {
+            // What an ignition-off looks like: the ECU sleeps, every PID times out, and the
+            // snapshot keeps reporting the last thing it was told until SILENT_ADAPTER_MS
+            // ends the drive. That whole window used to reach the lifetime fuel total.
+            assertFalse(IntegrationRules.isFreshEnoughToIntegrate(now - 30_000, now))
+        }
+
+        @Test
+        fun `A reading that was never taken does not integrate`() {
+            // Null is an absence, not an old value, and the distinction is load-bearing: it
+            // is what a snapshot looks like before the first PID has ever been answered.
+            assertFalse(IntegrationRules.isFreshEnoughToIntegrate(null, now))
+        }
+
+        @Test
+        fun `A reading stamped in the future does not integrate`() {
+            // A clock adjustment, treated the same way resolveIntegrationStep treats a
+            // negative step. Not plausible, so not trusted.
+            assertFalse(IntegrationRules.isFreshEnoughToIntegrate(now + 5_000, now))
+        }
+
+        @Test
+        fun `The age limit covers the worst legitimate gap between two motion reads`() {
+            /*
+             * The constant has to sit above one cycle budget plus one timed-out PID, or the
+             * guard starts shaving samples off a bus that is merely slow. Pinning the
+             * arithmetic here is what makes the coupling visible: raise the cycle budget far
+             * enough and this stops being true, which is the moment to revisit both.
+             */
+            val worstLegitimateGapMs = ObdPacing.CYCLE_BUDGET_MS + ObdTimeouts.PID_MS
+            assertTrue(
+                IntegrationRules.MAX_READING_AGE_MS > worstLegitimateGapMs,
+                "age limit ${IntegrationRules.MAX_READING_AGE_MS}ms must exceed ${worstLegitimateGapMs}ms",
+            )
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
