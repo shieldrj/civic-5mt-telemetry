@@ -2,6 +2,9 @@ package com.shieldrj.civic5mt.core
 
 const val LITERS_PER_US_GALLON: Double = 3.785411784
 
+/** US fluid ounces in a US gallon. Small fuel volumes read in ounces, not millilitres. */
+const val OUNCES_PER_US_GALLON: Double = 128.0
+
 /**
  * Pure-component fuel properties, at 15°C.
  *

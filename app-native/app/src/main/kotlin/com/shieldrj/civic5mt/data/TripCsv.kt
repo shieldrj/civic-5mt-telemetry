@@ -65,7 +65,9 @@ object TripCsv {
                 "speed_mph" to num(s.speedMph, 1),
                 "rpm" to num(s.rpm, 0),
                 "mpg" to num(s.mpg, 2),
-                "coolant_c" to num(s.coolantC, 1),
+                // Fahrenheit, like every temperature the app shows. The database still
+                // stores Celsius, which is what the PID reports; the conversion is here.
+                "coolant_f" to num(s.coolantC * 9 / 5 + 32, 1),
                 "throttle_pct" to num(s.throttlePct, 1),
                 // Empty on a car with no wideband PID, all the way out to the file.
                 "lambda" to s.lambda?.let { num(it, 3) },
@@ -81,7 +83,7 @@ object TripCsv {
     )
 
     val SAMPLE_COLUMNS = listOf(
-        "trip_id", "at", "at_epoch_ms", "speed_mph", "rpm", "mpg", "coolant_c",
+        "trip_id", "at", "at_epoch_ms", "speed_mph", "rpm", "mpg", "coolant_f",
         "throttle_pct", "lambda",
     )
 }
