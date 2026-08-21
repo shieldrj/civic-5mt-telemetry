@@ -35,6 +35,12 @@ data class LiveMetrics(
     val o2Sensor1CurrentMa: Double? = null,
     val o2Sensor2Voltage: Double = 0.0,
     val engineRuntimeSec: Double = 0.0,
+    /** PID 03 status code, or null on a car that does not report it. */
+    val fuelSystemStatus: Int? = null,
+    /** Decoded label for [fuelSystemStatus], null when there is no reading to decode. */
+    val fuelSystemStatusLabel: String? = null,
+    /** PID 45, throttle zeroed at its closed rest point. Null when unsupported. */
+    val relativeThrottlePosPercent: Double? = null,
 
     // Computed fuel physics
     val instantMpg: Double = 0.0,

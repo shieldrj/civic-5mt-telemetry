@@ -37,7 +37,18 @@ private val signedWord: (List<Int>) -> Double? = { b ->
     word(b)?.let { raw -> if (raw >= 0x8000) raw - 0x10000 else raw }
 }
 
-private val FUEL_SYSTEM_STATUS: Map<Int, String> = mapOf(
+/**
+ * Whether PID 03 says the ECU is running O2 feedback - the state the fuel model assumes.
+ *
+ * Two values count: 2 is ordinary closed loop, and 16 is closed loop with one sensor faulted,
+ * which is still feedback. Everything else is open loop, where lambda and the trims follow a
+ * fixed enrichment map rather than correcting towards stoichiometric - so an air:fuel ratio
+ * derived from them is not the ratio being burned.
+ */
+fun isClosedLoop(status: Int?): Boolean = status == 2 || status == 16
+
+/** Shared with the live gauges, which show the same status the discovery screen decodes. */
+val FUEL_SYSTEM_STATUS_LABELS: Map<Int, String> = mapOf(
     0 to "Off",
     1 to "Open loop — engine cold",
     2 to "Closed loop — using O2 feedback",
@@ -91,7 +102,7 @@ val PID_CATALOG: Map<Int, PidDefinition> = mapOf(
         name = "Fuel system status",
         describe = { b ->
             if (b.isNotEmpty()) {
-                FUEL_SYSTEM_STATUS[b[0]] ?: ("Unknown (0x" + b[0].toString(16) + ")")
+                FUEL_SYSTEM_STATUS_LABELS[b[0]] ?: ("Unknown (0x" + b[0].toString(16) + ")")
             } else {
                 null
             }
@@ -219,6 +230,18 @@ val ALWAYS_POLLED_PIDS: List<Int> = listOf(
     0x04, 0x05, 0x06, 0x07, 0x0c, 0x0d, 0x0e, 0x10, 0x11, 0x15, 0x1f, 0x2f, 0x42,
 )
 
+/**
+ * Readings the gauges show where the car has them, and leave absent where it does not.
+ *
+ * Separate from [ALWAYS_POLLED_PIDS] because that list means "every OBD-II car answers this",
+ * and these two are not that - a car without them must not have them ticked as driving a
+ * gauge. This Civic reports both. It does not report 5C, engine oil temperature, which is why
+ * the oil model still judges warm-up by coolant: a scan settled it rather than a datasheet.
+ */
+val OPTIONAL_POLLED_PIDS: List<Int> = listOf(
+    0x03, 0x45,
+)
+
 /*
  * Three of the readings this app shows can come from more than one PID, and which one
  * exists varies by car. Naming a single PID per metric is what broke: the gauges asked for
@@ -267,6 +290,9 @@ fun pidsInUseFor(supported: Set<Int>): Set<Int> {
     for (candidates in listOf(LAMBDA_PID_CANDIDATES, PRE_CAT_PID_CANDIDATES, OUTSIDE_AIR_PID_CANDIDATES)) {
         choosePid(candidates, supported)?.let { inUse.add(it) }
     }
+    // Same rule choosePid uses: an unreadable bitmap means "ask, and let the reply decide",
+    // which is what the poll loop does too - isPidSupported passes everything on an empty set.
+    inUse.addAll(if (supported.isEmpty()) OPTIONAL_POLLED_PIDS else OPTIONAL_POLLED_PIDS.filter(supported::contains))
     return inUse
 }
 

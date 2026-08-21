@@ -64,7 +64,16 @@ class TelemetryManager(
 
         // Display smoothing can use the raw step; the permanent record cannot.
         val dtSec = max(0.01, rawDtSec)
-        val integrationDtSec = IntegrationRules.resolveIntegrationStep(rawDtSec)
+
+        // Two ways a step can fail to be real, and both have to be refused here rather than
+        // in the three integrators downstream - they all key off integrationDtSec, so gating
+        // it once is what stops them disagreeing. The gap can be unobserved (a stalled timer),
+        // or the readings themselves can be stale: the car stopped answering and every field
+        // is carrying forward its last value. Display keeps the carried-forward figure on
+        // purpose - a frozen gauge is visible and honest - but nothing permanent may.
+        val readingsAreFresh = IntegrationRules.isFreshEnoughToIntegrate(raw.motionSampledAtMillis, now)
+        val integrationDtSec =
+            if (readingsAreFresh) IntegrationRules.resolveIntegrationStep(rawDtSec) else 0.0
 
         // 1. Speeds. The unrounded figure is what gets integrated - rounding first would
         //    accumulate a bias over thousands of ticks.
@@ -132,7 +141,10 @@ class TelemetryManager(
                 engineStartCounted = true
                 oilLife.registerEngineStart(raw.coolantC)
             }
-            oilLife.recordTelemetryStep(raw.rpm, raw.coolantC, raw.engineLoad, speedMph, dtSec)
+            // The permanent record's step, not the display step. Oil life is a maintenance
+            // figure, so a stalled timer has to be discarded here exactly as it is for
+            // distance - it was taking the raw step, and booking a locked phone as running.
+            oilLife.recordTelemetryStep(raw.rpm, raw.coolantC, raw.engineLoad, speedMph, integrationDtSec)
         } else {
             oilLife.getProfile()
         }
@@ -160,6 +172,11 @@ class TelemetryManager(
             o2Sensor1CurrentMa = raw.o2Sensor1CurrentMa,
             o2Sensor2Voltage = roundTo(raw.o2Sensor2Voltage, 3),
             engineRuntimeSec = raw.engineRuntimeSec,
+            fuelSystemStatus = raw.fuelSystemStatus,
+            fuelSystemStatusLabel = raw.fuelSystemStatus?.let {
+                FUEL_SYSTEM_STATUS_LABELS[it] ?: ("Unknown (0x" + it.toString(16) + ")")
+            },
+            relativeThrottlePosPercent = raw.relativeThrottlePos,
             instantMpg = roundTo(instantMpg, 1),
             displayMpg = roundTo(displayMpg.value, 1),
             mpgDisplayState = displayMpg.state,

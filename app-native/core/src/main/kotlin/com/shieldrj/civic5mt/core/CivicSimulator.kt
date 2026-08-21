@@ -25,7 +25,7 @@ enum class SimulatorScenario { MANUAL, CITY_COMMUTE, SPIRITED_PULL, HIGHWAY_CRUI
  * displaying seeded constants. A simulator that exercises a different code path than the car
  * is worse than no simulator, because it certifies the path nobody drives.
  */
-class CivicSimulatorEngine {
+class CivicSimulatorEngine(private val clock: MillisClock = SystemMillisClock) {
 
     var scenario: SimulatorScenario = SimulatorScenario.CITY_COMMUTE
 
@@ -186,6 +186,10 @@ class CivicSimulatorEngine {
             o2Sensor1CurrentMa = o2Sensor1CurrentMa,
             o2Sensor2Voltage = 0.65,
             engineRuntimeSec = simulationTimeSec.roundToLong().toDouble(),
+            // The bench measures every field on every step, so it is always fresh. Without
+            // this the freshness guard refuses every sample and a simulated drive silently
+            // reports zero miles.
+            motionSampledAtMillis = clock.nowMillis(),
         )
     }
 

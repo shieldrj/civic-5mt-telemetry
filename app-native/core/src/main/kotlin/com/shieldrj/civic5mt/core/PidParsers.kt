@@ -120,6 +120,26 @@ object PidParsers {
     fun fuelLevelPercent(raw: String): Double? =
         oneByte(raw, "412F")?.let { roundTo((it * 100.0) / 255.0, 1) }
 
+    /**
+     * PID 03, fuel system 1 status, as the raw bitmask.
+     *
+     * Worth a slot because it says when the mixture readings mean what the fuel model thinks
+     * they mean. In open loop - a cold engine, or wide-open throttle - the ECU ignores the O2
+     * sensor and runs a fixed enrichment map, so lambda and the trims stop describing a
+     * correction and the AFR derived from them is not the AFR being burned.
+     */
+    fun fuelSystemStatus(raw: String): Int? = oneByte(raw, "4103")
+
+    /**
+     * PID 45, throttle position relative to its own closed-throttle rest point.
+     *
+     * PID 11 on this car reads about 14 percent with the pedal up, which is where the magic
+     * 14.0 in CivicSpecs.CLOSED_THROTTLE_BASELINE_PERCENT comes from. This one is zeroed at
+     * rest by definition, so it needs no such constant.
+     */
+    fun relativeThrottlePercent(raw: String): Double? =
+        oneByte(raw, "4145")?.let { roundTo((it * 100.0) / 255.0, 1) }
+
     /** PID 1F, seconds since the engine started. */
     fun engineRuntimeSec(raw: String): Double? = twoBytes(raw, "411F")?.toDouble()
 

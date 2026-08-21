@@ -24,6 +24,13 @@ import kotlin.test.assertTrue
  */
 class TelemetryManagerTest {
 
+    /**
+     * These tests never advance the clock, so a fixture stamped here is "measured just now"
+     * and passes the freshness guard. A fixture WITHOUT the stamp reads as never-measured and
+     * integrates nothing - which is the guard doing its job, not a broken test.
+     */
+    private val T0 = 1_700_000_000_000L
+
     private fun manager(clock: MutableClock = MutableClock(1_700_000_000_000)) =
         TelemetryManager(
             clock = clock,
@@ -41,6 +48,7 @@ class TelemetryManagerTest {
         throttlePos = 22.0,
         lambda = 1.0,
         fuelLevelPercent = 60.0,
+        motionSampledAtMillis = T0,
     )
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -79,6 +87,78 @@ class TelemetryManagerTest {
 
             assertEquals(0.0, m.getLifetimeStats().totalMiles)
             assertEquals(0.0, m.getTrip().distanceMiles)
+        }
+
+        @Test
+        fun `A snapshot nobody measured recently books no gallons, not just no miles`() {
+            /*
+             * The ignition-off leak, and the reason the freshness rule exists.
+             *
+             * Every field on RawObdData carries forward on a non-answer, so switching off at
+             * idle leaves rpm at 750, speed at 0 and MAF at 2.8 - and the rpm >= 350 gate
+             * reads that as a running engine, because it tests the value and not its age.
+             * Step miles came out zero (speed was zero) and step gallons did not, and
+             * updateLifetime returns early only when BOTH are zero. So lifetime gallons grew
+             * while lifetime miles stood still, diluting the MPG figure a little on every
+             * single drive, in a direction that never corrects itself.
+             *
+             * The gallons assertion is the one that matters here. Miles were already zero for
+             * an unrelated reason, which is exactly why this went unnoticed for so long.
+             */
+            val m = manager()
+            val stale = cruising().copy(
+                rpm = 750.0,
+                speedKmh = 0.0,
+                motionSampledAtMillis = T0 - IntegrationRules.MAX_READING_AGE_MS - 1,
+            )
+            repeat(100) { m.tick(stale, 0.08, ConnectionStatus.CONNECTED) }
+
+            assertEquals(0.0, m.getLifetimeStats().totalFuelGallons, "fuel that was never burned")
+            assertEquals(0.0, m.getLifetimeStats().totalMiles)
+        }
+
+        @Test
+        fun `A stale speed books no distance either`() {
+            // The other half, and the unbounded one: 010C keeps answering while 010D times
+            // out repeatedly on a marginal link, so rpm stays fresh and above the gate while
+            // speed carries forward at a cruise. That accrued distance from a speed nobody
+            // measured, for as long as the asymmetry lasted.
+            val m = manager()
+            val stale = cruising().copy(
+                motionSampledAtMillis = T0 - IntegrationRules.MAX_READING_AGE_MS - 1,
+            )
+            repeat(100) { m.tick(stale, 0.08, ConnectionStatus.CONNECTED) }
+
+            assertEquals(0.0, m.getLifetimeStats().totalMiles)
+        }
+
+        @Test
+        fun `A reading that was never measured at all is refused`() {
+            // Null is not "measured long ago" - it is a snapshot that has never had a PID
+            // answered into it, which is what the first moments of a connection look like.
+            val m = manager()
+            repeat(50) {
+                m.tick(cruising().copy(motionSampledAtMillis = null), 0.5, ConnectionStatus.CONNECTED)
+            }
+
+            assertEquals(0.0, m.getLifetimeStats().totalMiles)
+            assertEquals(0.0, m.getLifetimeStats().totalFuelGallons)
+        }
+
+        @Test
+        fun `A reading at the freshness boundary still counts`() {
+            // The guard must not shave legitimate samples off a slow but working bus. Erring
+            // this way would undercount a real drive, which is quieter but still wrong.
+            val m = manager()
+            val atBoundary = cruising().copy(
+                motionSampledAtMillis = T0 - IntegrationRules.MAX_READING_AGE_MS,
+            )
+            repeat(20) { m.tick(atBoundary, 0.5, ConnectionStatus.CONNECTED) }
+
+            assertTrue(
+                m.getLifetimeStats().totalMiles > 0,
+                "got ${m.getLifetimeStats().totalMiles}",
+            )
         }
 
         @Test
@@ -229,6 +309,25 @@ class TelemetryManagerTest {
             assertEquals(60.0, trip.idleTimeSec, 0.001)
             assertTrue(trip.idleFuelGallons > 0)
             assertTrue(trip.idleCostDollars > 0, "got ${trip.idleCostDollars}")
+        }
+
+        @Test
+        fun `A standstill on stale readings costs no idle fuel`() {
+            // The same leak as the lifetime one, seen from the trip side. Switch off at a
+            // standstill and idleFuelGallons kept accruing from a MAF reading the car had
+            // stopped sending, so a parked car quietly ran up an idle bill.
+            val m = manager()
+            val stale = cruising().copy(
+                rpm = 750.0,
+                speedKmh = 0.0,
+                motionSampledAtMillis = T0 - IntegrationRules.MAX_READING_AGE_MS - 1,
+            )
+            repeat(200) { m.tick(stale, 0.08, ConnectionStatus.CONNECTED) }
+
+            val trip = m.getTrip()
+            assertEquals(0.0, trip.idleFuelGallons)
+            assertEquals(0.0, trip.idleTimeSec)
+            assertEquals(0.0, trip.idleCostDollars)
         }
 
         @Test
@@ -402,6 +501,7 @@ class TelemetryManagerTest {
             val labouring = RawObdData(
                 rpm = 3200.0, speedKmh = 20.0, maf = 22.0, coolantC = 88.0,
                 engineLoad = 85.0, throttlePos = 60.0, lambda = 0.88, fuelLevelPercent = 68.0,
+                motionSampledAtMillis = T0,
             )
             repeat(240) { m.tick(labouring, 0.5, ConnectionStatus.CONNECTED) }
             val after = m.tick(labouring, 0.5, ConnectionStatus.CONNECTED).metrics.fuelRangeMiles!!
@@ -430,10 +530,11 @@ class TelemetryManagerTest {
             engineLoad = 22.0,
             throttlePos = 14.0,
             lambda = 1.0,
+            motionSampledAtMillis = T0,
         )
 
         /** Key on, engine not running: every PID answers, the crank is not turning. */
-        private fun ignitionOnly() = RawObdData(rpm = 0.0, coolantC = 21.0)
+        private fun ignitionOnly() = RawObdData(rpm = 0.0, coolantC = 21.0, motionSampledAtMillis = T0)
 
         @Test
         fun `A simulated drive leaves the oil record exactly where it was`() {
@@ -461,6 +562,45 @@ class TelemetryManagerTest {
             val after = m.oilLife.getProfile()
             assertTrue(after.accumulatedRevolutions > before.accumulatedRevolutions)
             assertTrue(after.currentOdometer > before.currentOdometer)
+        }
+
+        @Test
+        fun `A twenty-minute stall adds no revolutions to the oil record`() {
+            /*
+             * This is a fix, not a guard against a hypothetical.
+             *
+             * The oil model was handed the DISPLAY step rather than the integration step,
+             * while the trip and the tank both got the integration step. So the stalled-timer
+             * gap that IntegrationRules correctly throws away for distance was accepted here
+             * in full: park with the app open, let the phone lock for twenty minutes, and the
+             * next tick added twenty minutes of running at 3000 rpm - about sixty thousand
+             * crank revolutions and twelve hundred seconds of cold-running time - to a
+             * maintenance figure someone changes their oil on.
+             *
+             * The existing test for this stall only asserted on totalMiles, so it passed the
+             * whole time.
+             */
+            val m = manager()
+            val before = m.oilLife.getProfile()
+
+            m.tick(hot(), 1200.0, ConnectionStatus.CONNECTED)
+
+            val after = m.oilLife.getProfile()
+            assertEquals(before.accumulatedRevolutions, after.accumulatedRevolutions)
+            assertEquals(before.currentOdometer, after.currentOdometer)
+        }
+
+        @Test
+        fun `Stale readings add no revolutions either`() {
+            // The oil model reads rpm straight out of the snapshot, so a carried-forward 3000
+            // rpm from an ECU that went to sleep looks exactly like an engine at a cruise.
+            val m = manager()
+            val before = m.oilLife.getProfile()
+
+            val stale = hot().copy(motionSampledAtMillis = T0 - IntegrationRules.MAX_READING_AGE_MS - 1)
+            repeat(200) { m.tick(stale, 0.5, ConnectionStatus.CONNECTED) }
+
+            assertEquals(before.accumulatedRevolutions, m.oilLife.getProfile().accumulatedRevolutions)
         }
 
         @Test

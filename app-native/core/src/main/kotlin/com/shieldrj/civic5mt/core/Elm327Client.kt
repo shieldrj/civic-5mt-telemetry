@@ -385,97 +385,84 @@ class Elm327Client(
 
     // ── Polling ──────────────────────────────────────────────────────────────────
 
+    /** One cycle's readings, plus the fresh rpm the engine-off detector has to see. */
+    private class CycleReadings(val snapshot: RawObdData, val freshRpm: Double?)
+
+    private val engineOff = EngineOffDetector()
+
     /**
-     * The steady-state loop, tiered by how fast each reading actually changes.
+     * When 010C and 010D were each last answered, kept apart so the stamp can be the OLDER
+     * of the two.
      *
-     * Runs until cancelled or [stopPolling]. Every reading goes through [update], which only
-     * replaces a field when the car actually answered - a null parse leaves the previous
-     * value in place rather than writing a default over it.
+     * Taking the newer would leave the unbounded hole open: on a marginal link 010C can keep
+     * answering while 010D times out over and over, so rpm stays fresh and above the
+     * integration gate while speed carries forward at a cruise - and distance accrues from a
+     * speed nobody measured, for as long as the asymmetry lasts. Both readings gate the
+     * permanent record, so the record is only as fresh as the staler of them.
      */
-    suspend fun runPollLoop(idleDelayMs: Long = 15) {
+    private var lastRpmAt: Long? = null
+    private var lastSpeedAt: Long? = null
+
+    /** Null until both have been answered at least once - an absence, not an old value. */
+    private fun motionStamp(): Long? {
+        val rpmAt = lastRpmAt ?: return null
+        val speedAt = lastSpeedAt ?: return null
+        return minOf(rpmAt, speedAt)
+    }
+
+    /** Whether the loop has backed off to the engine-off tier. */
+    val isEngineOffTier: Boolean get() = engineOff.isEngineOff
+
+    /**
+     * The steady-state loop: the fast set every cycle, plus exactly one slot from a rotation.
+     *
+     * The tiers used to be modulo counters - everything on `cycle % 6` fired together, and on
+     * `cycle % 12` fifteen commands went out back to back. That bunching cost twice over: the
+     * cycle time alternated between about 84ms and 210ms, and the worst-case gap between two
+     * consecutive rpm reads was set by the heavy cycle rather than the ordinary one. Spreading
+     * the slow readings one per cycle keeps every cycle the same length, and it is what makes
+     * the freshness deadline in [IntegrationRules.MAX_READING_AGE_MS] honest.
+     *
+     * Every reading still goes through a null check that leaves the previous value in place
+     * rather than writing a default over it.
+     */
+    suspend fun runPollLoop(budgetMs: Long = ObdPacing.CYCLE_BUDGET_MS) {
         isPolling = true
         wentSilent = false
         lastReplyAt = clock.nowMillis()
+        engineOff.reset()
+        lastRpmAt = null
+        lastSpeedAt = null
         var cycle = 0L
 
         while (isPolling) {
-            // High-frequency: what the driver is watching move.
-            update { it.copy(rpm = PidParsers.rpm(pollPid("010C")) ?: it.rpm) }
-            update { it.copy(speedKmh = PidParsers.speedKmh(pollPid("010D")) ?: it.speedKmh) }
-            update { it.copy(maf = PidParsers.maf(pollPid("0110")) ?: it.maf) }
-            update { it.copy(throttlePos = PidParsers.throttlePercent(pollPid("0111")) ?: it.throttlePos) }
+            val cycleStart = clock.nowMillis()
+            val wasEngineOff = engineOff.isEngineOff
 
-            // O2 readings oscillate rapidly - a slow poll aliases them into a flat line,
-            // which defeats the point of showing a live trace. Which PID that is depends on
-            // the car: a narrowband front sensor answers 14 with a voltage, a wide-range one
-            // answers 34 with lambda and current. This Civic has only 34, and asking it for
-            // 14 forever was why "Pre-catalyst" showed a constant 0.45 V from nowhere.
-            when (preCatPid) {
-                0x34 -> {
-                    // One request covers both jobs: 34 is the pre-catalyst sensor *and* the
-                    // wideband the fuel model needs, so this keeps lambda at this tier's rate.
-                    val reading = PidParsers.wideRangeO2(pollPid("0134"))
-                    if (reading != null) {
-                        update {
-                            it.copy(
-                                o2Sensor1Lambda = reading.lambda,
-                                lambda = reading.lambda,
-                                o2Sensor1CurrentMa = reading.currentMa ?: it.o2Sensor1CurrentMa,
-                            )
-                        }
-                    }
-                }
-                0x14 -> update {
-                    it.copy(o2Sensor1Voltage = PidParsers.o2Sensor1Voltage(pollPid("0114")) ?: it.o2Sensor1Voltage)
-                }
+            val readings: CycleReadings
+            if (wasEngineOff) {
+                readings = pollEngineOffCycle(_data.value)
+            } else {
+                readings = pollFullCycle(_data.value, cycle)
+                cycle++
             }
 
-            update { it.copy(o2Sensor2Voltage = PidParsers.o2Sensor2Voltage(pollPid("0115")) ?: it.o2Sensor2Voltage) }
+            /*
+             * One write per cycle, not one per PID.
+             *
+             * This used to publish on every single reading - about eighty-six emissions a
+             * second into a StateFlow that a Compose UI collects, to drive gauges that repaint
+             * twelve and a half times a second. It also meant rpm, speed, MAF and throttle in
+             * any given snapshot could come from different moments, which the gear calculator
+             * and the DFCO test both read together as though they did not.
+             */
+            _data.value = readings.snapshot
 
-            // Medium tier.
-            if (cycle % 6 == 0L) {
-                update { it.copy(coolantC = PidParsers.coolantC(pollPid("0105")) ?: it.coolantC) }
-                update { it.copy(engineLoad = PidParsers.engineLoad(pollPid("0104")) ?: it.engineLoad) }
-                update { it.copy(timingAdvance = PidParsers.timingAdvance(pollPid("010E")) ?: it.timingAdvance) }
-                update { it.copy(batteryVoltage = PidParsers.batteryVoltage(pollPid("0142")) ?: it.batteryVoltage) }
-
-                // 46 is outside air; 0F is intake air, a different quantity, and it gets
-                // labelled as one. Neither existing leaves the reading null rather than 22 C.
-                val airSource = when (outsideAirPid) {
-                    0x46 -> OutsideAirSource.AMBIENT
-                    0x0f -> OutsideAirSource.INTAKE
-                    else -> null
-                }
-                if (airSource != null) {
-                    val cmd = if (airSource == OutsideAirSource.AMBIENT) "0146" else "010F"
-                    val value = PidParsers.outsideAirC(pollPid(cmd), airSource)
-                    if (value != null) update { it.copy(ambientC = value, ambientSource = airSource) }
-                }
-            }
-
-            // Slow tier: trims, fuel level, runtime.
-            if (cycle % 12 == 0L) {
-                update { it.copy(stft = PidParsers.shortTermFuelTrim(pollPid("0106")) ?: it.stft) }
-                update { it.copy(ltft = PidParsers.longTermFuelTrim(pollPid("0107")) ?: it.ltft) }
-
-                // Only when lambda is not already arriving with the pre-catalyst read above.
-                // On this Civic the two are the same PID, so this does not run at all; a car
-                // with a narrowband front sensor plus a separate wideband needs it to.
-                if (lambdaPid != null && lambdaPid != preCatPid) {
-                    when (lambdaPid) {
-                        0x24 -> update { it.copy(lambda = PidParsers.lambdaFromPid24(pollPid("0124")) ?: it.lambda) }
-                        0x34 -> {
-                            val reading = PidParsers.wideRangeO2(pollPid("0134"))
-                            if (reading != null) update { it.copy(lambda = reading.lambda) }
-                        }
-                    }
-                }
-
-                update { it.copy(fuelLevelPercent = PidParsers.fuelLevelPercent(pollPid("012F")) ?: it.fuelLevelPercent) }
-                update { it.copy(engineRuntimeSec = PidParsers.engineRuntimeSec(pollPid("011F")) ?: it.engineRuntimeSec) }
-            }
-
-            cycle++
+            val stillOff = engineOff.observe(
+                freshRpm = readings.freshRpm,
+                speedKmh = readings.snapshot.speedKmh,
+                nowMillis = clock.nowMillis(),
+            )
 
             // Checked once a cycle rather than per command: a single timed-out PID is
             // ordinary, and a car that answers eleven of twelve requests is a car that is
@@ -485,17 +472,179 @@ class Elm327Client(
                 wentSilent = true
                 isPolling = false
             }
+            if (!isPolling) break
 
-            if (idleDelayMs > 0) delay(idleDelayMs)
+            // Just woke up. Skip what is left of the idle budget so the next cycle - a full
+            // one - runs immediately, and the first snapshot the driver sees after turning
+            // the key is complete rather than dribbling in a reading at a time.
+            if (wasEngineOff && !stillOff) continue
+
+            val budget = if (stillOff) ObdPacing.ENGINE_OFF_CYCLE_MS else budgetMs
+            delay(cycleSleepMs(clock.nowMillis() - cycleStart, budget))
         }
+    }
+
+    /** The fast set, plus one rotation slot. */
+    private suspend fun pollFullCycle(prev: RawObdData, cycle: Long): CycleReadings {
+        var s = prev
+
+        // High-frequency: what the driver is watching move, and what the permanent record
+        // integrates. These two carry the freshness stamp because they are the two the
+        // integrators gate on - a stale rpm reads as an idling engine, and a stale speed
+        // books distance nobody drove.
+        val freshRpm = PidParsers.rpm(pollPid("010C"))
+        if (freshRpm != null) {
+            s = s.copy(rpm = freshRpm)
+            lastRpmAt = clock.nowMillis()
+        }
+        val freshSpeed = PidParsers.speedKmh(pollPid("010D"))
+        if (freshSpeed != null) {
+            s = s.copy(speedKmh = freshSpeed)
+            lastSpeedAt = clock.nowMillis()
+        }
+        s = s.copy(motionSampledAtMillis = motionStamp())
+
+        PidParsers.maf(pollPid("0110"))?.let { s = s.copy(maf = it) }
+        PidParsers.throttlePercent(pollPid("0111"))?.let { s = s.copy(throttlePos = it) }
+
+        // O2 readings oscillate rapidly - a slow poll aliases them into a flat line, which
+        // defeats the point of showing a live trace. Which PID that is depends on the car: a
+        // narrowband front sensor answers 14 with a voltage, a wide-range one answers 34 with
+        // lambda and current. This Civic has only 34, and asking it for 14 forever was why
+        // "Pre-catalyst" showed a constant 0.45 V from nowhere.
+        when (preCatPid) {
+            0x34 -> {
+                // One request covers both jobs: 34 is the pre-catalyst sensor *and* the
+                // wideband the fuel model needs, so this keeps lambda at this tier's rate.
+                val reading = PidParsers.wideRangeO2(pollPid("0134"))
+                if (reading != null) {
+                    s = s.copy(
+                        o2Sensor1Lambda = reading.lambda,
+                        lambda = reading.lambda,
+                        o2Sensor1CurrentMa = reading.currentMa ?: s.o2Sensor1CurrentMa,
+                    )
+                }
+            }
+            0x14 -> PidParsers.o2Sensor1Voltage(pollPid("0114"))?.let { s = s.copy(o2Sensor1Voltage = it) }
+        }
+
+        return CycleReadings(pollRotationSlot(s, cycle), freshRpm)
+    }
+
+    /**
+     * The engine-off tier: one command, just enough to notice the engine starting.
+     *
+     * Nothing else is worth a round trip on a car that is switched off, and the gauges are not
+     * frozen while this runs - the telemetry tick keeps going and shows a freshly measured
+     * zero, which is the truth.
+     */
+    private suspend fun pollEngineOffCycle(prev: RawObdData): CycleReadings {
+        val freshRpm = PidParsers.rpm(pollPid("010C"))
+        if (freshRpm == null) return CycleReadings(prev, null)
+
+        lastRpmAt = clock.nowMillis()
+        // Speed is not read in this tier, so the stamp goes stale within a couple of seconds
+        // and the integrators stop accepting the snapshot. That is correct rather than
+        // unfortunate: nothing here is measuring whether the car is moving. The rpm of zero
+        // gates them off anyway, so this is the same answer arrived at twice.
+        return CycleReadings(
+            prev.copy(rpm = freshRpm, motionSampledAtMillis = motionStamp()),
+            freshRpm,
+        )
+    }
+
+    private suspend fun pollRotationSlot(prev: RawObdData, cycle: Long): RawObdData {
+        var s = prev
+        when (ROTATION_SLOTS[(cycle % ROTATION_SLOTS.size).toInt()]) {
+            "0105" -> PidParsers.coolantC(pollPid("0105"))?.let { s = s.copy(coolantC = it) }
+            "0104" -> PidParsers.engineLoad(pollPid("0104"))?.let { s = s.copy(engineLoad = it) }
+            "0142" -> PidParsers.batteryVoltage(pollPid("0142"))?.let { s = s.copy(batteryVoltage = it) }
+            "0115" -> PidParsers.o2Sensor2Voltage(pollPid("0115"))?.let { s = s.copy(o2Sensor2Voltage = it) }
+            "010E" -> PidParsers.timingAdvance(pollPid("010E"))?.let { s = s.copy(timingAdvance = it) }
+            "012F" -> PidParsers.fuelLevelPercent(pollPid("012F"))?.let { s = s.copy(fuelLevelPercent = it) }
+            "011F" -> PidParsers.engineRuntimeSec(pollPid("011F"))?.let { s = s.copy(engineRuntimeSec = it) }
+            "0107" -> PidParsers.longTermFuelTrim(pollPid("0107"))?.let { s = s.copy(ltft = it) }
+            "0103" -> PidParsers.fuelSystemStatus(pollPid("0103"))?.let { s = s.copy(fuelSystemStatus = it) }
+            "0145" -> PidParsers.relativeThrottlePercent(pollPid("0145"))?.let { s = s.copy(relativeThrottlePos = it) }
+            "0106" -> {
+                PidParsers.shortTermFuelTrim(pollPid("0106"))?.let { s = s.copy(stft = it) }
+                s = pollSeparateLambda(s)
+            }
+            AIR_SLOT -> s = pollOutsideAir(s)
+        }
+        return s
+    }
+
+    /**
+     * Only when lambda is not already arriving with the pre-catalyst read.
+     *
+     * On this Civic the two are the same PID, so this does not run at all; a car with a
+     * narrowband front sensor plus a separate wideband needs it to. It rides the 0106 slot
+     * rather than having one of its own, so the rotation stays uniform on the car that exists.
+     */
+    private suspend fun pollSeparateLambda(prev: RawObdData): RawObdData {
+        val pid = lambdaPid
+        if (pid == null || pid == preCatPid) return prev
+        return when (pid) {
+            0x24 -> PidParsers.lambdaFromPid24(pollPid("0124"))?.let { prev.copy(lambda = it) } ?: prev
+            0x34 -> PidParsers.wideRangeO2(pollPid("0134"))?.let { prev.copy(lambda = it.lambda) } ?: prev
+            else -> prev
+        }
+    }
+
+    // 46 is outside air; 0F is intake air, a different quantity, and it gets labelled as one.
+    // Neither existing leaves the reading null rather than 22 C.
+    private suspend fun pollOutsideAir(prev: RawObdData): RawObdData {
+        val airSource = when (outsideAirPid) {
+            0x46 -> OutsideAirSource.AMBIENT
+            0x0f -> OutsideAirSource.INTAKE
+            else -> return prev
+        }
+        val cmd = if (airSource == OutsideAirSource.AMBIENT) "0146" else "010F"
+        val value = PidParsers.outsideAirC(pollPid(cmd), airSource) ?: return prev
+        return prev.copy(ambientC = value, ambientSource = airSource)
+    }
+
+    companion object {
+        /** Stands in for whichever of 46/0F this car answers, resolved at poll time. */
+        const val AIR_SLOT = "AIR"
+
+        /**
+         * One slow reading per cycle, in seven blocks of six.
+         *
+         * The repeated entries are the point, not padding. Coolant, load, fuel-system status,
+         * outside air and post-catalyst O2 come round every six cycles - the rate the old
+         * `% 6` tier ran at - while the trims, fuel level, runtime, timing, volts and relative
+         * throttle come round every forty-two. None of that second group feeds an integrator,
+         * and all of them move on a multi-second timescale.
+         *
+         * Two changes worth knowing about:
+         *
+         * Post-catalyst O2 (0115) used to be in the fast set, polled as often as rpm, to fill
+         * a single row on the Fuel screen. It was about a sixth of all traffic on the bus.
+         *
+         * Fuel-system status (0103) took the fast-ish slot that control module voltage (0142)
+         * had. Volts is a number somebody glances at; the status says whether the engine is in
+         * closed loop, and therefore whether the lambda and trim readings behind the AFR mean
+         * what the fuel model takes them to mean. It is worth knowing that within a second.
+         *
+         * Keep this in step with [PidCatalog.ALWAYS_POLLED_PIDS] and
+         * [PidCatalog.OPTIONAL_POLLED_PIDS], which are what the discovery screen reads to tick
+         * a PID as already driving a gauge.
+         */
+        val ROTATION_SLOTS: List<String> = listOf(
+            "0105", "0104", "0103", AIR_SLOT, "0115", "0106",
+            "0105", "0104", "0103", AIR_SLOT, "0115", "0107",
+            "0105", "0104", "0103", AIR_SLOT, "0115", "012F",
+            "0105", "0104", "0103", AIR_SLOT, "0115", "011F",
+            "0105", "0104", "0103", AIR_SLOT, "0115", "010E",
+            "0105", "0104", "0103", AIR_SLOT, "0115", "0142",
+            "0105", "0104", "0103", AIR_SLOT, "0115", "0145",
+        )
     }
 
     fun stopPolling() {
         isPolling = false
-    }
-
-    private suspend fun update(transform: suspend (RawObdData) -> RawObdData) {
-        _data.value = transform(_data.value)
     }
 
     suspend fun disconnect() {
