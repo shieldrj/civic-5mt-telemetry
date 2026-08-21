@@ -36,3 +36,73 @@ jobs:
 
       - name: Telemetry engine tests
         run: npm test
+
+  # The native port's copy of the same specification. Runs alongside the TypeScript rather
+  # than replacing it: while both implementations exist the whole point is that they agree,
+  # and a suite that only started running once the TypeScript was deleted would prove that
+  # too late to be useful.
+  native-core:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('app-native/**/*.gradle.kts', 'app-native/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      # Straight to gradlew, not app-native/build.sh - that script exists to work around
+      # OneDrive turning files into reparse points on the development machine, which is not
+      # a problem a Linux runner has.
+      - name: Physics model tests
+        working-directory: app-native
+        run: ./gradlew --no-daemon :core:test
+
+  # Compiles the Android module, and runs the few unit tests it has.
+  #
+  # The rule is still that logic belongs in :core, which is plain JVM and needs no device.
+  # The exception is code that has to touch an Android type to exist at all - the CSV export
+  # maps Room entities, so it cannot live in :core - and that code is still logic worth
+  # pinning. A wrong column order in an export produces a file that opens perfectly and is
+  # wrong from that column rightwards.
+  #
+  # The APK is not kept; this is a check, not a release.
+  native-app:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-app-${{ runner.os }}-${{ hashFiles('app-native/**/*.gradle.kts', 'app-native/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-app-${{ runner.os }}-
+
+      - name: Build debug APK
+        working-directory: app-native
+        run: ./gradlew --no-daemon :app:assembleDebug
+
+      - name: Android module unit tests
+        working-directory: app-native
+        run: ./gradlew --no-daemon :app:testDebugUnitTest

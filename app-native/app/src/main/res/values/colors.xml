@@ -1,0 +1,11 @@
+<resources>
+    <!--
+      The same tokens as the web build's index.css, so the two do not drift apart while both
+      exist. Ground is also the launch window background, which is why it is here rather than
+      only in the Compose theme - a white flash before the first frame would be the one bright
+      thing in a dark car.
+    -->
+    <color name="ground">#101215</color>
+    <color name="accent">#D8453B</color>
+    <color name="ink">#EEF0F2</color>
+</resources>

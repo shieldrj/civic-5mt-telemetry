@@ -1,0 +1,17 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- A tachometer sweep. Adaptive icons are masked, so everything stays inside the
+         middle 72dp safe zone. -->
+    <path
+        android:fillColor="#D8453B"
+        android:pathData="M54,32c-12.15,0 -22,9.85 -22,22h5c0,-9.39 7.61,-17 17,-17s17,7.61 17,17h5c0,-12.15 -9.85,-22 -22,-22z" />
+    <path
+        android:fillColor="#EEF0F2"
+        android:pathData="M54,58.5c2.49,0 4.5,-2.01 4.5,-4.5c0,-1.4 -0.64,-2.64 -1.64,-3.47L68,41l-13.6,8.1C51.87,49.5 49.5,51.5 49.5,54C49.5,56.49 51.51,58.5 54,58.5z" />
+    <path
+        android:fillColor="#EEF0F2"
+        android:pathData="M40,64h28v4h-28z" />
+</vector>

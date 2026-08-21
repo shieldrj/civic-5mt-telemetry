@@ -31,3 +31,11 @@ android/app/src/main/assets/capacitor.plugins.json
 # The rescued leveldb write-ahead log. *.log above would otherwise drop it,
 # and it is the file holding the oil-life history.
 !migration-backup/**/*.log
+
+# Native Android build: Gradle output and local machine config. Sources under app-native/
+# are tracked; nothing generated is. The build itself runs from a mirror outside OneDrive
+# (see app-native/build.sh), so these only appear if someone builds in place.
+app-native/.gradle
+app-native/build
+app-native/*/build
+app-native/local.properties
