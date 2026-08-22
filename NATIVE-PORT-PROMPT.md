@@ -7,7 +7,7 @@ session with **no prior context** on this project. Read it before touching code.
 
 ## 1. What this is
 
-`C:\Users\shiel\OneDrive\Documents\Projects\Honda App` — remote `shieldrj/civic-5mt-telemetry`,
+`C:\Users\shiel\Projects\civic-5mt-telemetry` — remote `shieldrj/civic-5mt-telemetry`,
 default branch `main`. A live OBD-II telemetry and diagnostics app for a **2013 Honda Civic LX,
 5-speed manual, 1.8L R18Z1**, talking to an **OBDLink MX+** adapter. It is used in the actual
 car, by the person asking for this work, on a Samsung SM-S948U1.
@@ -24,7 +24,12 @@ and it drives the architecture.
 
 They cost real time to find. All verified 2026-08-17.
 
-**Gradle cannot build in place.** The repo lives under OneDrive, which turns files into cloud
+**The repo has moved out of OneDrive** to `C:\Users\shiel\Projects\civic-5mt-telemetry`, which
+should make the robocopy step below unnecessary — try building in place first. Everything from
+here to the end of this subsection is kept as the reason it existed, and as the fallback if a
+copy of the repo ever ends up back under a synced folder.
+
+**Gradle could not build in place under OneDrive.** OneDrive turns files into cloud
 reparse points. Gradle refuses to snapshot a reparse point and fails with
 `Cannot snapshot <X>: not a regular file`. It is **not** limited to build output: 668 of 686
 files under `android/`, all 366 under `node_modules/@capacitor/android`, and every file in
