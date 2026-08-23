@@ -14,6 +14,7 @@ import com.shieldrj.civic5mt.core.OilProfileStore
 import com.shieldrj.civic5mt.core.TankState
 import com.shieldrj.civic5mt.core.TankStore
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 /**
  * Where the two records that have to survive a restart are kept.
@@ -39,6 +40,10 @@ private const val KEY_HUD_THEME = "hud_theme"
 private const val KEY_LAST_ADAPTER = "last_adapter_address"
 private const val KEY_TANK = "civic_2013_tank_v1"
 private const val KEY_WIDGET_SNAPSHOT = "widget_snapshot_v1"
+private const val KEY_AUTO_CONNECT = "auto_connect"
+private const val KEY_BACKUP_TREE_URI = "backup_tree_uri"
+private const val KEY_BACKUP_DOC_URI = "backup_doc_uri"
+private const val KEY_LAST_BACKUP_AT = "last_backup_at"
 
 private const val TAG = "PersistentStores"
 
@@ -169,34 +174,36 @@ class PrefsTankStore(context: Context) : TankStore {
 
     override fun load(): TankState? {
         val raw = prefs.getString(KEY_TANK, null) ?: return null
-        return runCatching {
-            val j = JSONObject(raw)
-            TankState(
-                fillTimestamp = j.optLong("fillTimestamp", 0L),
-                levelPercentAtFill = j.optDouble("levelPercentAtFill", 0.0),
-                milesSinceFill = j.optDouble("milesSinceFill", 0.0),
-                gallonsUsedSinceFill = j.optDouble("gallonsUsedSinceFill", 0.0),
-                gallonsPerPercent = j.optDouble("gallonsPerPercent", 0.132),
-                calibrated = j.optBoolean("calibrated", false),
-                smoothedLevelPercent = j.optDouble("smoothedLevelPercent", 0.0),
-                lowestLevelPercent = j.optDouble("lowestLevelPercent", 100.0),
-            )
-        }.onFailure { Log.w(TAG, "Tank record unreadable, ignoring", it) }.getOrNull()
+        return runCatching { parseTank(JSONObject(raw)) }
+            .onFailure { Log.w(TAG, "Tank record unreadable, ignoring", it) }
+            .getOrNull()
     }
 
     override fun save(state: TankState) {
-        val j = JSONObject()
-            .put("fillTimestamp", state.fillTimestamp)
-            .put("levelPercentAtFill", state.levelPercentAtFill)
-            .put("milesSinceFill", state.milesSinceFill)
-            .put("gallonsUsedSinceFill", state.gallonsUsedSinceFill)
-            .put("gallonsPerPercent", state.gallonsPerPercent)
-            .put("calibrated", state.calibrated)
-            .put("smoothedLevelPercent", state.smoothedLevelPercent)
-            .put("lowestLevelPercent", state.lowestLevelPercent)
-        prefs.edit().putString(KEY_TANK, j.toString()).apply()
+        prefs.edit().putString(KEY_TANK, tankToJson(state).toString()).apply()
     }
 }
+
+private fun tankToJson(state: TankState): JSONObject = JSONObject()
+    .put("fillTimestamp", state.fillTimestamp)
+    .put("levelPercentAtFill", state.levelPercentAtFill)
+    .put("milesSinceFill", state.milesSinceFill)
+    .put("gallonsUsedSinceFill", state.gallonsUsedSinceFill)
+    .put("gallonsPerPercent", state.gallonsPerPercent)
+    .put("calibrated", state.calibrated)
+    .put("smoothedLevelPercent", state.smoothedLevelPercent)
+    .put("lowestLevelPercent", state.lowestLevelPercent)
+
+private fun parseTank(j: JSONObject): TankState = TankState(
+    fillTimestamp = j.optLong("fillTimestamp", 0L),
+    levelPercentAtFill = j.optDouble("levelPercentAtFill", 0.0),
+    milesSinceFill = j.optDouble("milesSinceFill", 0.0),
+    gallonsUsedSinceFill = j.optDouble("gallonsUsedSinceFill", 0.0),
+    gallonsPerPercent = j.optDouble("gallonsPerPercent", 0.132),
+    calibrated = j.optBoolean("calibrated", false),
+    smoothedLevelPercent = j.optDouble("smoothedLevelPercent", 0.0),
+    lowestLevelPercent = j.optDouble("lowestLevelPercent", 100.0),
+)
 
 // ── The adapter last used ────────────────────────────────────────────────────────
 
@@ -344,4 +351,103 @@ fun importRescuedRecordsOnce(context: Context): String? {
         // the next launch rather than silently consuming the only copy of the data.
         Log.e(TAG, "Could not import the rescued records", it)
     }.getOrNull()
+}
+
+// ── Auto-connect ─────────────────────────────────────────────────────────────────
+
+/**
+ * Whether the app should start logging on its own when the adapter appears.
+ *
+ * The OBDLink powers up with the ignition, and the phone bonds to it the way it bonds to a
+ * car stereo - so the moment the car turns on is a moment the phone can hear. Acting on that
+ * is what makes cold start "just work": no app opening, no button, no remembering.
+ */
+fun loadAutoConnect(context: Context): Boolean =
+    telemetryPrefs(context).getBoolean(KEY_AUTO_CONNECT, true)
+
+fun saveAutoConnect(context: Context, enabled: Boolean) {
+    telemetryPrefs(context).edit().putBoolean(KEY_AUTO_CONNECT, enabled).apply()
+}
+
+// ── Backup location ──────────────────────────────────────────────────────────────
+
+/** The SAF folder the driver chose once, persisted so backups need no interaction. */
+fun loadBackupTreeUri(context: Context): String? =
+    telemetryPrefs(context).getString(KEY_BACKUP_TREE_URI, null)
+
+fun loadBackupDocUri(context: Context): String? =
+    telemetryPrefs(context).getString(KEY_BACKUP_DOC_URI, null)
+
+fun saveBackupUris(context: Context, treeUri: String, docUri: String) {
+    telemetryPrefs(context).edit()
+        .putString(KEY_BACKUP_TREE_URI, treeUri)
+        .putString(KEY_BACKUP_DOC_URI, docUri)
+        .apply()
+}
+
+fun markBackedUp(context: Context, at: Long) {
+    telemetryPrefs(context).edit().putLong(KEY_LAST_BACKUP_AT, at).apply()
+}
+
+fun loadLastBackupAt(context: Context): Long =
+    telemetryPrefs(context).getLong(KEY_LAST_BACKUP_AT, 0L)
+
+// ── The backup document itself ───────────────────────────────────────────────────
+
+/**
+ * Everything irreplaceable, as one JSON document.
+ *
+ * The raw preference strings are embedded verbatim rather than re-encoded field by field:
+ * the shapes on disk are already the shapes this app parses, and a backup that is a copy
+ * cannot drift from what a restore expects to read.
+ */
+fun snapshotRecords(context: Context): JSONObject {
+    val prefs = telemetryPrefs(context)
+    return JSONObject()
+        .put("exportedAt", System.currentTimeMillis())
+        .put(KEY_LIFETIME, prefs.getString(KEY_LIFETIME, null) ?: JSONObject.NULL)
+        .put(KEY_OIL, prefs.getString(KEY_OIL, null) ?: JSONObject.NULL)
+        .put(KEY_TANK, prefs.getString(KEY_TANK, null) ?: JSONObject.NULL)
+        .put(KEY_FUEL_BLEND, prefs.getString(KEY_FUEL_BLEND, null) ?: JSONObject.NULL)
+}
+
+/**
+ * Fills in whatever the backup has that this phone does not.
+ *
+ * Deliberately conservative: a record that exists locally is never overwritten by a restore,
+ * because the local copy is at least as new as any backup of it. That makes restore safe to
+ * offer without a confirmation dialog - on a fresh install (the case that matters: a lost or
+ * replaced phone) every record is missing and everything comes back; on a live phone nothing
+ * is missing and nothing changes.
+ */
+fun restoreRecords(context: Context, backup: JSONObject): List<String> {
+    val prefs = telemetryPrefs(context)
+    val messages = mutableListOf<String>()
+
+    if (prefs.getString(KEY_LIFETIME, null) == null && !backup.isNull(KEY_LIFETIME)) {
+        runCatching { parseLifetime(JSONObject(backup.getString(KEY_LIFETIME))) }.getOrNull()?.let {
+            PrefsLifetimeStore(context).save(it)
+            messages += "lifetime ${"%.1f".format(it.lifetimeMpg)} mpg over ${"%.1f".format(it.totalMiles)} mi"
+        }
+    }
+
+    if (prefs.getString(KEY_OIL, null) == null && !backup.isNull(KEY_OIL)) {
+        runCatching { parseOilProfile(JSONObject(backup.getString(KEY_OIL))) }.getOrNull()?.let {
+            PrefsOilProfileStore(context).save(it)
+            messages += "oil life ${it.oilLifePercent.roundToInt()}%"
+        }
+    }
+
+    if (prefs.getString(KEY_TANK, null) == null && !backup.isNull(KEY_TANK)) {
+        runCatching { parseTank(JSONObject(backup.getString(KEY_TANK))) }.getOrNull()?.let {
+            PrefsTankStore(context).save(it)
+            messages += "tank state"
+        }
+    }
+
+    backup.optString(KEY_FUEL_BLEND).takeIf { it.isNotBlank() }?.let { blend ->
+        FuelBlendId.entries.firstOrNull { it.name == blend }?.let { saveFuelBlend(context, it) }
+    }
+
+    return messages
 }

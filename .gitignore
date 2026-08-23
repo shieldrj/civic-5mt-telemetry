@@ -22,6 +22,9 @@ build/
 buildOutputCleanup/
 local.properties
 
+# Kotlin compiler session data (error logs and friends)
+.kotlin/
+
 # Android Studio / IntelliJ IDEA
 .idea/
 *.iml

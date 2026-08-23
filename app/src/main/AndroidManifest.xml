@@ -67,6 +67,20 @@
             android:foregroundServiceType="connectedDevice" />
 
         <!--
+          Cold start: the adapter powers up with the ignition and the phone bonds to it, so
+          the ACL_CONNECTED broadcast is the moment the drive begins. The address check in
+          the receiver keeps this from firing for every headphone and watch. ACL_CONNECTED is
+          a protected broadcast - only the system can send it - which is why exported is true.
+        -->
+        <receiver
+            android:name=".service.AutoStartReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.bluetooth.device.action.ACL_CONNECTED" />
+            </intent-filter>
+        </receiver>
+
+        <!--
           The tank widget. updatePeriodMillis is zero because the launcher never has anything
           to refresh on its own: the service pushes figures while driving, and the provider
           redraws from the saved snapshot otherwise.

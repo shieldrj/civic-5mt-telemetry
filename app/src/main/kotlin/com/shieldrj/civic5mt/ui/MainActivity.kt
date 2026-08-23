@@ -11,7 +11,14 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.compose.setContent
+import android.text.format.DateUtils
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import com.shieldrj.civic5mt.data.BackupManager
+import com.shieldrj.civic5mt.service.loadAutoConnect
+import com.shieldrj.civic5mt.service.loadBackupTreeUri
+import com.shieldrj.civic5mt.service.loadLastBackupAt
+import com.shieldrj.civic5mt.service.saveAutoConnect
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.size
@@ -20,6 +27,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.ui.graphics.Color
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Backup
+import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Build
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Layers
@@ -187,6 +196,20 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
         adapters = BluetoothClassicTransport.pairedAdapters(context)
     }
 
+    // The backup folder is picked once through the system picker; the grant is persisted so
+    // every later backup is silent.
+    val backupPicker = androidx.activity.compose.rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val ok = runCatching { BackupManager.onFolderPicked(context, uri) }.getOrDefault(false)
+        Toast.makeText(
+            context,
+            if (ok) "Backup saved" else "Could not write a backup there",
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
     val closeDetail = { detail = null }
     BackHandler(enabled = detail != null) {
         detail = null
@@ -352,6 +375,29 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
                             "Test bench",
                             Icons.Outlined.Science,
                         ) { TelemetryService.simulate(context) },
+                        Feature(
+                            "Backup",
+                            backupSubtitle(context),
+                            Icons.Outlined.Backup,
+                        ) {
+                            if (loadBackupTreeUri(context) == null) {
+                                backupPicker.launch(null)
+                            } else {
+                                val result = BackupManager.restore(context)
+                                Toast.makeText(
+                                    context,
+                                    result ?: "Nothing to restore - every record is already here",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                            }
+                        },
+                        Feature(
+                            "Auto-connect",
+                            if (loadAutoConnect(context)) "Starts with the Civic" else "Off",
+                            Icons.Outlined.Bluetooth,
+                        ) {
+                            saveAutoConnect(context, !loadAutoConnect(context))
+                        },
                     )
                 )
             }
@@ -510,6 +556,16 @@ private fun ReadingRow(label: String, value: String?) {
             color = if (value == null) CivicColors.Ink4 else CivicColors.Ink,
             fontSize = 14.sp,
         )
+    }
+}
+
+/** Where the Backup card stands today: unconfigured, configured, or last known save time. */
+private fun backupSubtitle(context: android.content.Context): String {
+    val lastBackupAt = loadLastBackupAt(context)
+    return when {
+        loadBackupTreeUri(context) == null -> "Choose a folder"
+        lastBackupAt == 0L -> "Set up"
+        else -> "Saved " + DateUtils.getRelativeTimeSpanString(lastBackupAt).toString()
     }
 }
 
