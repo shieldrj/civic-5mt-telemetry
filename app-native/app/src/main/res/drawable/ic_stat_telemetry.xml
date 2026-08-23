@@ -1,0 +1,20 @@
+<!--
+  Notification icon. Android renders these as a silhouette, so it is a single white path on
+  transparent - anything with colour in it would come out as a white blob.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFF">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,3C7.03,3 3,7.03 3,12h2c0,-3.87 3.13,-7 7,-7s7,3.13 7,7h2c0,-4.97 -4.03,-9 -9,-9z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M12,13.5c0.83,0 1.5,-0.67 1.5,-1.5c0,-0.55 -0.3,-1.03 -0.74,-1.29L16.5,7.5l-4.9,3.02C10.68,10.62 10,11.23 10,12C10,12.83 10.67,13.5 12,13.5z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M6,15h12v2H6z" />
+</vector>

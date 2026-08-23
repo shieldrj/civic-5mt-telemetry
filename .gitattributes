@@ -3,3 +3,11 @@
 # inside the leveldb files and the "byte-verified against the device" claim in
 # the commit that added them stops being true on the next checkout.
 migration-backup/** -text -diff
+
+# Shell scripts must reach a Linux CI runner with LF endings and their executable bit.
+# `./gradlew` with CRLF fails as "bad interpreter: /bin/sh^M", and without +x it fails as
+# "Permission denied" - both only on the runner, never on the Windows machine they were
+# written on.
+*.sh        text eol=lf
+gradlew     text eol=lf
+*.bat       text eol=crlf
