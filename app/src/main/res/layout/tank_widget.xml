@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The home-screen widget, laid out like the HUD card: label, hero figure, one detail line.
+  RemoteViews only accepts the frame layouts and the basic widgets, which is all this needs.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/tank_widget_background"
+    android:paddingStart="14dp"
+    android:paddingEnd="14dp"
+    android:paddingTop="10dp"
+    android:paddingBottom="10dp"
+    android:gravity="center_vertical">
+
+    <TextView
+        android:id="@+id/widget_label"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/widget_tank_label"
+        android:textColor="#9AA1A9"
+        android:textSize="10sp"
+        android:letterSpacing="0.12" />
+
+    <TextView
+        android:id="@+id/widget_tank_mpg"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="—"
+        android:textColor="#EEF0F2"
+        android:textSize="26sp"
+        android:fontFeatureSettings="tnum" />
+
+    <TextView
+        android:id="@+id/widget_detail"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="@string/widget_waiting"
+        android:textColor="#9AA1A9"
+        android:textSize="11sp" />
+
+</LinearLayout>

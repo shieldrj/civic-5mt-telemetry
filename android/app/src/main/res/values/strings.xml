@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">Civic 5MT</string>
-    <string name="title_activity_main">Civic 5MT</string>
-    <string name="package_name">com.shieldrj.civic5mt</string>
-    <string name="custom_url_scheme">com.shieldrj.civic5mt</string>
-</resources>

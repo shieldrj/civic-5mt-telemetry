@@ -1,41 +1,38 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# Built application files
+*.apk
+*.aar
+*.ap_
+*.aab
 
-node_modules
-dist
-dist-ssr
-*.local
+# Files for the ART/Dalvik VM
+*.dex
 
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
+# Java class files
+*.class
+
+# Generated files
+bin/
+gen/
+out/
+build/
+*/build/
+
+# Gradle files
+.gradle/
+buildOutputCleanup/
+local.properties
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+.navigation/
+captures/
+.externalNativeBuild/
+.cxx/
+
+# OS / Editor files
 .DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
+Thumbs.db
 *.sw?
+*~
 
-# Capacitor: regenerated from dist/ by `npx cap sync`, so not source
-android/app/src/main/assets/public
-android/app/src/main/assets/capacitor.config.json
-android/app/src/main/assets/capacitor.plugins.json
-
-# The rescued leveldb write-ahead log. *.log above would otherwise drop it,
-# and it is the file holding the oil-life history.
-!migration-backup/**/*.log
-
-# Native Android build: Gradle output and local machine config. Sources under app-native/
-# are tracked; nothing generated is. The build itself runs from a mirror outside OneDrive
-# (see app-native/build.sh), so these only appear if someone builds in place.
-app-native/.gradle
-app-native/build
-app-native/*/build
-app-native/local.properties

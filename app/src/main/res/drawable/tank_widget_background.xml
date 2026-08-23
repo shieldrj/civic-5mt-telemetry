@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The widget's ground: the app's own dark surface with the HUD card's corner radius. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="#F0101215" />
+    <corners android:radius="16dp" />
+</shape>

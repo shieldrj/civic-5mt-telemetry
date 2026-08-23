@@ -1,34 +1,77 @@
-# 2013 Honda Civic 5MT Telemetry & Performance Dashboard
+# 2013 Honda Civic 5MT Telemetry & Diagnostics (Android)
 
-An automotive-grade Progressive Web App (PWA) specifically built for the **2013 Honda Civic LX (5-Speed Manual, 1.8L SOHC i-VTEC R18Z1)** connecting to the **OBDLink MX+** OBD-II adapter via Bluetooth LE / Web Bluetooth.
+A high-performance, native Android application built in **Kotlin** and **Jetpack Compose** specifically designed for the **2013 Honda Civic LX (5-Speed Manual, 1.8L SOHC i-VTEC R18Z1)** connecting to the **OBDLink MX+** OBD-II adapter via Bluetooth Classic (RFCOMM / SPP).
 
-## Features
+---
+
+## Key Features
+
+- **🏎️ Drive Dashboard & Shift Light System**:
+  - Hero **Tank MPG** radial gauge with real-time range estimation and miles-since-fill tracking.
+  - Progressive F1 & Eco shift cues with clutch-slip detection and dynamic gear calculation (1st–5th, Neutral, Coasting).
+  - High-precision engine metrics (Coolant temperature, Air:Fuel ratio, Wide-range Lambda from PID 34, Battery voltage, Intake air).
+  - Floating **Heads-Up Display (HUD) Overlay** option over navigation apps (e.g. Google Maps).
+
+- **🔋 Foreground Telemetry Service**:
+  - Uninterrupted telemetry logging with the screen off or app backgrounded via Android Foreground Service.
+  - Automatic reconnection policy and link loss recovery with zero trip data loss.
+
+- **🗄️ Trip History & Analytics**:
+  - Full trip database powered by **Room DB** with live CSV export capabilities.
+  - Permanent lifetime records and automatic localStorage data migration from previous builds.
+
+- **🧪 Physics-Grade Fuel & Oil Engines**:
+  - Multi-factor oil degradation algorithm tracking cumulative crank revolutions ($\int \text{RPM} \, dt$), cold starts (<160°F), short trips, and thermal stress.
+  - Comprehensive fuel models supporting custom ethanol blends (E10/E15/E85), Deceleration Fuel Cut-Off (DFCO), and idle fuel waste dollar counters.
+
 - **🔍 Full OBD-II Diagnostic Scanner (DTC)**:
-  - **Mode 07 (Pending Codes)**: Catch early sensor anomalies and glitches *before* they turn on the Check Engine Light.
-  - **Mode 03 (Confirmed Codes)**: Active CEL fault diagnostics.
-  - **Mode 0A (Permanent/Historic Codes)**: Non-volatile ECU historical fault memory.
-  - **Freeze Frame Data**: View snapshot of RPM, Speed, Coolant, Load, and Fuel Trims at the moment a fault was logged.
-  - **Mode 04**: One-touch code clearing & MIL reset with safety verification.
-- **Physics-Grade MPG Engine**: MAF + Wideband Lambda + Fuel Trims with Deceleration Fuel Cut-Off (DFCO) detection and idle fuel waste dollar counter.
-- **Multi-Factor Oil Life Algorithm**: Tracks mechanical revolutions ($\int \text{RPM} \, dt$), cold starts (<160°F), short-trip dilution, and high-RPM thermal stress with persistent storage.
-- **5-Speed Manual Dynamics**: Real-time gear detection (1st–5th, Neutral, Clutch), clutch slip warning, and Formula-1 / Eco progressive shift lights.
-- **Virtual ECU Driving Bench**: Built-in interactive simulator for testing all gauges, shift lights, and diagnostic tools anywhere.
+  - **Mode 07** (Pending Codes), **Mode 03** (Confirmed Codes), **Mode 0A** (Permanent Codes).
+  - Freeze Frame snapshot capture and safety-verified **Mode 04** clearing with readiness monitor status.
 
-## Quick Start
+- **🕹️ Built-in ECU Simulator**:
+  - Virtual driving bench reproducing real 2013 Civic PID streams for offline development and testing.
 
-### 1. Run the App
+---
+
+## Architecture
+
+The project is structured into two focused modules:
+
+```
+├── core/                # Pure Kotlin JVM module (Zero Android dependencies)
+│   ├── src/main/kotlin  # Physics models, ELM327 protocol client, PID catalog, simulator
+│   └── src/test/kotlin  # 97+ assertion test suite verified against real car byte captures
+└── app/                 # Native Android Application (minSdk 29, compileSdk 36)
+    ├── src/main/kotlin  # Jetpack Compose UI, Room Database, Telemetry Foreground Service, Bluetooth SPP
+    └── src/main/res     # Vectors, themes, and rescued baseline datasets
+```
+
+---
+
+## Building and Testing
+
+### Prerequisites
+- JDK 21 (Temurin or Adoptium recommended)
+- Android SDK (`minSdk 29`, `compileSdk 36`)
+
+### Run Tests
 ```bash
-npm run dev
+# Run physics models and core telemetry unit tests
+./gradlew :core:test
+
+# Run Android module unit tests
+./gradlew :app:testDebugUnitTest
 ```
 
-### 2. Open on Android Phone
-Ensure your phone is connected to the same Wi-Fi network and open Chrome:
-```
-http://<your-local-ip>:5173/
+### Build Debug APK
+```bash
+./gradlew :app:assembleDebug
 ```
 
-### 3. Install to Android Home Screen
-In Chrome on Android, tap the 3-dot menu → **"Add to Home screen"** or **"Install app"** to run full-screen without browser bars.
+The APK will be generated at `app/build/outputs/apk/debug/app-debug.apk`.
 
-### 4. Connect to OBDLink MX+
-Plug the OBDLink MX+ into your OBD-II port, press the physical **Pair** button on the front of the adapter, turn on the ignition, tap **CONNECT** in the top right of the dashboard, and select your OBDLink MX+ from the Bluetooth scan prompt.
+### Install to Device
+```bash
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
