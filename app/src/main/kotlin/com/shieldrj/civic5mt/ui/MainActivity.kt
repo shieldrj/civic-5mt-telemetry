@@ -516,7 +516,7 @@ private fun LiveReadings(
     val rows = listOf(
         "Vehicle health" to if (live) metrics.healthStatus.summary else null,
         "Coolant" to if (live && metrics.coolantTempF > 0) "${metrics.coolantTempF} °F" else null,
-        "Battery / charging" to if (live && metrics.batteryVoltage > 0) "%.2f V".format(metrics.batteryVoltage) else null,
+        "Battery / charging" to metrics.batteryVoltage?.takeIf { live }?.let { "%.2f V".format(it) },
         "Fuel level" to metrics.fuelLevelPercent?.let { "%.0f %%".format(it) },
         "Range" to metrics.fuelRangeMiles?.let { "$it mi to empty" },
         "Tank economy" to metrics.tankMpg?.let { "%.1f mpg".format(it) },

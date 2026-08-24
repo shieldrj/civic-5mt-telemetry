@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.shieldrj.civic5mt.core.ChargingRules
 import com.shieldrj.civic5mt.core.CivicSpecs
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.HealthLevel
@@ -135,16 +136,26 @@ fun DriveScreen(
                 color = coolantColor,
             )
 
+            // Colour follows the same rules as the banner, and for the same reason: on this
+            // car the ECM parks the alternator in the twelves at cruise on purpose, so
+            // painting every reading under 12.8 amber painted an ordinary drive amber. Only
+            // a reading under a rested battery is worth a colour. See ChargingRules.
+            val volts = metrics.batteryVoltage
             val voltageColor = when {
-                metrics.rpm >= 400 && metrics.batteryVoltage < 11.8 && metrics.batteryVoltage > 5.0 -> CivicColors.Accent
-                metrics.rpm >= 400 && metrics.batteryVoltage < 12.8 && metrics.batteryVoltage > 5.0 -> CivicColors.Warn
-                metrics.batteryVoltage in 13.2..14.8 -> CivicColors.Good
+                volts == null -> CivicColors.Ink
+                metrics.rpm >= CivicSpecs.ENGINE_RUNNING_RPM &&
+                    volts < ChargingRules.CRITICAL_VOLTS &&
+                    volts > ChargingRules.MIN_PLAUSIBLE_VOLTS -> CivicColors.Accent
+                metrics.rpm >= CivicSpecs.ENGINE_RUNNING_RPM &&
+                    volts < ChargingRules.DRAIN_VOLTS &&
+                    volts > ChargingRules.MIN_PLAUSIBLE_VOLTS -> CivicColors.Warn
+                volts >= ChargingRules.HIGH_OUTPUT_VOLTS -> CivicColors.Good
                 else -> CivicColors.Ink
             }
             Stat(
                 label = "Charging",
-                value = if (metrics.batteryVoltage > 5.0) "%.2f".format(metrics.batteryVoltage) else "—",
-                unit = if (metrics.batteryVoltage > 5.0) "V" else "",
+                value = volts?.let { "%.2f".format(it) } ?: "—",
+                unit = if (volts != null) "V" else "",
                 color = voltageColor,
             )
         }

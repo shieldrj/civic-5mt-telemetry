@@ -22,7 +22,8 @@ data class LiveMetrics(
     val timingAdvanceDeg: Double = 0.0,
     /** PID 24 or 34. Null means the car has neither. */
     val equivalenceRatio: Double? = null,
-    val batteryVoltage: Double = 0.0,
+    /** Control module voltage. Null until the car has answered PID 42. */
+    val batteryVoltage: Double? = null,
     /** Null when the car does not report a tank level. */
     val fuelLevelPercent: Double? = null,
     /** PID 46, else 0F. Null means neither exists. */

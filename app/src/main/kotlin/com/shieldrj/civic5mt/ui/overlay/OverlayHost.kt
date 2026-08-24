@@ -55,6 +55,15 @@ class OverlayHost(
     override val savedStateRegistry: SavedStateRegistry get() = savedStateController.savedStateRegistry
 
     private var view: ComposeView? = null
+
+    /**
+     * Whether the saved-state registry has been restored.
+     *
+     * Once, for the life of the host. [SavedStateRegistryController.performRestore] refuses a
+     * second call, and it refuses it by throwing.
+     */
+    private var restored = false
+
     private val windowManager: WindowManager =
         context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
 
@@ -63,12 +72,23 @@ class OverlayHost(
     @SuppressLint("ClickableViewAccessibility")
     fun show() {
         if (view != null) return
+        if (lifecycleRegistry.currentState == Lifecycle.State.DESTROYED) {
+            Log.w(TAG, "Host has been destroyed; refusing to show")
+            return
+        }
         if (!canDrawOverlays(context)) {
             Log.w(TAG, "Overlay permission not granted; refusing to show")
             return
         }
 
-        savedStateController.performRestore(null)
+        // Restore once ever, not once per show. performRestore requires the lifecycle to be
+        // INITIALIZED and the registry to be un-restored, and throws on either count - so
+        // calling it on the second show is what used to take the HUD out for the rest of the
+        // drive.
+        if (!restored) {
+            savedStateController.performRestore(null)
+            restored = true
+        }
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
 
         val composeView = ComposeView(context).apply {
@@ -118,12 +138,52 @@ class OverlayHost(
         lifecycleRegistry.currentState = Lifecycle.State.RESUMED
     }
 
+    /**
+     * Takes the window down, leaving the host able to put it back up.
+     *
+     * Stopped, not destroyed - and that distinction is the whole of a bug worth describing,
+     * because it presented as the HUD flickering rather than as anything crashing.
+     *
+     * Hiding used to move the lifecycle to DESTROYED and clear the ViewModel store, which
+     * reads like tidying up and is really a one-way door. A destroyed [LifecycleRegistry]
+     * cannot host another composition and a restored [SavedStateRegistry] refuses a second
+     * restore, so the next [show] threw on its first line. That throw landed in the collector
+     * watching the HUD's three conditions, killing it - so the card did not merely fail to
+     * come back, it stopped following the connection at all for the life of the service.
+     *
+     * Which meant the HUD worked exactly once per drive. Anything that hides it - ten minutes
+     * parked, a Bluetooth drop in a tunnel, toggling the switch in the app - retired it until
+     * the next ignition cycle built a new service and a new host.
+     *
+     * So this is a stop: the window goes, the composition is disposed with it when the view
+     * detaches, anything collecting against this lifecycle stops, and the host stays usable.
+     * The one-way part now lives in [destroy], which the service calls when it is going away.
+     */
     fun hide() {
         val current = view ?: return
-        lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
+        if (lifecycleRegistry.currentState.isAtLeast(Lifecycle.State.CREATED)) {
+            lifecycleRegistry.currentState = Lifecycle.State.CREATED
+        }
         runCatching { windowManager.removeView(current) }
             .onFailure { Log.w(TAG, "Overlay window was already gone", it) }
         view = null
+    }
+
+    /**
+     * Retires the host for good.
+     *
+     * The half of the old [hide] that was genuinely a teardown: the ViewModel store is cleared
+     * and the lifecycle is destroyed, so anything still observing lets go. Only the service's
+     * own shutdown calls this, because after it the host cannot show again.
+     *
+     * The INITIALIZED guard is not defensive noise - a registry that never reached CREATED
+     * throws on the way down to DESTROYED, so a host built and never shown would fail here.
+     */
+    fun destroy() {
+        hide()
+        if (lifecycleRegistry.currentState != Lifecycle.State.INITIALIZED) {
+            lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
+        }
         store.clear()
     }
 

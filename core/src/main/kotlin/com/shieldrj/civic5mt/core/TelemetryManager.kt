@@ -26,6 +26,7 @@ class TelemetryManager(
     val oilLife: OilLifeEngine = OilLifeEngine(clock = clock),
     val fuelModel: FuelModelEngine = FuelModelEngine(),
     val tank: TankTracker = TankTracker(clock = clock),
+    val charging: ChargingMonitor = ChargingMonitor(),
     private val gearCalculator: GearCalculatorEngine = GearCalculatorEngine(clock),
 ) {
     var shiftMode: ShiftMode = ShiftMode.ECO
@@ -149,10 +150,21 @@ class TelemetryManager(
             oilLife.getProfile()
         }
 
+        // The charging verdict is watched across the drive rather than read off this tick -
+        // see ChargingMonitor for why a single sample cannot tell a backed-off alternator
+        // from a broken one on this car.
+        //
+        // The permanent record's step, not the display one, and for the reason the record
+        // uses it: two of the three verdicts are durations, and a duration is only evidence
+        // if it was observed. A locked phone that stalls the loop for five minutes, or an
+        // adapter that stopped answering while every field carries its last value forward,
+        // would otherwise hand a single stale 12.1 the twenty seconds it needs to become a
+        // warning. A gap nobody watched is not twenty seconds of anything.
+        charging.observe(raw.batteryVoltage, raw.rpm, integrationDtSec)
+
         val health = evaluateHealthStatus(
             rpm = raw.rpm,
             coolantF = coolantF,
-            batteryVoltage = raw.batteryVoltage,
             isClutchSlipping = gear.isClutchSlipping,
             stft = raw.stft,
             ltft = raw.ltft,
@@ -171,7 +183,7 @@ class TelemetryManager(
             longTermFuelTrim = raw.ltft,
             timingAdvanceDeg = raw.timingAdvance,
             equivalenceRatio = raw.lambda,
-            batteryVoltage = roundTo(raw.batteryVoltage, 2),
+            batteryVoltage = raw.batteryVoltage?.let { roundTo(it, 2) },
             fuelLevelPercent = raw.fuelLevelPercent?.let { roundTo(it, 1) },
             outsideAirTempC = raw.ambientC,
             outsideAirTempF = outsideAirF,
@@ -214,14 +226,23 @@ class TelemetryManager(
         return TelemetrySnapshot(metrics = metrics, trip = trip, oil = oilProfile, lifetime = lifetime)
     }
 
+    /**
+     * The one line at the top of the Drive screen.
+     *
+     * Reads the charging verdict [charging] has already reached rather than judging the
+     * voltage here. The rule this replaced was `< 12.8V while running`, which on a car with
+     * Honda's Electrical Power Management describes an ordinary cruise - the ECM backs the
+     * alternator off into the twelves on purpose. See [ChargingRules].
+     */
     private fun evaluateHealthStatus(
         rpm: Double,
         coolantF: Int,
-        batteryVoltage: Double,
         isClutchSlipping: Boolean,
         stft: Double,
         ltft: Double,
     ): VehicleHealthStatus {
+        val chargingStatus = chargingHealthStatus(charging.verdict, charging.volts, charging.peakVolts)
+
         if (coolantF >= 225) {
             return VehicleHealthStatus(
                 level = HealthLevel.CRITICAL,
@@ -229,6 +250,10 @@ class TelemetryManager(
                 detail = "Coolant temperature critical. Pull over safely.",
             )
         }
+        // Above the coolant advisory, not below it as the old voltage rules were. A charging
+        // system that has actually failed outranks a coolant reading ten degrees warm, and
+        // burying it under one meant the more urgent banner was the one that never showed.
+        if (chargingStatus?.level == HealthLevel.CRITICAL) return chargingStatus
         if (coolantF >= 215) {
             return VehicleHealthStatus(
                 level = HealthLevel.ADVISORY,
@@ -236,20 +261,7 @@ class TelemetryManager(
                 detail = "Coolant temperature elevated above normal operating range (175–205°F).",
             )
         }
-        if (rpm >= CivicSpecs.ENGINE_RUNNING_RPM && batteryVoltage < 11.8 && batteryVoltage > 5.0) {
-            return VehicleHealthStatus(
-                level = HealthLevel.CRITICAL,
-                summary = "BATTERY VOLTAGE CRITICAL · %.2fV".format(batteryVoltage),
-                detail = "Severe electrical voltage drop under 11.8V.",
-            )
-        }
-        if (rpm >= CivicSpecs.ENGINE_RUNNING_RPM && batteryVoltage < 12.8 && batteryVoltage > 5.0) {
-            return VehicleHealthStatus(
-                level = HealthLevel.ADVISORY,
-                summary = "CHARGING SYSTEM LOW · %.2fV".format(batteryVoltage),
-                detail = "Alternator output below 12.8V while engine is running.",
-            )
-        }
+        if (chargingStatus != null) return chargingStatus
         if (isClutchSlipping) {
             return VehicleHealthStatus(
                 level = HealthLevel.ADVISORY,
@@ -394,6 +406,9 @@ class TelemetryManager(
 
     fun resetTrip() {
         trip = TripAnalytics(tripStartTime = clock.nowMillis())
+        // The charging verdict is a per-drive judgement - "never came up to a charge" means
+        // never on this drive - so the peak it rests on has to start over with the trip.
+        charging.resetForDrive()
     }
 
     /**

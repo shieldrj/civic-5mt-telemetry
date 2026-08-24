@@ -240,17 +240,25 @@ class TelemetryService : Service() {
             }.collect { shouldShow ->
                 // WindowManager is main-thread only, and the service scope is Default.
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    if (shouldShow) {
-                        if (overlay == null) overlay = OverlayHost(
-                            this@TelemetryService,
-                            { HudContent() },
-                            onTap = { openFuelScreen() },
-                            onLongPress = { cycleHudThemeWithFeedback() },
-                        )
-                        overlay?.show()
-                    } else {
-                        overlay?.hide()
-                    }
+                    // runCatching because of what the alternative costs. This collector is
+                    // the only thing keeping the HUD in step with the connection, and an
+                    // exception thrown through it does not surface anywhere - it cancels this
+                    // coroutine and the card silently stops following the drive until the
+                    // next ignition cycle. A window that failed to go up is worth a log line
+                    // and one more attempt on the next emission, not the whole observer.
+                    runCatching {
+                        if (shouldShow) {
+                            if (overlay == null) overlay = OverlayHost(
+                                this@TelemetryService,
+                                { HudContent() },
+                                onTap = { openFuelScreen() },
+                                onLongPress = { cycleHudThemeWithFeedback() },
+                            )
+                            overlay?.show()
+                        } else {
+                            overlay?.hide()
+                        }
+                    }.onFailure { Log.e(TAG, "Overlay show/hide failed", it) }
                 }
             }
         }
@@ -300,7 +308,8 @@ class TelemetryService : Service() {
             }
             var lowSince: Long? = null
             TelemetryState.metrics.collect { m ->
-                val voltage = m.batteryVoltage
+                // Null until the car has answered PID 42. No reading is not a low reading.
+                val voltage = m.batteryVoltage ?: return@collect
                 val now = System.currentTimeMillis()
                 if (voltage > MIN_VALID_VOLTAGE && voltage < LOW_VOLTAGE) {
                     if (lowSince == null) {
@@ -782,7 +791,9 @@ class TelemetryService : Service() {
     }
 
     override fun onDestroy() {
-        overlay?.hide()
+        // destroy, not hide: this is the one place the host is genuinely finished with, and
+        // the lifecycle it owns has to be closed so anything observing through it lets go.
+        overlay?.destroy()
         overlay = null
         serviceJob.cancel()
         super.onDestroy()

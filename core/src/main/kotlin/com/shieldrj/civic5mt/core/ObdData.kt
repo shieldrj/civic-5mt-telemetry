@@ -29,7 +29,16 @@ data class RawObdData(
     val timingAdvance: Double = 10.0,
     /** Wide-range lambda from PID 24 or 34, or null when the car has neither. */
     val lambda: Double? = null,
-    val batteryVoltage: Double = 14.2,
+    /**
+     * PID 42, control module voltage. Null until the car has answered for it.
+     *
+     * It was 14.2, and that is the seeded-default bug the doc above describes, wearing the
+     * most reassuring number on the list: a car that never answers 0142 reported a perfectly
+     * healthy charging system forever. It also quietly disarmed the one charging check worth
+     * having - [ChargingMonitor] concludes the alternator never charged from the peak it saw,
+     * and a seed of 14.2 is a peak it never has to earn.
+     */
+    val batteryVoltage: Double? = null,
     /**
      * PID 2F, tank level. Null when the car does not answer it.
      *

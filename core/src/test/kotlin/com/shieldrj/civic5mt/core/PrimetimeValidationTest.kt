@@ -284,8 +284,12 @@ class PrimetimeValidationTest {
         private val defaults = RawObdData()
 
         @Test
-        fun `Battery voltage default in plausible range`() {
-            assertTrue(defaults.batteryVoltage > 9 && defaults.batteryVoltage < 16, "got ${defaults.batteryVoltage}V")
+        fun `An unmeasured charging voltage is absent, not a healthy 14 volts`() {
+            // It used to default to 14.2, which is the same bug as the tank level below
+            // wearing the most reassuring number available: a car that never answers PID 42
+            // reported a charging system in perfect health, forever, and handed the
+            // never-charged check in ChargingMonitor a peak it had not earned.
+            assertNull(defaults.batteryVoltage)
         }
 
         @Test
