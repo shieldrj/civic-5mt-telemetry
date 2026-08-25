@@ -39,7 +39,7 @@ android {
             // JSON instead, which is the path it was always going to take.
             applicationIdSuffix = ".dev"
             versionNameSuffix = "-dev"
-            resValue("string", "app_name", "Civic 5MT dev")
+            resValue("string", "app_name", "Honda OBD dev")
         }
         release {
             isMinifyEnabled = true
