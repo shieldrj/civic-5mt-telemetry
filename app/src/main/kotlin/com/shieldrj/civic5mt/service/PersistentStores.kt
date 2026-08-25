@@ -66,18 +66,25 @@ class PrefsLifetimeStore(context: Context) : LifetimeStore {
     }
 
     override fun save(stats: LifetimeStats) {
-        val json = JSONObject()
-            .put("totalMiles", stats.totalMiles)
-            .put("totalFuelGallons", stats.totalFuelGallons)
-            // Stored for compatibility with the WebView shape. It is recomputed on load -
-            // miles and gallons are the measurements, the ratio is a view of them.
-            .put("lifetimeMpg", stats.lifetimeMpg)
-            .put("firstTrackedTimestamp", stats.firstTrackedTimestamp)
-        prefs.edit().putString(KEY_LIFETIME, json.toString()).apply()
+        prefs.edit().putString(KEY_LIFETIME, lifetimeToJson(stats).toString()).apply()
     }
 }
 
-private fun parseLifetime(json: JSONObject): LifetimeStats = LifetimeStats(
+/**
+ * Named, and beside its parser, for the same reason the oil and tank encoders are: the pair
+ * has to agree about every key, and a round-trip test can only hold them to that if it can
+ * reach both. This one used to be written inline in [PrefsLifetimeStore.save], which put the
+ * only encoder of the one irreplaceable record where no test could see it.
+ */
+internal fun lifetimeToJson(stats: LifetimeStats): JSONObject = JSONObject()
+    .put("totalMiles", stats.totalMiles)
+    .put("totalFuelGallons", stats.totalFuelGallons)
+    // Stored for compatibility with the WebView shape. It is recomputed on load - miles and
+    // gallons are the measurements, the ratio is a view of them.
+    .put("lifetimeMpg", stats.lifetimeMpg)
+    .put("firstTrackedTimestamp", stats.firstTrackedTimestamp)
+
+internal fun parseLifetime(json: JSONObject): LifetimeStats = LifetimeStats(
     totalMiles = json.optDouble("totalMiles", 0.0).coerceAtLeast(0.0),
     totalFuelGallons = json.optDouble("totalFuelGallons", 0.0).coerceAtLeast(0.0),
     firstTrackedTimestamp = json.optLong("firstTrackedTimestamp", 0L),
@@ -100,7 +107,7 @@ class PrefsOilProfileStore(context: Context) : OilProfileStore {
     }
 }
 
-private fun oilProfileToJson(p: OilLifeProfile): JSONObject = JSONObject()
+internal fun oilProfileToJson(p: OilLifeProfile): JSONObject = JSONObject()
     .put("lastResetTimestamp", p.lastResetTimestamp)
     .put("lastResetOdometer", p.lastResetOdometer)
     .put("currentOdometer", p.currentOdometer)
@@ -122,7 +129,7 @@ private fun oilProfileToJson(p: OilLifeProfile): JSONObject = JSONObject()
             .put("thermalShearPenalty", p.degradationBreakdown.thermalShearPenalty),
     )
 
-private fun parseOilProfile(json: JSONObject): OilLifeProfile {
+internal fun parseOilProfile(json: JSONObject): OilLifeProfile {
     val breakdown = json.optJSONObject("degradationBreakdown") ?: JSONObject()
     return OilLifeProfile(
         lastResetTimestamp = json.optLong("lastResetTimestamp", 0L),
@@ -187,7 +194,7 @@ class PrefsTankStore(context: Context) : TankStore {
     }
 }
 
-private fun tankToJson(state: TankState): JSONObject = JSONObject()
+internal fun tankToJson(state: TankState): JSONObject = JSONObject()
     .put("fillTimestamp", state.fillTimestamp)
     .put("levelPercentAtFill", state.levelPercentAtFill)
     .put("milesSinceFill", state.milesSinceFill)
@@ -198,7 +205,7 @@ private fun tankToJson(state: TankState): JSONObject = JSONObject()
     .put("lowestLevelPercent", state.lowestLevelPercent)
     .put("fullMarkPercent", state.fullMarkPercent)
 
-private fun parseTank(j: JSONObject): TankState = TankState(
+internal fun parseTank(j: JSONObject): TankState = TankState(
     fillTimestamp = j.optLong("fillTimestamp", 0L),
     levelPercentAtFill = j.optDouble("levelPercentAtFill", 0.0),
     milesSinceFill = j.optDouble("milesSinceFill", 0.0),

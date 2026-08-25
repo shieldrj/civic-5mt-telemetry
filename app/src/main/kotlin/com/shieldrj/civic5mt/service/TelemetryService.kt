@@ -69,6 +69,18 @@ class TelemetryService : Service() {
     private var tickJob: Job? = null
 
     /**
+     * The two collectors that copy a client's own flows out to [TelemetryState].
+     *
+     * Held by name, and replaced rather than added to, because a reconnect builds a new
+     * [Elm327Client] and every drop in a tunnel would otherwise leave the previous client's
+     * pair still collecting. Harmless-looking - a disconnected client stops emitting, so
+     * nothing visibly breaks - and still wrong twice over: the collectors accumulate for the
+     * life of the service across a drive with poor Bluetooth, and if a stale client ever did
+     * emit, two writers would be racing for the same state with no rule about which wins.
+     */
+    private var mirrorJob: Job? = null
+
+    /**
      * The adapter this drive is attached to, kept so a dropped link can be chased.
      *
      * Also written to preferences, which is what lets the app offer the adapter it used last
@@ -424,10 +436,7 @@ class TelemetryService : Service() {
             val transport = BluetoothClassicTransport(applicationContext, address)
             val elm = Elm327Client(transport)
             client = elm
-
-            // Mirror the client's own state out to anything watching.
-            launch { elm.data.collect { TelemetryState.setData(it) } }
-            launch { elm.protocolLog.collect { TelemetryState.setProtocolLog(it) } }
+            mirrorClientState(elm)
 
             try {
                 elm.connect { message ->
@@ -467,6 +476,22 @@ class TelemetryService : Service() {
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
+        }
+    }
+
+    /**
+     * Points [TelemetryState] at this client's own flows, and at no earlier one.
+     *
+     * Launched on the service scope rather than inside the connecting coroutine, because the
+     * reconnect path has no connecting coroutine to launch from - and cancelling the previous
+     * pair here is what keeps one client's worth of collectors running rather than one per
+     * connection attempt. See [mirrorJob].
+     */
+    private fun mirrorClientState(elm: Elm327Client) {
+        mirrorJob?.cancel()
+        mirrorJob = scope.launch {
+            launch { elm.data.collect { TelemetryState.setData(it) } }
+            launch { elm.protocolLog.collect { TelemetryState.setProtocolLog(it) } }
         }
     }
 
@@ -572,10 +597,7 @@ class TelemetryService : Service() {
                 TelemetryState.setStatusMessage("Back on the adapter - the drive continued")
                 updateNotification("Logging")
 
-                scope.launch {
-                    launch { elm.data.collect { TelemetryState.setData(it) } }
-                    launch { elm.protocolLog.collect { TelemetryState.setProtocolLog(it) } }
-                }
+                mirrorClientState(elm)
                 // Not resetTrip: the drive never ended.
                 startLoops(elm)
                 return
@@ -769,6 +791,10 @@ class TelemetryService : Service() {
         tickJob = null
         pollJob?.cancelAndJoin()
         pollJob = null
+        // Nothing left to mirror once the client is gone, and the status messages set below
+        // are the service's to write - not a collector's to overwrite on a late emission.
+        mirrorJob?.cancelAndJoin()
+        mirrorJob = null
         runCatching { client?.disconnect() }
         client = null
 

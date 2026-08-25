@@ -112,6 +112,14 @@ dependencies {
 
     testImplementation(kotlin("test"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.3")
+
+    // A real org.json for unit tests, and it is load-bearing rather than convenience.
+    // `org.json` ships inside android.jar, so on the unit-test classpath it is one of the
+    // stubs that unitTests.isReturnDefaultValues turns into methods returning 0, false and
+    // null. A round-trip test against those stubs does not fail - it passes, having asserted
+    // that zero equals zero, which is worse than having no test at all. This puts the real
+    // implementation ahead of the stub so the assertions mean something.
+    testImplementation("org.json:json:20260814")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 
     val composeBom = platform("androidx.compose:compose-bom:2024.10.01")

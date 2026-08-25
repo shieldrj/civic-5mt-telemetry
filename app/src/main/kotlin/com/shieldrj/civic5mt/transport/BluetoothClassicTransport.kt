@@ -98,26 +98,40 @@ class BluetoothClassicTransport(
         startReader()
     }
 
+    /**
+     * Opens the serial link, closing whatever it opened if it cannot use it.
+     *
+     * A socket that was created and then failed to connect still holds a file descriptor, and
+     * `closeQuietly` cannot reach it - that only closes the fields, and nothing is assigned to
+     * them until an attempt has succeeded. So each attempt closes its own socket on the way
+     * out. This matters because failing here is the ordinary case, not the exceptional one:
+     * every connect with the ignition off fails, and the reconnect loop tries repeatedly.
+     * Leaking one descriptor per attempt is how a long stint of retries in a car park ends
+     * with connects failing for a reason that has nothing to do with the car.
+     */
     @SuppressLint("MissingPermission")
     private fun openSocket(device: BluetoothDevice): BluetoothSocket {
+        var direct: BluetoothSocket? = null
         try {
-            val direct = device.createRfcommSocketToServiceRecord(SPP_UUID)
+            direct = device.createRfcommSocketToServiceRecord(SPP_UUID)
             direct.connect()
             return direct
         } catch (primaryFailure: IOException) {
+            runCatching { direct?.close() }
+
             // Some adapters refuse the service-record route and only accept the
             // reflection-based channel-1 fallback. It is ugly and well known, and it is the
             // difference between working and not on a good number of clones.
             Log.w(TAG, "SPP service record failed, trying channel 1 fallback", primaryFailure)
-            closeQuietly()
+            var fallback: BluetoothSocket? = null
             try {
-                val fallback = device.javaClass
+                fallback = device.javaClass
                     .getMethod("createRfcommSocket", Int::class.javaPrimitiveType)
                     .invoke(device, 1) as BluetoothSocket
                 fallback.connect()
                 return fallback
             } catch (fallbackFailure: Exception) {
-                closeQuietly()
+                runCatching { fallback?.close() }
                 throw ObdTransportError(
                     "Could not open a serial link to the adapter. Check the ignition is on and " +
                         "that no other app (including the OBDLink app) is holding the connection. " +
