@@ -323,15 +323,21 @@ private fun TankSection(
     if (live) {
         // Both absent on a car with no PID 2F, and drawn as absences rather than as a
         // five-eighths tank. That default is what this port removed.
+        // What is in the tank, and what the car thinks is in the tank. They are different
+        // numbers and both are worth showing here: the first is the honest one and is what
+        // the overlay carries, the second is what the dashboard gauge is doing - which is
+        // the thing being corrected, so hiding it would make the correction unreadable.
         ValueRow(
-            label = "Tank level",
-            value = metrics.fuelLevelPercent?.let { "%.0f%%".format(it) } ?: "—",
-            note = if (metrics.fuelLevelPercent == null) "not reported by this car" else null,
+            label = "Fuel left",
+            value = metrics.fuelPercentRemaining?.let { "%.0f%%".format(it) } ?: "—",
+            note = metrics.fuelLevelPercent
+                ?.let { "the sender reads %.0f%%".format(it) }
+                ?: "not reported by this car",
         )
         ValueRow(
             label = "Range",
             value = metrics.fuelRangeMiles?.let { "$it mi" } ?: "—",
-            note = if (metrics.fuelRangeMiles != null) "at the last 30s of economy" else null,
+            note = if (metrics.fuelRangeMiles != null) "at this tank's economy" else null,
         )
         Spacer(Modifier.height(8.dp))
     }

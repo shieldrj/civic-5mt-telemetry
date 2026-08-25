@@ -325,8 +325,11 @@ class TankTrackerTest {
             )
             assertNull(fresh.tankMpg)
 
-            // 93 x 0.142 = 13.2 gallons, at the lifetime 35.3 mpg.
-            assertEquals(466, rangeMiles(fresh, lifetimeMpg = 35.3))
+            // 93 x 0.142 = 13.2 gallons, at the lifetime 35.3 mpg. Exactly 13.2: the product
+            // is a hair over, and a tank cannot hold more fuel than it holds, so gallons
+            // remaining is capped at the real capacity. That cap is what stops an overstated
+            // reserve turning into range nobody has.
+            assertEquals(465, rangeMiles(fresh, lifetimeMpg = 35.3))
         }
 
         @Test
@@ -381,6 +384,219 @@ class TankTrackerTest {
 
             assertEquals(0.0, t.get().milesSinceFill)
             assertNull(t.get().tankMpg)
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    @Nested
+    @DisplayName("How much fuel is left, as a percentage")
+    inner class PercentRemaining {
+
+        /** A car whose sender tops out at 93 and reaches zero with fuel still in the tank. */
+        private fun senderWithReserve(reserveGallons: Double, fullMark: Double = 93.0) =
+            (CivicSpecs.FUEL_TANK_CAPACITY_GALLONS - reserveGallons) / fullMark
+
+        @Test
+        fun `A brimmed tank reads a hundred percent, not ninety-three`() {
+            // The sender's own scale stops at 93 with the tank full. Reporting that as the
+            // fuel left tells someone standing at the pump that they are missing a gallon.
+            val perPercent = senderWithReserve(reserveGallons = 1.0)
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+
+            driveDown(t, clock, 93.0, 30.0, perPercent, mpg = 32.0)
+            repeat(120) {
+                clock.advanceMillis(1_000)
+                t.record(93.0, 0.0, 0.0, 1.0)
+            }
+
+            val percent = t.get().fuelPercentRemaining
+            assertTrue(abs(percent - 100.0) < 2.0, "a full tank read $percent%")
+        }
+
+        @Test
+        fun `There is still fuel when the sender says zero`() {
+            // The question that started this. The dashboard reaches E with a usable amount
+            // left, and a percentage that hits zero at the same moment is repeating the
+            // gauge's mistake in a second place.
+            val perPercent = senderWithReserve(reserveGallons = 1.0)
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+
+            driveDown(t, clock, 93.0, 30.0, perPercent, mpg = 32.0)
+            repeat(120) {
+                clock.advanceMillis(1_000)
+                t.record(93.0, 0.0, 0.0, 1.0)
+            }
+            // Now run this tank down to the sender's zero.
+            driveDown(t, clock, 93.0, 0.0, perPercent, mpg = 32.0)
+
+            val gallons = t.get().gallonsRemaining
+            assertTrue(abs(gallons - 1.0) < 0.3, "sender at zero, $gallons gallons left")
+            assertTrue(t.get().fuelPercentRemaining > 5.0, "and that is not nothing")
+            assertTrue(
+                rangeMiles(t.get(), lifetimeMpg = 32.0) > 20,
+                "which is still worth some miles",
+            )
+        }
+
+        @Test
+        fun `A sender that really does reach zero is left alone`() {
+            // The reserve is derived, not assumed. On a car where the measured gallons per
+            // percent already accounts for the whole tank at the full mark, there is nothing
+            // below zero and inventing some would overstate the range at the worst moment.
+            val perPercent = senderWithReserve(reserveGallons = 0.0)
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+
+            driveDown(t, clock, 93.0, 30.0, perPercent, mpg = 32.0)
+            repeat(120) {
+                clock.advanceMillis(1_000)
+                t.record(93.0, 0.0, 0.0, 1.0)
+            }
+
+            assertTrue(t.get().reserveGallons < 0.1, "invented ${t.get().reserveGallons} gallons")
+        }
+
+        @Test
+        fun `A tank that was never filled to the top does not become the full mark`() {
+            // Twenty dollars of fuel takes the sender to 70. Treating that as a full tank
+            // would put four gallons below the sender's zero and inflate every later reading.
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+
+            driveDown(t, clock, 70.0, 30.0, 0.132, mpg = 32.0)
+
+            assertEquals(0.0, t.get().reserveGallons, "a 70% tank is not a full one")
+        }
+
+        @Test
+        fun `The full mark survives the fill that set it`() {
+            // It is a fact about the car's sender, not about one tank of fuel - and a fill is
+            // the only moment it is ever observed, so resetting it there loses it forever.
+            val perPercent = senderWithReserve(reserveGallons = 1.0)
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+
+            driveDown(t, clock, 93.0, 30.0, perPercent, mpg = 32.0)
+            repeat(120) {
+                clock.advanceMillis(1_000)
+                t.record(93.0, 0.0, 0.0, 1.0)
+            }
+            driveDown(t, clock, 93.0, 40.0, perPercent, mpg = 32.0)
+
+            assertTrue(t.get().fullMarkPercent > 88.0, "lost the mark at the fill")
+            assertTrue(t.get().reserveGallons > 0.5, "and the reserve with it")
+        }
+
+        @Test
+        fun `The reserve is capped rather than trusted without limit`() {
+            // A gallons-per-percent figure that is too low would otherwise arrive here as a
+            // tank several gallons larger than Honda built, and as range nobody has.
+            val absurd = TankState(
+                fillTimestamp = 1,
+                smoothedLevelPercent = 50.0,
+                gallonsPerPercent = 0.08,
+                fullMarkPercent = 93.0,
+            )
+            assertEquals(TankRules.MAX_RESERVE_GALLONS, absurd.reserveGallons)
+            assertTrue(absurd.gallonsRemaining <= CivicSpecs.FUEL_TANK_CAPACITY_GALLONS)
+            assertTrue(absurd.fuelPercentRemaining <= 100.0)
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    @Nested
+    @DisplayName("Holding the distance to empty still")
+    inner class Steadiness {
+
+        @Test
+        fun `The first miles of a tank do not hand it the whole range figure`() {
+            // The remaining swing. Three miles after a fill, a tenth of a gallon had been
+            // burned and "this tank" took over the range outright - so one cold start, or one
+            // hill out of the filling station, moved the answer by eighty miles having
+            // learned nothing at all.
+            val justFilled = TankState(
+                fillTimestamp = 1,
+                smoothedLevelPercent = 93.0,
+                gallonsPerPercent = 0.142,
+                milesSinceFill = 2.0,
+                gallonsUsedSinceFill = 0.12,
+            )
+            assertNotNull(justFilled.tankMpg, "it does have a figure - that is the problem")
+
+            val settled = rangeMiles(
+                justFilled.copy(milesSinceFill = 3.9, gallonsUsedSinceFill = 0.12),
+                lifetimeMpg = 34.0,
+                lifetimeMiles = 5_000.0,
+            )
+            val coldStart = rangeMiles(
+                justFilled.copy(milesSinceFill = 2.0, gallonsUsedSinceFill = 0.12),
+                lifetimeMpg = 34.0,
+                lifetimeMiles = 5_000.0,
+            )
+
+            assertTrue(
+                abs(settled - coldStart) < 20,
+                "16 mpg against 32 mpg on the same fuel moved range from $settled to $coldStart",
+            )
+        }
+
+        @Test
+        fun `Half a tank in, the tank's own economy is what range uses`() {
+            val halfWay = TankState(
+                fillTimestamp = 1,
+                smoothedLevelPercent = 45.0,
+                gallonsPerPercent = 0.142,
+                milesSinceFill = 210.0,
+                gallonsUsedSinceFill = 7.0,
+            )
+            // 30 mpg for this tank against a 40 mpg lifetime: range must follow this tank.
+            val mpg = TankRules.mpgForRange(
+                tankMpg = halfWay.tankMpg,
+                tankGallonsUsed = halfWay.gallonsUsedSinceFill,
+                lifetimeMpg = 40.0,
+                lifetimeMiles = 5_000.0,
+            )
+            assertTrue(abs(mpg - halfWay.tankMpg!!) < 0.01, "got $mpg")
+        }
+
+        @Test
+        fun `The displayed range does not follow every step of the sender`() {
+            // PID 2F arrives as one byte, so it moves in steps of about four tenths of a
+            // percent - and each of those is worth roughly two miles of range. Nothing is
+            // wrong with the arithmetic; the last digit simply never settles.
+            val damper = RangeDamper()
+            damper.update(320.0, 1.0)
+
+            var last = 320
+            repeat(30) { i ->
+                last = damper.update(if (i % 2 == 0) 318.0 else 322.0, 1.0)
+            }
+
+            assertTrue(abs(last - 320) <= 1, "range wandered to $last")
+        }
+
+        @Test
+        fun `A fill is shown at once rather than eased into`() {
+            // Someone who has just filled up is looking at the card right then. Three minutes
+            // of smoothing is right for fuel going out and wrong for fuel going in.
+            val damper = RangeDamper()
+            damper.update(40.0, 1.0)
+
+            val afterFill = damper.update(430.0, 1.0)
+
+            assertEquals(430, afterFill)
+        }
+
+        @Test
+        fun `Counting down is smoothed, because that is the part that twitches`() {
+            val damper = RangeDamper()
+            damper.update(400.0, 1.0)
+
+            val oneTickLater = damper.update(340.0, 1.0)
+
+            assertTrue(oneTickLater > 390, "dropped straight to $oneTickLater")
         }
     }
 }

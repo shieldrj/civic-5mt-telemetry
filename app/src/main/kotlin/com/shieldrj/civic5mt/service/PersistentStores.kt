@@ -193,6 +193,7 @@ private fun tankToJson(state: TankState): JSONObject = JSONObject()
     .put("calibrated", state.calibrated)
     .put("smoothedLevelPercent", state.smoothedLevelPercent)
     .put("lowestLevelPercent", state.lowestLevelPercent)
+    .put("fullMarkPercent", state.fullMarkPercent)
 
 private fun parseTank(j: JSONObject): TankState = TankState(
     fillTimestamp = j.optLong("fillTimestamp", 0L),
@@ -203,6 +204,10 @@ private fun parseTank(j: JSONObject): TankState = TankState(
     calibrated = j.optBoolean("calibrated", false),
     smoothedLevelPercent = j.optDouble("smoothedLevelPercent", 0.0),
     lowestLevelPercent = j.optDouble("lowestLevelPercent", 100.0),
+    // Zero on a record written before the full mark existed, which reads as "not seen yet"
+    // and is exactly right: the percentage falls back to the sender's own scale until the
+    // next fill teaches it where full is.
+    fullMarkPercent = j.optDouble("fullMarkPercent", 0.0),
 )
 
 // ── The adapter last used ────────────────────────────────────────────────────────

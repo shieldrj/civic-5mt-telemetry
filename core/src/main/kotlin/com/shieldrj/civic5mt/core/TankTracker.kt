@@ -51,6 +51,23 @@ data class TankState(
     val smoothedLevelPercent: Double = 0.0,
     /** Lowest smoothed reading since the fill, which is what a rise is measured against. */
     val lowestLevelPercent: Double = 100.0,
+    /**
+     * The highest smoothed sender reading this car has ever shown, across every tank.
+     *
+     * This is the "full" mark, and it is what lets a percentage be honest. The sender's scale
+     * is not a fuel gauge: on this car it stops around 93 with the tank brimmed, and it reads
+     * 0 with fuel still in the tank. Neither end is where it claims to be.
+     *
+     * The top end is measurable, and this is the measurement. A reading this high has only
+     * ever happened with a full tank, so it is the point worth a whole
+     * [CivicSpecs.FUEL_TANK_CAPACITY_GALLONS]. The bottom end then follows from it - see
+     * [reserveGallons] - instead of being assumed to be zero, which is the assumption that
+     * made the old percentage wrong at both ends.
+     *
+     * It only ever rises. A tank that was not quite filled cannot lower it, and a fuller one
+     * later corrects it.
+     */
+    val fullMarkPercent: Double = 0.0,
 ) {
     /**
      * Miles per gallon for this tank, or null before there is enough to divide.
@@ -65,9 +82,50 @@ data class TankState(
             null
         }
 
-    /** Gallons in the tank now, from the measured gallons-per-percent. */
+    /**
+     * Fuel still in the tank when the sender reads zero.
+     *
+     * There is some, and that is the whole point of this figure. The gauge reaches E with a
+     * usable amount left - anyone who drives this car knows it - and multiplying the sender's
+     * percent by a gallons-per-percent figure denies it, because that arithmetic puts zero
+     * fuel at zero percent by construction.
+     *
+     * It is derived, not looked up in a manual. Two things are known about this particular
+     * car: a full tank holds [CivicSpecs.FUEL_TANK_CAPACITY_GALLONS], and a full tank reads
+     * [fullMarkPercent] on its own sender. One percent of sender is worth [gallonsPerPercent]
+     * gallons, measured from fuel this car actually burned, so the sender's whole span only
+     * accounts for that many gallons times that many percent. Whatever the tank holds beyond
+     * that is sitting below the sender's zero.
+     *
+     * Guarded twice. A mark that was never a full tank would inflate this, so anything below
+     * [TankRules.FULL_MARK_MIN_PERCENT] is not treated as full at all and the reserve stays
+     * at zero - the old behaviour, which understates but does not invent. And the answer is
+     * capped: a reserve larger than [TankRules.MAX_RESERVE_GALLONS] means the slope
+     * measurement was off, not that the tank is bigger than Honda built it.
+     */
+    val reserveGallons: Double
+        get() {
+            if (fullMarkPercent < TankRules.FULL_MARK_MIN_PERCENT) return 0.0
+            val accountedForBySender = gallonsPerPercent * fullMarkPercent
+            return (CivicSpecs.FUEL_TANK_CAPACITY_GALLONS - accountedForBySender)
+                .coerceIn(0.0, TankRules.MAX_RESERVE_GALLONS)
+        }
+
+    /** Gallons in the tank now: the sender's span, measured, plus what sits below its zero. */
     val gallonsRemaining: Double
-        get() = max(0.0, gallonsPerPercent * smoothedLevelPercent)
+        get() = (gallonsPerPercent * smoothedLevelPercent + reserveGallons)
+            .coerceIn(0.0, CivicSpecs.FUEL_TANK_CAPACITY_GALLONS)
+
+    /**
+     * How much of a tankful is left, as a share of what the tank really holds.
+     *
+     * Deliberately not the sender reading. That number is on the dashboard already and it is
+     * wrong at both ends: 93 with the tank brimmed, 0 with a couple of gallons still in it.
+     * This one reads 100 standing at the pump and does not reach 0 until the tank is dry,
+     * which is the only version of the question a driver can act on.
+     */
+    val fuelPercentRemaining: Double
+        get() = 100.0 * gallonsRemaining / CivicSpecs.FUEL_TANK_CAPACITY_GALLONS
 }
 
 object TankRules {
@@ -130,21 +188,75 @@ object TankRules {
     const val MAX_GALLONS_PER_PERCENT = 0.20
 
     /**
+     * A sender reading has to reach this before it counts as a full tank.
+     *
+     * The mark is what pins the top of the scale to a known volume, so a reading taken part
+     * way up is the one thing that can quietly ruin the percentage. Eighty-eight is chosen to
+     * sit just under this car's real brimmed reading of about 93: high enough that a
+     * half-filled tank cannot reach it, low enough that a sender reading a little lower than
+     * expected still gets recognised.
+     */
+    const val FULL_MARK_MIN_PERCENT = 88.0
+
+    /**
+     * The most fuel that may be claimed to sit below the sender's zero.
+     *
+     * Two gallons is already generous for this car - the low fuel light comes on with roughly
+     * that much left, and the gauge goes on to E some way after. Anything larger is not a
+     * reserve, it is a bad gallons-per-percent measurement arriving by another route, and a
+     * range figure inflated by it is exactly the mistake nobody can afford here.
+     */
+    const val MAX_RESERVE_GALLONS = 2.0
+
+    /**
      * A lifetime figure needs this many real miles behind it before range leans on it.
      */
     const val MIN_LIFETIME_MILES_FOR_RANGE = 20.0
 
     /**
-     * Which economy figure range should be based on, in order of preference.
+     * How much fuel a tank's own average has to have behind it before range trusts it fully.
+     *
+     * Two gallons is roughly sixty-five miles of driving. Below that, "this tank" is not a
+     * tank average at all - it is the drive to work, and it says whatever that drive was.
+     */
+    const val TANK_MPG_FULL_WEIGHT_GALLONS = 2.0
+
+    /** How fast the displayed distance to empty follows the computed one. See [RangeDamper]. */
+    const val RANGE_TIME_CONSTANT_SEC = 180.0
+
+    /** A rise this large is a fill, and is shown at once rather than eased into. */
+    const val RANGE_SNAP_MILES = 25.0
+
+    /**
+     * Which economy figure range should be based on.
      *
      * This tank first, because it describes this fuel in this car in this weather. Then the
      * lifetime average, once there is enough of it to be an average. Then the EPA rating,
      * which is a real figure for this model and is right within a few miles per gallon.
+     *
+     * The tank figure fades in rather than switching on, and that is the fix for the
+     * remaining swing. It used to take over the moment a tenth of a gallon had been burned -
+     * three miles after a fill - so range stopped being twelve gallons times a settled
+     * lifetime average and became twelve gallons times whatever the drive out of the filling
+     * station happened to be. One cold morning and the number moved eighty miles, having
+     * learned nothing. Weighting it by the fuel actually behind it means the first few miles
+     * of a tank barely move the answer and a tank halfway through owns it outright.
      */
-    fun mpgForRange(tankMpg: Double?, lifetimeMpg: Double, lifetimeMiles: Double): Double = when {
-        tankMpg != null && tankMpg > 10.0 && tankMpg < 65.0 -> tankMpg
-        lifetimeMpg > 10.0 && lifetimeMiles >= MIN_LIFETIME_MILES_FOR_RANGE -> lifetimeMpg
-        else -> CivicSpecs.EPA_COMBINED_MPG_DEFAULT
+    fun mpgForRange(
+        tankMpg: Double?,
+        tankGallonsUsed: Double,
+        lifetimeMpg: Double,
+        lifetimeMiles: Double,
+    ): Double {
+        val baseline = if (lifetimeMpg > 10.0 && lifetimeMiles >= MIN_LIFETIME_MILES_FOR_RANGE) {
+            lifetimeMpg
+        } else {
+            CivicSpecs.EPA_COMBINED_MPG_DEFAULT
+        }
+        if (tankMpg == null || tankMpg <= 10.0 || tankMpg >= 65.0) return baseline
+
+        val weight = (tankGallonsUsed / TANK_MPG_FULL_WEIGHT_GALLONS).coerceIn(0.0, 1.0)
+        return baseline + (tankMpg - baseline) * weight
     }
 }
 
@@ -234,6 +346,10 @@ class TankTracker(
             gallonsUsedSinceFill = state.gallonsUsedSinceFill + gallonsStep,
             levelPercentAtFill = max(state.levelPercentAtFill, smoothed),
             lowestLevelPercent = min(state.lowestLevelPercent, smoothed),
+            // The full mark is the highest this sender has ever gone, over the life of the
+            // car rather than of this tank - which is why it is taken here, on the smoothed
+            // reading, and carried through every fill. See TankState.fullMarkPercent.
+            fullMarkPercent = max(state.fullMarkPercent, smoothed),
         )
 
         if (smoothed - state.lowestLevelPercent >= TankRules.FILL_RISE_PERCENT) {
@@ -291,6 +407,10 @@ class TankTracker(
             // simply what it is.
             smoothedLevelPercent = snapLevel ?: state.smoothedLevelPercent,
             lowestLevelPercent = levelNow,
+            // Carried, not reset. It is a fact about the car's sender, not about this tank,
+            // and losing it at every fill would mean losing it forever - a fill is the only
+            // time it is ever set.
+            fullMarkPercent = max(state.fullMarkPercent, snapLevel ?: state.smoothedLevelPercent),
         )
         store.save(state)
         lastSaveAt = clock.nowMillis()
@@ -328,7 +448,53 @@ class TankTracker(
  * fallback order is the interesting part rather than the multiplication.
  */
 fun rangeMiles(tank: TankState, lifetimeMpg: Double, lifetimeMiles: Double = Double.MAX_VALUE): Int =
-    (tank.gallonsRemaining * TankRules.mpgForRange(tank.tankMpg, lifetimeMpg, lifetimeMiles)).toInt()
+    rawRangeMiles(tank, lifetimeMpg, lifetimeMiles).toInt()
+
+/** [rangeMiles] before it is rounded, which is what [RangeDamper] needs to smooth. */
+fun rawRangeMiles(
+    tank: TankState,
+    lifetimeMpg: Double,
+    lifetimeMiles: Double = Double.MAX_VALUE,
+): Double = tank.gallonsRemaining * TankRules.mpgForRange(
+    tankMpg = tank.tankMpg,
+    tankGallonsUsed = tank.gallonsUsedSinceFill,
+    lifetimeMpg = lifetimeMpg,
+    lifetimeMiles = lifetimeMiles,
+)
+
+/**
+ * Holds the distance-to-empty figure still.
+ *
+ * The inputs to range are already slow - a tank average that moves by a fraction of an MPG per
+ * mile, and a level smoothed over a minute - and it still twitches, because it is a product of
+ * two of them and the sender arrives in steps of about four tenths of a percent. Each of those
+ * steps is worth roughly two miles, so the last digit never settles.
+ *
+ * That is a display problem rather than a measurement one, so it is fixed at the display.
+ * Three minutes of smoothing costs about two miles of lag at motorway speed, which is nothing
+ * against a figure in the hundreds, and it buys a number that only ever counts down.
+ *
+ * A fill is the exception and must not be eased into: someone who has just filled up is
+ * looking at the card right then. A jump upward past [TankRules.RANGE_SNAP_MILES] is taken
+ * whole. Fuel does not appear in a tank by any other means, so nothing else can trip it.
+ */
+class RangeDamper(
+    private val timeConstantSec: Double = TankRules.RANGE_TIME_CONSTANT_SEC,
+) {
+    private var damped: Double? = null
+
+    fun update(rawMiles: Double, dtSec: Double): Int {
+        val previous = damped
+        if (previous == null || rawMiles - previous >= TankRules.RANGE_SNAP_MILES) {
+            damped = rawMiles
+            return max(0.0, rawMiles).toInt()
+        }
+        val alpha = 1 - exp(-max(0.0, dtSec) / timeConstantSec)
+        val next = previous + (rawMiles - previous) * alpha
+        damped = next
+        return max(0.0, next).toInt()
+    }
+}
 
 /** True when the two independent ways of knowing the fuel level disagree enough to matter. */
 fun tankDisagreesWithSender(tank: TankState, senderPercent: Double?): Boolean {

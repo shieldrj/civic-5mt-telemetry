@@ -48,6 +48,9 @@ class TelemetryManager(
      */
     private var engineStartCounted = false
 
+    /** Holds the distance-to-empty figure still enough to read. Display only. */
+    private val rangeDamper = RangeDamper()
+
     /**
      * One step.
      *
@@ -123,7 +126,12 @@ class TelemetryManager(
         // real drive - and "0 miles to empty" there is an alarm about nothing.
         val tankKnown = raw.fuelLevelPercent != null && tankState.fillTimestamp != 0L
         val fuelRange = if (tankKnown) {
-            rangeMiles(tankState, lifetime.lifetimeMpg, lifetime.totalMiles)
+            // Damped on the way out rather than computed differently: the arithmetic was
+            // already right, it was the last digit that would not sit still. See RangeDamper.
+            rangeDamper.update(
+                rawRangeMiles(tankState, lifetime.lifetimeMpg, lifetime.totalMiles),
+                dtSec,
+            )
         } else {
             null
         }
@@ -209,6 +217,7 @@ class TelemetryManager(
             lifetimeMpg = roundTo(lifetime.lifetimeMpg, 1),
             lifetimeMiles = lifetime.totalMiles,
             fuelRangeMiles = fuelRange,
+            fuelPercentRemaining = if (tankKnown) roundTo(tankState.fuelPercentRemaining, 1) else null,
             tankMpg = tankState.tankMpg,
             tankMilesSinceFill = if (tankKnown) tankState.milesSinceFill else null,
             tankGallonsRemaining = if (tankKnown) tankState.gallonsRemaining else null,
