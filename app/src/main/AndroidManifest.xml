@@ -27,6 +27,14 @@
     -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!--
+      The one thing this app asks the internet for: what Costco is charging for petrol at the
+      three warehouses on the Fuel tab. Nothing is sent - the request carries no identifier,
+      no location and no member number, only three warehouse numbers that are the same for
+      every phone. Normal permission, granted at install, no dialog.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <!-- For oil-life-due, a new DTC, and unusual voltage. Runtime-requested on Android 13+. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 

@@ -18,7 +18,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -29,17 +31,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.shieldrj.civic5mt.core.COSTCO_STATIONS
+import com.shieldrj.civic5mt.core.CivicSpecs
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.FUEL_BLENDS
 import com.shieldrj.civic5mt.core.FuelBlendId
+import com.shieldrj.civic5mt.core.GasPriceSnapshot
 import com.shieldrj.civic5mt.core.OUNCES_PER_US_GALLON
 import com.shieldrj.civic5mt.core.LiveMetrics
 import com.shieldrj.civic5mt.core.TripAnalytics
 import com.shieldrj.civic5mt.core.fuelBlend
 import com.shieldrj.civic5mt.core.isClosedLoop
+import com.shieldrj.civic5mt.data.GasPriceRepository
 import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.service.saveFuelBlend
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
@@ -62,6 +69,14 @@ fun FuelScreen(
     val connection by TelemetryState.connection.collectAsStateWithLifecycle()
     val blendId by TelemetryState.fuelBlend.collectAsStateWithLifecycle()
     val blend = fuelBlend(blendId)
+    val gasPrices by GasPriceRepository.snapshot.collectAsStateWithLifecycle()
+    val gasRefreshing by GasPriceRepository.refreshing.collectAsStateWithLifecycle()
+    val gasFetchFailed by GasPriceRepository.lastAttemptFailed.collectAsStateWithLifecycle()
+
+    // Asked once per opening of the tab, and only when what is already held has aged out.
+    // This tab gets opened at a pump - which is when the answer is wanted, and also where the
+    // phone may have no signal - so the fetch updates what is drawn rather than gating it.
+    LaunchedEffect(Unit) { GasPriceRepository.refreshIfStale(context) }
 
     val live = connection == ConnectionStatus.CONNECTED ||
         connection == ConnectionStatus.SIMULATING
@@ -81,6 +96,14 @@ fun FuelScreen(
             letterSpacing = 2.sp,
         )
         Spacer(Modifier.height(18.dp))
+
+        CostcoSection(
+            snapshot = gasPrices,
+            refreshing = gasRefreshing,
+            fetchFailed = gasFetchFailed,
+            onRefresh = { GasPriceRepository.refresh(context) },
+        )
+        Spacer(Modifier.height(24.dp))
 
         if (live) {
             LiveFuel(metrics, trip, blend.stoichAfr)
@@ -506,6 +529,133 @@ private fun Meter(fraction: Float, markerFraction: Float, color: Color) {
             topLeft = Offset(x, 0f),
             size = Size(1.dp.toPx(), size.height),
         )
+    }
+}
+
+// ── What Costco is charging ─────────────────────────────────────────────────────
+
+/**
+ * The three warehouses, cheapest first.
+ *
+ * Sorted by price rather than held in a fixed order, because the question being asked at a
+ * quarter tank is "which one", not "what is San Dimas". The cheapest regular is drawn in the
+ * accent colour and the gap to the dearest is spelled out as a tankful: three cents a gallon
+ * is not worth a detour and thirty is, and that is hard to see in three numbers that all end
+ * in nine.
+ *
+ * Premium is shown small beside each. The R18Z1 is a regular-fuel engine, so premium here is
+ * information rather than a choice.
+ *
+ * Prices come from Costco's own price service, cached on this phone. Nothing on this screen
+ * needs the car: it is drawn whether or not anything is connected, because deciding where to
+ * fill up happens before the drive as often as during it.
+ */
+@Composable
+private fun CostcoSection(
+    snapshot: GasPriceSnapshot,
+    refreshing: Boolean,
+    fetchFailed: Boolean,
+    onRefresh: suspend () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val now = System.currentTimeMillis()
+
+    SectionHeading(
+        title = "Costco gas",
+        aside = when {
+            refreshing -> "checking..."
+            snapshot.isEmpty -> null
+            else -> priceAge(snapshot.ageMillis(now))
+        },
+    )
+
+    if (snapshot.isEmpty) {
+        Text(
+            text = if (fetchFailed) {
+                "Could not reach Costco. Tap to try again."
+            } else {
+                "No prices yet. Tap to fetch them."
+            },
+            color = CivicColors.Ink3,
+            fontSize = 13.sp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { scope.launch { onRefresh() } }
+                .padding(vertical = 10.dp),
+        )
+        return
+    }
+
+    // A station whose pumps stopped reporting sorts to the end rather than disappearing: a
+    // missing row reads as a station that closed, and it has not.
+    val rows = COSTCO_STATIONS.sortedBy {
+        snapshot.prices[it.warehouseId]?.regular ?: Double.MAX_VALUE
+    }
+    val quoted = rows.mapNotNull { snapshot.prices[it.warehouseId]?.regular }
+    val cheapest = quoted.minOrNull()
+    val spread = if (quoted.size > 1) quoted.max() - quoted.min() else 0.0
+
+    rows.forEach { station ->
+        val price = snapshot.prices[station.warehouseId]
+        val regular = price?.regular
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            Text(station.name, color = CivicColors.Ink2, fontSize = 14.sp)
+            Row(verticalAlignment = Alignment.Bottom) {
+                price?.premium?.let {
+                    Text("prem %.2f".format(it), color = CivicColors.Ink4, fontSize = 12.sp)
+                    Spacer(Modifier.width(12.dp))
+                }
+                Text(
+                    text = regular?.let { "$%.3f".format(it) } ?: "-",
+                    // The cheapest pump is the only thing this section has an opinion about.
+                    color = when {
+                        regular == null -> CivicColors.Ink4
+                        regular == cheapest -> CivicColors.Accent
+                        else -> CivicColors.Ink
+                    },
+                    fontSize = 17.sp,
+                )
+            }
+        }
+    }
+
+    Spacer(Modifier.height(4.dp))
+    Text(
+        text = buildString {
+            if (spread >= 0.01) {
+                // A tankful is the unit the difference is actually felt in.
+                append("%.0f cents a gallon between them".format(spread * 100))
+                append(", $%.2f on a full tank. ".format(spread * CivicSpecs.FUEL_TANK_CAPACITY_GALLONS))
+            } else if (quoted.size > 1) {
+                append("All within a cent of each other. ")
+            }
+            if (fetchFailed) append("Last check failed, so these may have moved. ")
+            append("Tap to refresh.")
+        },
+        color = CivicColors.Ink3,
+        fontSize = 12.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { scope.launch { onRefresh() } }
+            .padding(vertical = 6.dp),
+    )
+}
+
+/** How old a price is, said the way a person would say it. */
+private fun priceAge(ageMillis: Long): String {
+    val minutes = ageMillis / 60_000L
+    val hours = minutes / 60L
+    return when {
+        minutes < 2L -> "just now"
+        minutes < 60L -> minutes.toString() + " min ago"
+        minutes < 120L -> "an hour ago"
+        hours < 24L -> hours.toString() + " hours ago"
+        hours < 48L -> "yesterday"
+        else -> (hours / 24L).toString() + " days ago"
     }
 }
 

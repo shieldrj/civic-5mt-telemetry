@@ -6,6 +6,8 @@ import android.util.Log
 import com.shieldrj.civic5mt.R
 import com.shieldrj.civic5mt.core.DegradationBreakdown
 import com.shieldrj.civic5mt.core.FuelBlendId
+import com.shieldrj.civic5mt.core.GasPrice
+import com.shieldrj.civic5mt.core.GasPriceSnapshot
 import com.shieldrj.civic5mt.core.LifetimeStats
 import com.shieldrj.civic5mt.core.LifetimeStore
 import com.shieldrj.civic5mt.core.OilConditionGrade
@@ -44,6 +46,7 @@ private const val KEY_AUTO_CONNECT = "auto_connect"
 private const val KEY_BACKUP_TREE_URI = "backup_tree_uri"
 private const val KEY_BACKUP_DOC_URI = "backup_doc_uri"
 private const val KEY_LAST_BACKUP_AT = "last_backup_at"
+private const val KEY_GAS_PRICES = "costco_gas_prices_v1"
 
 private const val TAG = "PersistentStores"
 
@@ -396,6 +399,49 @@ fun markBackedUp(context: Context, at: Long) {
 
 fun loadLastBackupAt(context: Context): Long =
     telemetryPrefs(context).getLong(KEY_LAST_BACKUP_AT, 0L)
+
+// ── The last Costco prices seen ───────────────────────────────────────────────
+
+/**
+ * Yesterday's pump prices, so the Fuel tab opens with figures rather than with dashes.
+ *
+ * Deliberately left out of the backup document: this is the one record here that regenerates
+ * itself from the internet in a second, and a restored price from a fortnight ago would be
+ * worse than no price at all. The fetch timestamp is stored beside it because a price with no
+ * age on it cannot be judged.
+ */
+fun saveGasPrices(context: Context, snapshot: GasPriceSnapshot) {
+    val prices = JSONObject()
+    snapshot.prices.forEach { (warehouseId, price) ->
+        prices.put(
+            warehouseId,
+            JSONObject()
+                .put("regular", price.regular ?: JSONObject.NULL)
+                .put("premium", price.premium ?: JSONObject.NULL),
+        )
+    }
+    val json = JSONObject()
+        .put("fetchedAt", snapshot.fetchedAt)
+        .put("prices", prices)
+    telemetryPrefs(context).edit().putString(KEY_GAS_PRICES, json.toString()).apply()
+}
+
+fun loadGasPrices(context: Context): GasPriceSnapshot {
+    val raw = telemetryPrefs(context).getString(KEY_GAS_PRICES, null) ?: return GasPriceSnapshot()
+    return runCatching {
+        val json = JSONObject(raw)
+        val prices = json.optJSONObject("prices") ?: JSONObject()
+        val parsed = prices.keys().asSequence().associateWith { warehouseId ->
+            val entry = prices.getJSONObject(warehouseId)
+            GasPrice(
+                regular = if (entry.isNull("regular")) null else entry.optDouble("regular"),
+                premium = if (entry.isNull("premium")) null else entry.optDouble("premium"),
+            )
+        }
+        GasPriceSnapshot(parsed, json.optLong("fetchedAt", 0L))
+    }.onFailure { Log.w(TAG, "Stored gas prices unreadable, ignoring", it) }
+        .getOrDefault(GasPriceSnapshot())
+}
 
 // ── The backup document itself ───────────────────────────────────────────────────
 

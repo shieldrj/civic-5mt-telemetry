@@ -23,6 +23,7 @@ A high-performance, native Android application built in **Kotlin** and **Jetpack
 - **🧪 Physics-Grade Fuel & Oil Engines**:
   - Multi-factor oil degradation algorithm tracking cumulative crank revolutions ($\int \text{RPM} \, dt$), cold starts (<160°F), short trips, and thermal stress.
   - Comprehensive fuel models supporting custom ethanol blends (E10/E15/E85), Deceleration Fuel Cut-Off (DFCO), and idle fuel waste dollar counters.
+  - **Costco pump prices** at San Dimas, Chino Hills and Burbank on the Fuel tab, cheapest first, cached on the phone so the last figures are there with no signal.
 
 - **🔍 Full OBD-II Diagnostic Scanner (DTC)**:
   - **Mode 07** (Pending Codes), **Mode 03** (Confirmed Codes), **Mode 0A** (Permanent Codes).
