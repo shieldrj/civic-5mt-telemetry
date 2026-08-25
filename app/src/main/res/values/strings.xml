@@ -1,7 +1,7 @@
 <resources>
     <!-- Release name. The debug build overrides this via resValue so the two installs are
          distinguishable on the home screen. -->
-    <string name="app_name">Civic 5MT</string>
+    <string name="app_name">Honda OBD</string>
 
     <!-- The home-screen widget. -->
     <string name="widget_tank_label">THIS TANK</string>
