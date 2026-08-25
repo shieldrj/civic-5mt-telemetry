@@ -60,6 +60,13 @@ data class LiveMetrics(
     val lifetimeMiles: Double = 0.0,
     /** Null when there is no tank level to compute it from. */
     val fuelRangeMiles: Int? = null,
+    /**
+     * How much of a tankful is left, as a share of what the tank actually holds.
+     *
+     * Not [fuelLevelPercent], which is the sender talking and is wrong at both ends. See
+     * TankState.fuelPercentRemaining for what the difference is and where it comes from.
+     */
+    val fuelPercentRemaining: Double? = null,
 
     /**
      * The figures for this tank of fuel.

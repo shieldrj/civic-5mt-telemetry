@@ -69,27 +69,29 @@ private data class MapsTokens(
 }
 
 /**
- * The heads-up display: three economy figures on a card styled after Google Maps' own
- * surfaces, because this window's whole life is spent floating over that app while someone
- * navigates by it. A card that looks native to the map reads as part of the navigation;
- * one that looks like a different app reads as clutter.
+ * The heads-up display: how much fuel is left and how far it goes, on a card styled after
+ * Google Maps' own surfaces, because this window's whole life is spent floating over that app
+ * while someone navigates by it. A card that looks native to the map reads as part of the
+ * navigation; one that looks like a different app reads as clutter.
  *
- * It used to carry the gear, a shift bar and live MPG - the Drive screen in miniature. Those
- * are all fast-moving numbers, and a fast-moving number on top of a map someone is navigating
- * by pulls the eye away every second. These three move slowly. Two of them barely move at all
- * inside one drive.
+ * It has been cut down twice. It began as the gear, a shift bar and live MPG - the Drive
+ * screen in miniature - and every one of those is a number that moves every second, which on
+ * top of a map someone is navigating by pulls the eye away and gives nothing back. Then it
+ * carried three economy figures. Now it carries two, and they are two halves of one question:
+ * how much fuel is in the car, and how far that gets you.
  *
- * They are also the three that answer a question rather than describe a moment. Instant MPG
- * says what the last two seconds cost, which nobody can act on. Miles per gallon over this
- * tank, miles per gallon over the life of the car, and how far is left have one answer each.
+ * Economy is not that question. Miles per gallon over a tank is what a driver acts on at the
+ * pump, standing still, with the app open - which is where it still is, on the Fuel screen. It
+ * is not what anyone needs from a card floating over a route.
  *
- * Tank MPG is the hero figure - it is the number a driver acts on at the pump - and lifetime
- * and range sit beneath it as Maps-style detail rows: label left, value right, hairline
- * between.
+ * The percentage is the hero, and it is deliberately not the number on the dashboard. That
+ * gauge shows 0 with a usable amount of fuel still in the tank; this one is a share of what
+ * the tank really holds, so it reads 100 at the pump and does not reach 0 until the car will
+ * not run. See TankState.fuelPercentRemaining for how the difference is measured.
  *
- * Absent readings render as a dash. Tank MPG and range are both null until the car has
- * reported a fuel level and a fill has been seen, and a fabricated number here is one someone
- * drives past a filling station on.
+ * Absent readings render as a dash. Both figures are null until the car has reported a fuel
+ * level and a fill has been seen, and a fabricated number here is one someone drives past a
+ * filling station on.
  */
 @Composable
 fun HudContent() {
@@ -118,8 +120,10 @@ fun HudContent() {
                 .background(tokens.Surface)
                 .padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
+            val fuelPercent = metrics.fuelPercentRemaining
+
             Text(
-                text = "This tank",
+                text = "Fuel left",
                 color = tokens.OnSurfaceVariant,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
@@ -130,17 +134,20 @@ fun HudContent() {
                 horizontalArrangement = Arrangement.Start,
             ) {
                 Text(
-                    text = metrics.tankMpg?.let { "%.1f".format(it) } ?: "—",
-                    color = if (metrics.tankMpg != null) tokens.OnSurface else tokens.OnSurfaceVariant,
+                    // Whole numbers. A tenth of a percent of a tank is two tenths of a
+                    // gallon, which is below what any of this can honestly resolve, and a
+                    // decimal place would only give the digit something to fidget with.
+                    text = fuelPercent?.let { "%.0f".format(it) } ?: "—",
+                    color = if (fuelPercent != null) tokens.OnSurface else tokens.OnSurfaceVariant,
                     fontSize = 21.sp,
                     fontWeight = FontWeight.Medium,
                     style = MapsTokens.Numeric,
                     modifier = Modifier.alignByBaseline(),
                 )
-                if (metrics.tankMpg != null) {
+                if (fuelPercent != null) {
                     Spacer(Modifier.width(4.dp))
                     Text(
-                        text = "MPG",
+                        text = "%",
                         color = tokens.OnSurfaceVariant,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Medium,
@@ -148,16 +155,6 @@ fun HudContent() {
                     )
                 }
             }
-
-            HudDivider(tokens)
-            HudDetailRow(
-                tokens,
-                label = "Lifetime",
-                value = metrics.lifetimeMiles
-                    .takeIf { it > 0 }
-                    ?.let { "%.1f".format(metrics.lifetimeMpg) + " MPG" }
-                    ?: "—",
-            )
 
             HudDivider(tokens)
             HudDetailRow(
