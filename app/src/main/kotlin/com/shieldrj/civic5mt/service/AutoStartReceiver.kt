@@ -18,7 +18,9 @@ import com.shieldrj.civic5mt.core.ConnectionStatus
  *
  * Starting a foreground service from the background is restricted on modern Android, and this
  * receiver is exactly that case. It works here because the app holds SYSTEM_ALERT_WINDOW for
- * the HUD, which Android accepts as evidence that a background service start is wanted.
+ * the HUD, which Android accepts as evidence that a background service start is wanted - so
+ * the feature rests on a permission granted on a Settings screen, and revocable on the same
+ * screen. See the start itself for what happens when it has been.
  *
  * The address check matters: a phone is bonded to headphones, a watch and a stereo too, and
  * connecting to all of them would be worse than connecting to none.
@@ -61,7 +63,29 @@ class AutoStartReceiver : BroadcastReceiver() {
         }
 
         Log.i(TAG, "The Civic's adapter appeared - starting telemetry")
-        TelemetryService.connect(context.applicationContext, saved)
+
+        // The exemption this relies on is a permission, and a permission can be absent. With
+        // SYSTEM_ALERT_WINDOW not granted, startForegroundService from a broadcast throws
+        // ForegroundServiceStartNotAllowedException - and an exception out of onReceive is a
+        // crash. Which is the worst shape this could fail in: it happens on every ignition,
+        // the driver never opened the app so the crash arrives unprompted, and it says nothing
+        // about the HUD permission that would fix it.
+        //
+        // Caught rather than pre-checked against canDrawOverlays, because the exemption list
+        // belongs to the platform and has changed between releases - whether the start was
+        // allowed is the only honest test of it. Swallowed rather than surfaced, because there
+        // is nothing on screen to surface it to. Connecting by hand still works, and the log
+        // line says why it had to be by hand.
+        runCatching { TelemetryService.connect(context.applicationContext, saved) }
+            .onFailure {
+                Log.w(
+                    TAG,
+                    "Not allowed to start the telemetry service from the background. Granting " +
+                        "\"Draw over other apps\" is what lets auto-connect work without " +
+                        "opening the app first.",
+                    it,
+                )
+            }
     }
 
     companion object {
