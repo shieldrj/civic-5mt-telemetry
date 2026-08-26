@@ -86,8 +86,15 @@ private data class MapsTokens(
  *
  * The percentage is the hero, and it is deliberately not the number on the dashboard. That
  * gauge shows 0 with a usable amount of fuel still in the tank; this one is a share of what
- * the tank really holds, so it reads 100 at the pump and does not reach 0 until the car will
- * not run. See TankState.fuelPercentRemaining for how the difference is measured.
+ * the tank really holds, so it reads 100 at the pump and still reads several percent when the
+ * dashboard has given up. See TankState.fuelPercentRemaining for how the difference is
+ * measured.
+ *
+ * It does not go on to zero, and saying it did was wrong. The reserve is the last thing the
+ * sender can tell anyone about, so the figure stops there - at the reserve's share of the
+ * tank, some seven percent - and holds while the fuel goes on down. That last stretch is
+ * shown as "under 7" rather than "7", which is the whole of what is honestly known about it.
+ * See TankState.belowSenderZero.
  *
  * Absent readings render as a dash. Both figures are null until the car has reported a fuel
  * level and a fill has been seen, and a fabricated number here is one someone drives past a
@@ -129,10 +136,26 @@ fun HudContent() {
                 fontWeight = FontWeight.Medium,
             )
             Spacer(Modifier.height(1.dp))
+            // Once the sender is on its stop, the percentage stops counting down - there is
+            // fuel below there but nothing measuring it - so the card says "under 7" rather
+            // than "7". A card read at 60 mph is the last place to print a number that has
+            // quietly stopped meaning what it says. See TankState.belowSenderZero.
+            val bounded = metrics.tankBelowSenderZero
+
             Row(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.Start,
             ) {
+                if (bounded && fuelPercent != null) {
+                    Text(
+                        text = "under",
+                        color = tokens.OnSurfaceVariant,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                }
                 Text(
                     // Whole numbers. A tenth of a percent of a tank is two tenths of a
                     // gallon, which is below what any of this can honestly resolve, and a
@@ -160,7 +183,12 @@ fun HudContent() {
             HudDetailRow(
                 tokens,
                 label = "To empty",
-                value = metrics.fuelRangeMiles?.let { "$it mi" } ?: "—",
+                // Abbreviated here and spelled out above, for width: the row is a label and a
+                // reading inside a 128dp card, and "under 30 mi" is wider than the two of them
+                // have between them. The word is on the figure that carries the card.
+                value = metrics.fuelRangeMiles
+                    ?.let { if (bounded) "< $it mi" else "$it mi" }
+                    ?: "—",
             )
         }
     }

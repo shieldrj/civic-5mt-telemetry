@@ -7,6 +7,7 @@ import android.content.Context
 import android.widget.RemoteViews
 import com.shieldrj.civic5mt.R
 import com.shieldrj.civic5mt.core.LiveMetrics
+import com.shieldrj.civic5mt.service.WidgetSnapshot
 import com.shieldrj.civic5mt.service.loadWidgetSnapshot
 import com.shieldrj.civic5mt.service.saveWidgetSnapshot
 
@@ -24,17 +25,23 @@ object TankWidget {
 
     /** Called from the service's tick loop, throttled to once per [PUSH_INTERVAL_MS]. */
     fun update(context: Context, metrics: LiveMetrics) {
-        saveWidgetSnapshot(context, metrics.tankMpg, metrics.fuelRangeMiles)
-        push(context, metrics.tankMpg, metrics.fuelRangeMiles)
+        val snapshot = WidgetSnapshot(
+            tankMpg = metrics.tankMpg,
+            rangeMiles = metrics.fuelRangeMiles,
+            rangeIsCeiling = metrics.tankBelowSenderZero,
+        )
+        saveWidgetSnapshot(context, snapshot)
+        push(context, snapshot)
     }
 
     /** What the provider shows when Android asks for a redraw with nothing live. */
     fun refreshFromSaved(context: Context) {
-        val (tankMpg, rangeMiles) = loadWidgetSnapshot(context)
-        push(context, tankMpg, rangeMiles)
+        push(context, loadWidgetSnapshot(context))
     }
 
-    private fun push(context: Context, tankMpg: Double?, rangeMiles: Int?) {
+    private fun push(context: Context, snapshot: WidgetSnapshot) {
+        val tankMpg = snapshot.tankMpg
+        val rangeMiles = snapshot.rangeMiles
         val views = RemoteViews(context.packageName, R.layout.tank_widget).apply {
             setTextViewText(
                 R.id.widget_tank_mpg,
@@ -44,7 +51,12 @@ object TankWidget {
                 R.id.widget_detail,
                 when {
                     tankMpg == null -> "MPG · waiting for the car"
-                    else -> "MPG · " + (rangeMiles?.toString() ?: "?") + " mi to empty"
+                    // "under" once the sender is on its stop. The widget carries the same
+                    // figure as the HUD and has to carry the same caveat with it, or the one
+                    // screen nobody is looking at closely becomes the confident one.
+                    rangeMiles == null -> "MPG · ? mi to empty"
+                    snapshot.rangeIsCeiling -> "MPG · under $rangeMiles mi to empty"
+                    else -> "MPG · $rangeMiles mi to empty"
                 },
             )
         }

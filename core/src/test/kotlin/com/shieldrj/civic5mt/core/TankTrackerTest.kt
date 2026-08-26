@@ -507,6 +507,81 @@ class TankTrackerTest {
 
     // ═══════════════════════════════════════════════════════════════════════════════
     @Nested
+    @DisplayName("When the sender has nothing left to say")
+    inner class BelowSenderZero {
+
+        private fun senderWithReserve(reserveGallons: Double, fullMark: Double = 93.0) =
+            (CivicSpecs.FUEL_TANK_CAPACITY_GALLONS - reserveGallons) / fullMark
+
+        @Test
+        fun `The figures stop moving once the sender is on its stop`() {
+            // Which is the reason the flag exists. Half an hour of driving on the reserve
+            // changes neither the gallons nor the range, because neither is being measured
+            // any more - and a screen printing them plainly would be claiming otherwise.
+            val onTheStop = TankState(
+                fillTimestamp = 1,
+                smoothedLevelPercent = 0.0,
+                gallonsPerPercent = senderWithReserve(reserveGallons = 1.0),
+                fullMarkPercent = 93.0,
+            )
+
+            val gallonsBefore = onTheStop.gallonsRemaining
+            val rangeBefore = rangeMiles(onTheStop, lifetimeMpg = 32.0)
+            // Twenty more miles of driving. The sender cannot go below zero, so nothing about
+            // the state that feeds these two figures changes.
+            val laterOn = onTheStop.copy(milesSinceFill = onTheStop.milesSinceFill + 20.0)
+
+            assertEquals(gallonsBefore, laterOn.gallonsRemaining)
+            assertEquals(rangeBefore, rangeMiles(laterOn, lifetimeMpg = 32.0))
+            assertTrue(laterOn.belowSenderZero, "and the screens are not told")
+        }
+
+        @Test
+        fun `A tank with fuel showing on the sender is a reading, not a bound`() {
+            val quarterTank = TankState(
+                fillTimestamp = 1,
+                smoothedLevelPercent = 25.0,
+                gallonsPerPercent = senderWithReserve(reserveGallons = 1.0),
+                fullMarkPercent = 93.0,
+            )
+
+            assertFalse(quarterTank.belowSenderZero)
+        }
+
+        @Test
+        fun `The last step above empty counts as bottomed out`() {
+            // The sender arrives as one byte and steps about four tenths of a percent, so the
+            // step above zero is inside its own resolution. Waiting for an exact zero would
+            // also wait forever: the smoothed level is an exponential average and approaches
+            // zero without arriving.
+            val nearlyThere = TankState(
+                fillTimestamp = 1,
+                smoothedLevelPercent = 0.4,
+                gallonsPerPercent = senderWithReserve(reserveGallons = 1.0),
+                fullMarkPercent = 93.0,
+            )
+
+            assertTrue(nearlyThere.belowSenderZero)
+        }
+
+        @Test
+        fun `A sender that really does reach zero is reporting, not guessing`() {
+            // No reserve underneath means zero percent is a measurement like any other, and
+            // hedging it would understate the one car this does not apply to.
+            val noReserve = TankState(
+                fillTimestamp = 1,
+                smoothedLevelPercent = 0.0,
+                gallonsPerPercent = senderWithReserve(reserveGallons = 0.0),
+                fullMarkPercent = 93.0,
+            )
+
+            assertEquals(0.0, noReserve.reserveGallons, 0.01)
+            assertFalse(noReserve.belowSenderZero)
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    @Nested
     @DisplayName("Holding the distance to empty still")
     inner class Steadiness {
 
