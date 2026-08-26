@@ -121,11 +121,38 @@ data class TankState(
      *
      * Deliberately not the sender reading. That number is on the dashboard already and it is
      * wrong at both ends: 93 with the tank brimmed, 0 with a couple of gallons still in it.
-     * This one reads 100 standing at the pump and does not reach 0 until the tank is dry,
-     * which is the only version of the question a driver can act on.
+     * This one reads 100 standing at the pump, which is the only version of the question a
+     * driver can act on.
+     *
+     * It does not go on to reach zero. It cannot: the sender stops at its own zero with the
+     * reserve still in the tank, so this bottoms out at the reserve's share of a tankful -
+     * about seven percent - and stays there until the car stops. That is a limit of what a
+     * sender can be asked, not an oversight, and [belowSenderZero] is how the screens are
+     * told to stop presenting it as a live reading.
      */
     val fuelPercentRemaining: Double
         get() = 100.0 * gallonsRemaining / CivicSpecs.FUEL_TANK_CAPACITY_GALLONS
+
+    /**
+     * True once the sender has bottomed out and every figure above has stopped moving.
+     *
+     * All of this is a reading of the sender, so when the sender runs out of things to say,
+     * so does this. Below its zero there is still fuel - that is what [reserveGallons] is -
+     * but nothing measures it going down. [gallonsRemaining] sits at the reserve,
+     * [fuelPercentRemaining] sits at the reserve's share of the tank, and distance to empty
+     * sits at that many gallons times the economy. Someone watching the number can drive for
+     * half an hour and see it say the same thing the whole way.
+     *
+     * The arithmetic cannot be fixed, because there is no measurement down there to fix it
+     * with. So the display is told instead, and prints these as bounds rather than readings:
+     * under seven percent, under thirty miles. Both are true, and neither invites anyone to
+     * plan the next thirty miles around it.
+     *
+     * False on a car whose sender really does reach zero. There, zero percent is a
+     * measurement like any other and there is no reserve hiding underneath it.
+     */
+    val belowSenderZero: Boolean
+        get() = reserveGallons > 0.0 && smoothedLevelPercent <= TankRules.SENDER_FLOOR_PERCENT
 }
 
 object TankRules {
@@ -207,6 +234,19 @@ object TankRules {
      * range figure inflated by it is exactly the mistake nobody can afford here.
      */
     const val MAX_RESERVE_GALLONS = 2.0
+
+    /**
+     * At or below this sender reading, the sender counts as having bottomed out.
+     *
+     * Not exactly zero, for two reasons. The reading arrives as one byte and steps about four
+     * tenths of a percent at a time, so the last step above empty is already inside the
+     * sender's own resolution. And the smoothed level approaches zero without ever arriving,
+     * being an exponential average - waiting for a true zero would wait forever.
+     *
+     * One percent is a tenth of a gallon, or about three miles. Nothing worth having is lost
+     * by rounding it away.
+     */
+    const val SENDER_FLOOR_PERCENT = 1.0
 
     /**
      * A lifetime figure needs this many real miles behind it before range leans on it.

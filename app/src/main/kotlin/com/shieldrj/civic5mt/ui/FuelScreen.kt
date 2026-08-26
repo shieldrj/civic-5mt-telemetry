@@ -221,6 +221,18 @@ private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Doubl
             Label("TO EMPTY")
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.Bottom) {
+                // "under" rather than a bare numeral once the sender has bottomed out. It is
+                // the loudest number on the screen and it stops counting down there, so a
+                // reader has to be told it is a ceiling. See TankState.belowSenderZero.
+                if (metrics.tankBelowSenderZero && metrics.fuelRangeMiles != null) {
+                    Text(
+                        text = "under",
+                        color = CivicColors.Ink3,
+                        fontSize = 13.sp,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                    Spacer(Modifier.width(5.dp))
+                }
                 Text(
                     text = metrics.fuelRangeMiles?.toString() ?: "—",
                     color = CivicColors.Ink,
@@ -239,7 +251,13 @@ private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Doubl
             Spacer(Modifier.height(4.dp))
             Text(
                 text = metrics.tankGallonsRemaining
-                    ?.let { "%.1f gal left".format(it) }
+                    ?.let {
+                        if (metrics.tankBelowSenderZero) {
+                            "under %.1f gal left".format(it)
+                        } else {
+                            "%.1f gal left".format(it)
+                        }
+                    }
                     ?: "",
                 color = CivicColors.Ink3,
                 fontSize = 12.sp,
@@ -350,17 +368,43 @@ private fun TankSection(
         // numbers and both are worth showing here: the first is the honest one and is what
         // the overlay carries, the second is what the dashboard gauge is doing - which is
         // the thing being corrected, so hiding it would make the correction unreadable.
+        // Under the sender's zero, neither figure is a reading any more - both sit still at
+        // the reserve while the fuel goes on down - so both are printed as bounds. See
+        // TankState.belowSenderZero for why nothing better is available down there.
+        val bounded = metrics.tankBelowSenderZero
+
         ValueRow(
             label = "Fuel left",
-            value = metrics.fuelPercentRemaining?.let { "%.0f%%".format(it) } ?: "—",
+            value = metrics.fuelPercentRemaining
+                ?.let { if (bounded) "under %.0f%%".format(it) else "%.0f%%".format(it) }
+                ?: "—",
             note = metrics.fuelLevelPercent
                 ?.let { "the sender reads %.0f%%".format(it) }
                 ?: "not reported by this car",
         )
         ValueRow(
             label = "Range",
-            value = metrics.fuelRangeMiles?.let { "$it mi" } ?: "—",
-            note = if (metrics.fuelRangeMiles != null) "at this tank's economy" else null,
+            value = metrics.fuelRangeMiles
+                ?.let { if (bounded) "under $it mi" else "$it mi" }
+                ?: "—",
+            note = when {
+                metrics.fuelRangeMiles == null -> null
+                bounded -> "the gauge is on E"
+                else -> "at this tank's economy"
+            },
+        )
+        // Whether the gallons-per-percent figure behind all of this was measured on this car
+        // or is still Honda's tank capacity divided by a hundred. It is the difference
+        // between a percentage that describes this sender and one that is the dashboard
+        // gauge plus a constant, and until now it was known only inside the app.
+        ValueRow(
+            label = "Tank measured",
+            value = if (metrics.tankCalibrated) "yes" else "not yet",
+            note = if (metrics.tankCalibrated) {
+                "from fuel this car burned"
+            } else {
+                "using the factory %.1f gal".format(CivicSpecs.FUEL_TANK_CAPACITY_GALLONS)
+            },
         )
         Spacer(Modifier.height(8.dp))
     }

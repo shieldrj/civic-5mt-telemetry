@@ -293,22 +293,41 @@ fun saveHudTheme(context: Context, theme: HudTheme) {
  * the tick loop; a figure that is half a minute old is fine for a glance through a kitchen
  * window.
  */
-fun saveWidgetSnapshot(context: Context, tankMpg: Double?, rangeMiles: Int?) {
+/**
+ * The two figures on the widget, and whether the second one is a reading or a ceiling.
+ *
+ * [rangeIsCeiling] rides along because it changes what [rangeMiles] means. Under the sender's
+ * zero the miles stop counting down - see TankState.belowSenderZero - and a widget glanced at
+ * through a kitchen window is the last place to lose that.
+ */
+data class WidgetSnapshot(
+    val tankMpg: Double? = null,
+    val rangeMiles: Int? = null,
+    val rangeIsCeiling: Boolean = false,
+)
+
+fun saveWidgetSnapshot(context: Context, snapshot: WidgetSnapshot) {
     val json = JSONObject()
-        .put("tankMpg", tankMpg ?: JSONObject.NULL)
-        .put("rangeMiles", rangeMiles ?: JSONObject.NULL)
+        .put("tankMpg", snapshot.tankMpg ?: JSONObject.NULL)
+        .put("rangeMiles", snapshot.rangeMiles ?: JSONObject.NULL)
+        .put("rangeIsCeiling", snapshot.rangeIsCeiling)
     telemetryPrefs(context).edit().putString(KEY_WIDGET_SNAPSHOT, json.toString()).apply()
 }
 
-fun loadWidgetSnapshot(context: Context): Pair<Double?, Int?> {
-    val raw = telemetryPrefs(context).getString(KEY_WIDGET_SNAPSHOT, null) ?: return null to null
+fun loadWidgetSnapshot(context: Context): WidgetSnapshot {
+    val raw = telemetryPrefs(context).getString(KEY_WIDGET_SNAPSHOT, null)
+        ?: return WidgetSnapshot()
     return runCatching {
         val j = JSONObject(raw)
-        val mpg = if (j.isNull("tankMpg")) null else j.optDouble("tankMpg")
-        val range = if (j.isNull("rangeMiles")) null else j.optInt("rangeMiles")
-        mpg to range
+        WidgetSnapshot(
+            tankMpg = if (j.isNull("tankMpg")) null else j.optDouble("tankMpg"),
+            rangeMiles = if (j.isNull("rangeMiles")) null else j.optInt("rangeMiles"),
+            // Absent in snapshots written before this existed, and false is the right reading
+            // of those: they were saved by a build that only ever showed plain figures.
+            rangeIsCeiling = j.optBoolean("rangeIsCeiling", false),
+        )
     }.onFailure { Log.w(TAG, "Widget snapshot unreadable, ignoring", it) }
-        .getOrDefault(null to null)
+        .getOrDefault(WidgetSnapshot())
 }
 
 // ── The one-time migration ───────────────────────────────────────────────────────

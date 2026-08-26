@@ -84,6 +84,14 @@ data class LiveMetrics(
      * the screen says which it is.
      */
     val tankCalibrated: Boolean = false,
+    /**
+     * Whether the sender has bottomed out, leaving [fuelPercentRemaining] and
+     * [fuelRangeMiles] as bounds rather than readings.
+     *
+     * See TankState.belowSenderZero. Both figures stop moving down there, and a screen that
+     * goes on printing them plainly is claiming a measurement nothing took.
+     */
+    val tankBelowSenderZero: Boolean = false,
 
     // Manual transmission dynamics
     val currentGear: GearSelection = GearSelection.Neutral,

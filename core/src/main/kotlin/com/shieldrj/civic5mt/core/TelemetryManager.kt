@@ -222,6 +222,7 @@ class TelemetryManager(
             tankMilesSinceFill = if (tankKnown) tankState.milesSinceFill else null,
             tankGallonsRemaining = if (tankKnown) tankState.gallonsRemaining else null,
             tankCalibrated = tankState.calibrated,
+            tankBelowSenderZero = tankKnown && tankState.belowSenderZero,
             currentGear = gear.currentGear,
             gearRatio = roundTo(gear.calculatedRatio, 2),
             isClutchSlipping = gear.isClutchSlipping,

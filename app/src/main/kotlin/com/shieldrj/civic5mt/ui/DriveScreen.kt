@@ -99,7 +99,20 @@ fun DriveScreen(
         Spacer(Modifier.height(12.dp))
 
         // Range, directly under the tank figure: stable, non-swinging miles to empty.
+        //
+        // Stable is the point everywhere except at the bottom of the tank, where it stops
+        // being a virtue: under the sender's zero the figure holds still because nothing is
+        // measuring it any more, not because the fuel is lasting. It is labelled as a
+        // ceiling there. See TankState.belowSenderZero.
         Row(verticalAlignment = Alignment.Bottom) {
+            if (metrics.tankBelowSenderZero && metrics.fuelRangeMiles != null) {
+                Text(
+                    text = "under ",
+                    color = CivicColors.Ink3,
+                    fontSize = 13.sp,
+                    modifier = Modifier.alignByBaseline(),
+                )
+            }
             Text(
                 text = metrics.fuelRangeMiles?.toString() ?: "—",
                 color = CivicColors.Ink,
