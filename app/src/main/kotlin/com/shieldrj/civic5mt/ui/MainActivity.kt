@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Build
+import androidx.compose.material.icons.outlined.DonutLarge
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Layers
 import androidx.compose.material.icons.outlined.LocalGasStation
@@ -69,6 +70,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.shieldrj.civic5mt.core.CivicSpecs
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.LifetimeStats
 import com.shieldrj.civic5mt.core.LiveMetrics
@@ -76,14 +78,14 @@ import com.shieldrj.civic5mt.core.MpgDisplayState
 import com.shieldrj.civic5mt.core.OutsideAirSource
 import com.shieldrj.civic5mt.core.ShiftMode
 import com.shieldrj.civic5mt.core.TripAnalytics
+import com.shieldrj.civic5mt.data.TripDatabase
 import com.shieldrj.civic5mt.service.ResolvedPids
 import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
-import com.shieldrj.civic5mt.transport.BluetoothClassicTransport
-import com.shieldrj.civic5mt.data.TripDatabase
 import com.shieldrj.civic5mt.service.loadLastAdapter
 import com.shieldrj.civic5mt.service.loadOverlayEnabled
 import com.shieldrj.civic5mt.service.saveOverlayEnabled
+import com.shieldrj.civic5mt.transport.BluetoothClassicTransport
 import com.shieldrj.civic5mt.transport.PairedDevice
 import com.shieldrj.civic5mt.ui.overlay.OverlayHost
 import kotlin.math.roundToInt
@@ -94,7 +96,7 @@ import kotlin.math.roundToInt
  * Lives here rather than in each screen file because it is the shape of the navigation, and
  * the navigation is one decision: exactly one of these is in front, or none of them is.
  */
-enum class DetailScreen { Trips, Codes, Fuel, Oil }
+enum class DetailScreen { Trips, Codes, Fuel, Oil, Clutch }
 
 /**
  * The shell, and enough of a screen to prove the whole chain works end to end: a Bluetooth
@@ -150,6 +152,7 @@ class MainActivity : ComponentActivity() {
     private fun handleDeepLink(intent: Intent?) {
         when (intent?.getStringExtra(TelemetryService.EXTRA_OPEN_SCREEN)) {
             TelemetryService.SCREEN_FUEL -> deepLink.value = DetailScreen.Fuel
+            TelemetryService.SCREEN_CLUTCH -> deepLink.value = DetailScreen.Clutch
         }
     }
 }
@@ -167,6 +170,7 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
     val shiftMode by TelemetryState.shiftMode.collectAsStateWithLifecycle()
     val overlayEnabled by TelemetryState.overlayEnabled.collectAsStateWithLifecycle()
     val oil by TelemetryState.oil.collectAsStateWithLifecycle()
+    val clutch by TelemetryState.clutch.collectAsStateWithLifecycle()
     val lastAdapter = remember { loadLastAdapter(context) }
 
     // Which detail screen is in front, or null for whatever the connection implies - the
@@ -229,6 +233,7 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
         DetailScreen.Trips -> { TripsScreen(onBack = closeDetail); return }
         DetailScreen.Fuel -> { FuelScreen(onBack = closeDetail); return }
         DetailScreen.Oil -> { OilScreen(onBack = closeDetail); return }
+        DetailScreen.Clutch -> { ClutchScreen(onBack = closeDetail); return }
         null -> {}
     }
 
@@ -345,6 +350,11 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
                             oil?.let { "${it.oilLifePercent.roundToInt()}%" } ?: "Interval",
                             Icons.Outlined.OilBarrel,
                         ) { detail = DetailScreen.Oil },
+                        Feature(
+                            "Clutch health",
+                            clutch?.let { "${it.clutchHealthPercent.roundToInt()}%" } ?: "Wear & RUL",
+                            Icons.Outlined.DonutLarge,
+                        ) { detail = DetailScreen.Clutch },
                         Feature(
                             "Diagnostics",
                             "Read & clear codes",

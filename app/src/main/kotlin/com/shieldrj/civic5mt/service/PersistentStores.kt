@@ -4,6 +4,11 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import com.shieldrj.civic5mt.R
+import com.shieldrj.civic5mt.core.ClutchConditionGrade
+import com.shieldrj.civic5mt.core.ClutchProfile
+import com.shieldrj.civic5mt.core.ClutchProfileStore
+import com.shieldrj.civic5mt.core.ClutchSlipIncident
+import com.shieldrj.civic5mt.core.ClutchWearBreakdown
 import com.shieldrj.civic5mt.core.DegradationBreakdown
 import com.shieldrj.civic5mt.core.FuelBlendId
 import com.shieldrj.civic5mt.core.GasPrice
@@ -15,24 +20,26 @@ import com.shieldrj.civic5mt.core.OilLifeProfile
 import com.shieldrj.civic5mt.core.OilProfileStore
 import com.shieldrj.civic5mt.core.TankState
 import com.shieldrj.civic5mt.core.TankStore
+import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
 
 /**
- * Where the two records that have to survive a restart are kept.
+ * Where the records that have to survive a restart are kept.
  *
- * Deliberately not Room. These are two single rows, read once at startup and written at most
+ * Deliberately not Room. These are single rows, read once at startup and written at most
  * every thirty seconds; a database for them would be ceremony around a key-value pair. Room
  * earns its place when the trip history lands - queryable drives and time-series logging are
  * what it is actually for.
  *
- * Both are written as JSON rather than as individual preference keys, so a schema change is
+ * All are written as JSON rather than as individual preference keys, so a schema change is
  * one parse to reason about, and so the shape on disk matches the shape of the JSON rescued
  * out of the WebView. That symmetry is what makes the migration a straight read.
  */
 private const val PREFS_NAME = "civic_telemetry"
 private const val KEY_LIFETIME = "civic_2013_lifetime_stats_v2"
 private const val KEY_OIL = "civic_2013_oil_profile_v1"
+private const val KEY_CLUTCH = "civic_2013_clutch_profile_v1"
 private const val KEY_FUEL_BLEND = "civic_2013_fuel_blend_v1"
 private const val KEY_MIGRATION_DONE = "rescued_localstorage_imported_v1"
 private const val KEY_OVERLAY_ENABLED = "overlay_enabled"
@@ -157,6 +164,110 @@ internal fun parseOilProfile(json: JSONObject): OilLifeProfile {
 
 private fun gradeFromLabel(label: String?): OilConditionGrade =
     OilConditionGrade.entries.firstOrNull { it.label == label } ?: OilConditionGrade.GOOD
+
+// ── Clutch profile ───────────────────────────────────────────────────────────────
+
+class PrefsClutchProfileStore(context: Context) : ClutchProfileStore {
+    private val prefs = telemetryPrefs(context)
+
+    override fun load(): ClutchProfile? {
+        val raw = prefs.getString(KEY_CLUTCH, null) ?: return null
+        return runCatching { parseClutchProfile(JSONObject(raw)) }
+            .onFailure { Log.w(TAG, "Clutch profile unreadable, ignoring", it) }
+            .getOrNull()
+    }
+
+    override fun save(profile: ClutchProfile) {
+        prefs.edit().putString(KEY_CLUTCH, clutchProfileToJson(profile).toString()).apply()
+    }
+}
+
+internal fun clutchProfileToJson(p: ClutchProfile): JSONObject {
+    val incidentsArray = JSONArray()
+    p.recentIncidents.forEach { incident ->
+        incidentsArray.put(
+            JSONObject()
+                .put("timestamp", incident.timestamp)
+                .put("gear", incident.gear)
+                .put("peakSlipRpm", incident.peakSlipRpm)
+                .put("peakTorqueNm", incident.peakTorqueNm)
+                .put("speedKmh", incident.speedKmh)
+                .put("durationSec", incident.durationSec)
+        )
+    }
+
+    return JSONObject()
+        .put("lastResetTimestamp", p.lastResetTimestamp)
+        .put("lastResetOdometer", p.lastResetOdometer)
+        .put("currentOdometer", p.currentOdometer)
+        .put("clutchHealthPercent", p.clutchHealthPercent)
+        .put("accumulatedFrictionEnergyJoules", p.accumulatedFrictionEnergyJoules)
+        .put("totalEngagementsCount", p.totalEngagementsCount)
+        .put("abnormalSlipCount", p.abnormalSlipCount)
+        .put("maxObservedTempC", p.maxObservedTempC)
+        .put("estimatedTorqueCapacityNm", p.estimatedTorqueCapacityNm)
+        .put("estimatedMilesRemaining", p.estimatedMilesRemaining)
+        .put("estimatedDaysRemaining", p.estimatedDaysRemaining ?: JSONObject.NULL)
+        .put("estimatedShiftsRemaining", p.estimatedShiftsRemaining)
+        .put("conditionGrade", p.conditionGrade.label)
+        .put(
+            "degradationBreakdown",
+            JSONObject()
+                .put("shiftWearPercent", p.degradationBreakdown.shiftWearPercent)
+                .put("launchWearPercent", p.degradationBreakdown.launchWearPercent)
+                .put("slipWearPercent", p.degradationBreakdown.slipWearPercent)
+                .put("thermalGlazePenaltyPercent", p.degradationBreakdown.thermalGlazePenaltyPercent),
+        )
+        .put("recentIncidents", incidentsArray)
+}
+
+internal fun parseClutchProfile(json: JSONObject): ClutchProfile {
+    val breakdown = json.optJSONObject("degradationBreakdown") ?: JSONObject()
+    val incidentsArray = json.optJSONArray("recentIncidents") ?: JSONArray()
+    val incidents = mutableListOf<ClutchSlipIncident>()
+
+    for (i in 0 until incidentsArray.length()) {
+        val obj = incidentsArray.optJSONObject(i) ?: continue
+        incidents.add(
+            ClutchSlipIncident(
+                timestamp = obj.optLong("timestamp", 0L),
+                gear = obj.optInt("gear", 1),
+                peakSlipRpm = obj.optDouble("peakSlipRpm", 0.0),
+                peakTorqueNm = obj.optDouble("peakTorqueNm", 0.0),
+                speedKmh = obj.optDouble("speedKmh", 0.0),
+                durationSec = obj.optDouble("durationSec", 0.0),
+            )
+        )
+    }
+
+    return ClutchProfile(
+        lastResetTimestamp = json.optLong("lastResetTimestamp", 0L),
+        lastResetOdometer = json.optDouble("lastResetOdometer", 0.0),
+        currentOdometer = json.optDouble("currentOdometer", 0.0),
+        clutchHealthPercent = json.optDouble("clutchHealthPercent", 100.0),
+        accumulatedFrictionEnergyJoules = json.optDouble("accumulatedFrictionEnergyJoules", 0.0),
+        totalEngagementsCount = json.optInt("totalEngagementsCount", 0),
+        abnormalSlipCount = json.optInt("abnormalSlipCount", 0),
+        maxObservedTempC = json.optDouble("maxObservedTempC", 25.0),
+        estimatedTorqueCapacityNm = json.optDouble("estimatedTorqueCapacityNm", 277.0),
+        estimatedMilesRemaining = json.optInt("estimatedMilesRemaining", 120_000),
+        estimatedDaysRemaining =
+            if (json.isNull("estimatedDaysRemaining")) null
+            else json.optInt("estimatedDaysRemaining").takeIf { it > 0 },
+        estimatedShiftsRemaining = json.optInt("estimatedShiftsRemaining", 56_000),
+        conditionGrade = clutchGradeFromLabel(json.optString("conditionGrade")),
+        degradationBreakdown = ClutchWearBreakdown(
+            shiftWearPercent = breakdown.optDouble("shiftWearPercent", 0.0),
+            launchWearPercent = breakdown.optDouble("launchWearPercent", 0.0),
+            slipWearPercent = breakdown.optDouble("slipWearPercent", 0.0),
+            thermalGlazePenaltyPercent = breakdown.optDouble("thermalGlazePenaltyPercent", 0.0),
+        ),
+        recentIncidents = incidents,
+    )
+}
+
+private fun clutchGradeFromLabel(label: String?): ClutchConditionGrade =
+    ClutchConditionGrade.entries.firstOrNull { it.label == label } ?: ClutchConditionGrade.GOOD
 
 // ── Fuel blend ───────────────────────────────────────────────────────────────────
 
@@ -484,6 +595,7 @@ fun snapshotRecords(context: Context): JSONObject {
         .put("exportedAt", System.currentTimeMillis())
         .put(KEY_LIFETIME, prefs.getString(KEY_LIFETIME, null) ?: JSONObject.NULL)
         .put(KEY_OIL, prefs.getString(KEY_OIL, null) ?: JSONObject.NULL)
+        .put(KEY_CLUTCH, prefs.getString(KEY_CLUTCH, null) ?: JSONObject.NULL)
         .put(KEY_TANK, prefs.getString(KEY_TANK, null) ?: JSONObject.NULL)
         .put(KEY_FUEL_BLEND, prefs.getString(KEY_FUEL_BLEND, null) ?: JSONObject.NULL)
 }
@@ -512,6 +624,13 @@ fun restoreRecords(context: Context, backup: JSONObject): List<String> {
         runCatching { parseOilProfile(JSONObject(backup.getString(KEY_OIL))) }.getOrNull()?.let {
             PrefsOilProfileStore(context).save(it)
             messages += "oil life ${it.oilLifePercent.roundToInt()}%"
+        }
+    }
+
+    if (prefs.getString(KEY_CLUTCH, null) == null && !backup.isNull(KEY_CLUTCH)) {
+        runCatching { parseClutchProfile(JSONObject(backup.getString(KEY_CLUTCH))) }.getOrNull()?.let {
+            PrefsClutchProfileStore(context).save(it)
+            messages += "clutch health ${it.clutchHealthPercent.roundToInt()}%"
         }
     }
 

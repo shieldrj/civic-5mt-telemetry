@@ -16,6 +16,8 @@ import com.shieldrj.civic5mt.data.TripDatabase
 import com.shieldrj.civic5mt.data.TripRecorder
 import com.shieldrj.civic5mt.core.CivicSimulatorEngine
 import com.shieldrj.civic5mt.core.CivicSpecs
+import com.shieldrj.civic5mt.core.ClutchConditionGrade
+import com.shieldrj.civic5mt.core.ClutchHealthEngine
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.DtcScanner
 import com.shieldrj.civic5mt.core.Elm327Client
@@ -122,10 +124,12 @@ class TelemetryService : Service() {
         manager = TelemetryManager(
             lifetimeStore = PrefsLifetimeStore(applicationContext),
             oilLife = OilLifeEngine(PrefsOilProfileStore(applicationContext)),
+            clutchHealth = ClutchHealthEngine(PrefsClutchProfileStore(applicationContext)),
             tank = TankTracker(PrefsTankStore(applicationContext)),
         )
         TelemetryState.setLifetime(manager.getLifetimeStats())
         TelemetryState.setOil(manager.oilLife.getProfile())
+        TelemetryState.setClutch(manager.clutchHealth.getProfile())
 
         recorder = TripRecorder(TripDatabase.get(applicationContext).tripDao())
 
@@ -136,6 +140,7 @@ class TelemetryService : Service() {
         observeHudTheme()
         observeDrivingState()
         observeVoltageAlerts()
+        observeClutchAlerts()
         observeWidgetPushes()
     }
 
@@ -358,6 +363,94 @@ class TelemetryService : Service() {
         )
     }
 
+    private var lastSlipAlertAt = 0L
+    private var clutchWearAlerted = false
+
+    /**
+     * Warns the driver when clutch slip is detected or when clutch wear reaches critical threshold.
+     */
+    private fun observeClutchAlerts() {
+        scope.launch {
+            // Reset per-drive wear alert flag on connect
+            launch {
+                TelemetryState.connection.collect { status ->
+                    if (status == ConnectionStatus.CONNECTED || status == ConnectionStatus.SIMULATING) {
+                        clutchWearAlerted = false
+                    }
+                }
+            }
+
+            // 1. Real-time macro-slip notifications (debounced to once per 15s)
+            launch {
+                TelemetryState.metrics.collect { m ->
+                    val now = System.currentTimeMillis()
+                    if (m.clutchStatus.isMacroSlip && (now - lastSlipAlertAt >= SLIP_ALERT_DEBOUNCE_MS)) {
+                        lastSlipAlertAt = now
+                        postClutchSlipAlert(m.clutchStatus.slipRpm, m.currentGear.toString())
+                    }
+                }
+            }
+
+            // 2. Critical wear / service due notifications (once per drive)
+            launch {
+                TelemetryState.clutch.collect { c ->
+                    if (c != null && !clutchWearAlerted) {
+                        if (c.clutchHealthPercent <= 20.0 || c.conditionGrade == ClutchConditionGrade.CRITICAL) {
+                            clutchWearAlerted = true
+                            postClutchWearAlert(c.clutchHealthPercent)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun postClutchSlipAlert(slipRpm: Double, gear: String) {
+        val openClutch = PendingIntent.getActivity(
+            this,
+            101,
+            Intent(this, MainActivity::class.java).apply {
+                putExtra(EXTRA_OPEN_SCREEN, SCREEN_CLUTCH)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        getSystemService(NotificationManager::class.java).notify(
+            CLUTCH_SLIP_NOTIFICATION_ID,
+            Notification.Builder(this, ALERT_CHANNEL_ID)
+                .setContentTitle("Clutch Slip Detected")
+                .setContentText("Engine flaring +${slipRpm.toInt()} RPM in Gear $gear. Tap for analysis.")
+                .setSmallIcon(R.drawable.ic_stat_telemetry)
+                .setContentIntent(openClutch)
+                .setAutoCancel(true)
+                .build(),
+        )
+    }
+
+    private fun postClutchWearAlert(healthPercent: Double) {
+        val openClutch = PendingIntent.getActivity(
+            this,
+            102,
+            Intent(this, MainActivity::class.java).apply {
+                putExtra(EXTRA_OPEN_SCREEN, SCREEN_CLUTCH)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        getSystemService(NotificationManager::class.java).notify(
+            CLUTCH_WEAR_NOTIFICATION_ID,
+            Notification.Builder(this, ALERT_CHANNEL_ID)
+                .setContentTitle("Clutch Service Due · ${healthPercent.toInt()}%")
+                .setContentText("Clutch holding capacity is severely degraded. Inspection recommended.")
+                .setSmallIcon(R.drawable.ic_stat_telemetry)
+                .setContentIntent(openClutch)
+                .setAutoCancel(true)
+                .build(),
+        )
+    }
+
     /** Pushes tank figures to the home-screen widget, at most every thirty seconds. */
     private fun observeWidgetPushes() {
         scope.launch {
@@ -399,6 +492,11 @@ class TelemetryService : Service() {
 
             ACTION_RESET_OIL -> {
                 resetOilLife()
+                stopIfIdle()
+            }
+
+            ACTION_RESET_CLUTCH -> {
+                resetClutch()
                 stopIfIdle()
             }
 
@@ -704,6 +802,11 @@ class TelemetryService : Service() {
         TelemetryState.setStatusMessage("Oil life reset to 100%")
     }
 
+    private fun resetClutch() {
+        TelemetryState.setClutch(manager.clutchHealth.resetClutchProfile())
+        TelemetryState.setStatusMessage("Clutch health reset to 100%")
+    }
+
     /**
      * Stops the service if it was only started to carry out a one-off.
      *
@@ -752,6 +855,7 @@ class TelemetryService : Service() {
                 TelemetryState.setMetrics(snapshot.metrics)
                 TelemetryState.setTrip(snapshot.trip)
                 TelemetryState.setOil(snapshot.oil)
+                TelemetryState.setClutch(snapshot.clutch)
                 recorder.record(now, snapshot.metrics, snapshot.trip)
             }
         }
@@ -781,6 +885,7 @@ class TelemetryService : Service() {
             TelemetryState.setMetrics(snapshot.metrics)
             TelemetryState.setTrip(snapshot.trip)
             TelemetryState.setOil(snapshot.oil)
+            TelemetryState.setClutch(snapshot.clutch)
             TelemetryState.setLifetime(snapshot.lifetime)
             recorder.record(now, snapshot.metrics, snapshot.trip)
         }
@@ -914,6 +1019,7 @@ class TelemetryService : Service() {
         const val ACTION_SCAN_DTC = "com.shieldrj.civic5mt.SCAN_DTC"
         const val ACTION_CLEAR_DTC = "com.shieldrj.civic5mt.CLEAR_DTC"
         const val ACTION_RESET_OIL = "com.shieldrj.civic5mt.RESET_OIL"
+        const val ACTION_RESET_CLUTCH = "com.shieldrj.civic5mt.RESET_CLUTCH"
         const val ACTION_MARK_FILLED = "com.shieldrj.civic5mt.MARK_FILLED"
         const val ACTION_DISCONNECT = "com.shieldrj.civic5mt.DISCONNECT"
         const val EXTRA_DEVICE_ADDRESS = "deviceAddress"
@@ -921,9 +1027,13 @@ class TelemetryService : Service() {
         /** Deep-link extras: which screen an outside tap should land on. */
         const val EXTRA_OPEN_SCREEN = "open_screen"
         const val SCREEN_FUEL = "fuel"
+        const val SCREEN_CLUTCH = "clutch"
 
         private const val ALERT_CHANNEL_ID = "alerts"
         private const val VOLTAGE_NOTIFICATION_ID = 2
+        private const val CLUTCH_SLIP_NOTIFICATION_ID = 3
+        private const val CLUTCH_WEAR_NOTIFICATION_ID = 4
+        private const val SLIP_ALERT_DEBOUNCE_MS = 15_000L
 
         /** Above a walking pace counts as driving, for HUD visibility. */
         private const val MOVING_SPEED_MPH = 3.0
@@ -983,6 +1093,12 @@ class TelemetryService : Service() {
         fun resetOilLife(context: Context) {
             context.startService(
                 Intent(context, TelemetryService::class.java).apply { action = ACTION_RESET_OIL }
+            )
+        }
+
+        fun resetClutch(context: Context) {
+            context.startService(
+                Intent(context, TelemetryService::class.java).apply { action = ACTION_RESET_CLUTCH }
             )
         }
 

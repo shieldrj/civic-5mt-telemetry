@@ -71,10 +71,16 @@ fun DriveScreen(
         Spacer(Modifier.height(14.dp))
 
         // Vehicle Health Status Banner: Prominent, glanceable indicator that gives instant peace of mind.
-        // Tapping opens the Diagnostics screen directly.
+        // Tapping opens the Diagnostics screen or Clutch screen if clutch alert is active.
         HealthStatusBanner(
             status = metrics.healthStatus,
-            onClick = { onOpen(DetailScreen.Codes) },
+            onClick = {
+                if (metrics.healthStatus.summary.startsWith("CLUTCH")) {
+                    onOpen(DetailScreen.Clutch)
+                } else {
+                    onOpen(DetailScreen.Codes)
+                }
+            },
         )
 
         // The gauge floats in the space above; the supporting figures anchor to the bottom.
@@ -232,6 +238,7 @@ fun DriveScreen(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             NavLink("Fuel") { onOpen(DetailScreen.Fuel) }
+            NavLink("Clutch") { onOpen(DetailScreen.Clutch) }
             NavLink("Oil") { onOpen(DetailScreen.Oil) }
             NavLink("Codes") { onOpen(DetailScreen.Codes) }
             NavLink("Trips") { onOpen(DetailScreen.Trips) }

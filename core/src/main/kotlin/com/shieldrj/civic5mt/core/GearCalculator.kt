@@ -113,16 +113,21 @@ class GearCalculatorEngine(private val clock: MillisClock = SystemMillisClock) {
             else -> GearSelection.Clutch
         }
 
-        // Clutch slip: in gear, throttle open, RPM flaring, but the car is not accelerating
-        // with it. Confirmed over three consecutive ticks so one noisy sample cannot raise it.
+        // Clutch slip: in gear, throttle open, RPM diverging above theoretical locked ratio
+        // Confirmed over consecutive ticks so one noisy sample cannot raise it.
         var isClutchSlipping = false
-        if (detectedGear is GearSelection.Gear && throttlePercent > 35 && rpm > 2500) {
+        if (detectedGear is GearSelection.Gear && throttlePercent > 35 && rpm > 2000 && expectedRatio > 0) {
+            val expectedEngineRpm = wheelRpm * expectedRatio
+            val slipDeltaRpm = rpm - expectedEngineRpm
             val rpmRate = (rpm - previousRpm) / dt
             val speedRate = (speedKmh - previousSpeedKmh) / dt
 
-            if (rpmRate > 1200 && speedRate < 1.0) {
+            val isKinematicSlip = slipDeltaRpm > 150.0
+            val isFlareSlip = rpmRate > 1000.0 && speedRate < 1.2
+
+            if (isKinematicSlip || isFlareSlip) {
                 slipConfirmationCounter++
-                if (slipConfirmationCounter >= 3) {
+                if (slipConfirmationCounter >= 2) {
                     isClutchSlipping = true
                 }
             } else {

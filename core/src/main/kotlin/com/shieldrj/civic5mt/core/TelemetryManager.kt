@@ -24,6 +24,7 @@ class TelemetryManager(
     private val clock: MillisClock = SystemMillisClock,
     private val lifetimeStore: LifetimeStore = InMemoryLifetimeStore(),
     val oilLife: OilLifeEngine = OilLifeEngine(clock = clock),
+    val clutchHealth: ClutchHealthEngine = ClutchHealthEngine(clock = clock),
     val fuelModel: FuelModelEngine = FuelModelEngine(),
     val tank: TankTracker = TankTracker(clock = clock),
     val charging: ChargingMonitor = ChargingMonitor(),
@@ -158,22 +159,32 @@ class TelemetryManager(
             oilLife.getProfile()
         }
 
+        // 8. Clutch dynamics & physical wear tracking
+        val (clutchLive, clutchProfile) = clutchHealth.recordTelemetryStep(
+            rpm = raw.rpm,
+            speedKmh = raw.speedKmh,
+            throttlePercent = raw.throttlePos,
+            mafGramsPerSec = raw.maf,
+            lambda = raw.lambda,
+            timingAdvanceDeg = raw.timingAdvance,
+            gearSelection = gear.currentGear,
+            ambientTempC = raw.ambientC,
+            speedMph = speedMph,
+            dtSec = if (isRealDrive) integrationDtSec else dtSec,
+        )
+
         // The charging verdict is watched across the drive rather than read off this tick -
         // see ChargingMonitor for why a single sample cannot tell a backed-off alternator
         // from a broken one on this car.
-        //
-        // The permanent record's step, not the display one, and for the reason the record
-        // uses it: two of the three verdicts are durations, and a duration is only evidence
-        // if it was observed. A locked phone that stalls the loop for five minutes, or an
-        // adapter that stopped answering while every field carries its last value forward,
-        // would otherwise hand a single stale 12.1 the twenty seconds it needs to become a
-        // warning. A gap nobody watched is not twenty seconds of anything.
         charging.observe(raw.batteryVoltage, raw.rpm, integrationDtSec)
 
         val health = evaluateHealthStatus(
             rpm = raw.rpm,
             coolantF = coolantF,
-            isClutchSlipping = gear.isClutchSlipping,
+            isClutchSlipping = gear.isClutchSlipping || clutchLive.isSlipping,
+            clutchLive = clutchLive,
+            clutchProfile = clutchProfile,
+            gear = gear.currentGear,
             stft = raw.stft,
             ltft = raw.ltft,
         )
@@ -225,29 +236,37 @@ class TelemetryManager(
             tankBelowSenderZero = tankKnown && tankState.belowSenderZero,
             currentGear = gear.currentGear,
             gearRatio = roundTo(gear.calculatedRatio, 2),
-            isClutchSlipping = gear.isClutchSlipping,
+            isClutchSlipping = gear.isClutchSlipping || clutchLive.isSlipping,
             optimalShiftRpm = gear.optimalShiftRpm,
             shouldShiftUp = gear.shouldShiftUp,
             shiftLightStage = gear.shiftLightStage,
+            clutchStatus = clutchLive,
             healthStatus = health,
             timestamp = now,
         )
 
-        return TelemetrySnapshot(metrics = metrics, trip = trip, oil = oilProfile, lifetime = lifetime)
+        return TelemetrySnapshot(
+            metrics = metrics,
+            trip = trip,
+            oil = oilProfile,
+            lifetime = lifetime,
+            clutch = clutchProfile,
+        )
     }
 
     /**
      * The one line at the top of the Drive screen.
      *
      * Reads the charging verdict [charging] has already reached rather than judging the
-     * voltage here. The rule this replaced was `< 12.8V while running`, which on a car with
-     * Honda's Electrical Power Management describes an ordinary cruise - the ECM backs the
-     * alternator off into the twelves on purpose. See [ChargingRules].
+     * voltage here.
      */
     private fun evaluateHealthStatus(
         rpm: Double,
         coolantF: Int,
         isClutchSlipping: Boolean,
+        clutchLive: ClutchLiveStatus,
+        clutchProfile: ClutchProfile,
+        gear: GearSelection,
         stft: Double,
         ltft: Double,
     ): VehicleHealthStatus {
@@ -260,9 +279,6 @@ class TelemetryManager(
                 detail = "Coolant temperature critical. Pull over safely.",
             )
         }
-        // Above the coolant advisory, not below it as the old voltage rules were. A charging
-        // system that has actually failed outranks a coolant reading ten degrees warm, and
-        // burying it under one meant the more urgent banner was the one that never showed.
         if (chargingStatus?.level == HealthLevel.CRITICAL) return chargingStatus
         if (coolantF >= 215) {
             return VehicleHealthStatus(
@@ -272,11 +288,25 @@ class TelemetryManager(
             )
         }
         if (chargingStatus != null) return chargingStatus
+        if (clutchLive.isMacroSlip) {
+            return VehicleHealthStatus(
+                level = HealthLevel.ADVISORY,
+                summary = "CLUTCH SLIP DETECTED · Gear $gear (+${clutchLive.slipRpm.toInt()} RPM)",
+                detail = "Engine RPM flaring under throttle without matching vehicle acceleration.",
+            )
+        }
         if (isClutchSlipping) {
             return VehicleHealthStatus(
                 level = HealthLevel.ADVISORY,
                 summary = "CLUTCH SLIP DETECTED",
                 detail = "Engine RPM rising without proportional vehicle speed gain in gear.",
+            )
+        }
+        if (clutchProfile.conditionGrade == ClutchConditionGrade.CRITICAL) {
+            return VehicleHealthStatus(
+                level = HealthLevel.ADVISORY,
+                summary = "CLUTCH SERVICE DUE · ${clutchProfile.clutchHealthPercent.toInt()}%",
+                detail = "Clutch holding capacity severely degraded. Inspection recommended.",
             )
         }
         val totalTrim = stft + ltft
@@ -303,7 +333,7 @@ class TelemetryManager(
         return VehicleHealthStatus(
             level = HealthLevel.OK,
             summary = "ALL SYSTEMS OK",
-            detail = "Engine temperature and electrical charging are nominal.",
+            detail = "Engine temperature, clutch transmission and charging are nominal.",
         )
     }
 
@@ -411,6 +441,7 @@ class TelemetryManager(
     fun flush() {
         lifetimeStore.save(lifetime)
         oilLife.saveProfile()
+        clutchHealth.saveProfile()
         tank.flush()
     }
 

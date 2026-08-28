@@ -101,6 +101,7 @@ data class LiveMetrics(
     val shouldShiftUp: Boolean = false,
     /** 0 to 5, progressive shift-light stages. */
     val shiftLightStage: Int = 0,
+    val clutchStatus: ClutchLiveStatus = ClutchLiveStatus(),
 
     // Vehicle Health Status
     val healthStatus: VehicleHealthStatus = VehicleHealthStatus(),
@@ -144,6 +145,7 @@ data class TelemetrySnapshot(
     val trip: TripAnalytics,
     val oil: OilLifeProfile,
     val lifetime: LifetimeStats,
+    val clutch: ClutchProfile,
 )
 
 /**

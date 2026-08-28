@@ -182,6 +182,19 @@ object CivicSpecs {
     )
     const val POWER_SHIFT_POINT_RPM: Int = 6500 // Near peak horsepower (6,500 RPM @ 143 hp)
 
+    // Clutch & Manual Transmission Physical Constants (2013 Civic 5MT / R18Z1)
+    const val CLUTCH_DISC_DIAMETER_MM: Int = 212 // Stock Exedy / Honda OEM 212mm disc
+    const val CLUTCH_MEAN_RADIUS_METERS: Double = 0.088 // Effective friction radius Rm ~88mm
+    const val CLUTCH_NOMINAL_CLAMPING_FORCE_N: Double = 4500.0 // Diaphragm spring nominal clamp load
+    const val CLUTCH_NOMINAL_FRICTION_COEFF: Double = 0.35 // Organic friction facing mu
+    const val CLUTCH_NEW_TORQUE_CAPACITY_NM: Double = 277.0 // 2 * mu * Fn * Rm (~1.59x safety margin over peak engine torque)
+    const val ENGINE_PEAK_TORQUE_NM: Double = 174.0 // R18Z1 peak engine torque @ 4300 RPM
+    const val BASELINE_CLUTCH_LIFETIME_JOULES: Double = 42_000_000.0 // ~42 MJ nominal lifecycle friction energy
+    const val CLUTCH_THERMAL_MASS_J_PER_K: Double = 4500.0 // Flywheel + pressure plate friction face thermal capacity
+    const val CLUTCH_COOLING_COEFF_W_PER_K: Double = 18.0 // Convective bellhousing dissipation rate
+    const val CLUTCH_NORMAL_TEMP_THRESHOLD_C: Double = 130.0 // Below this is standard wear
+    const val CLUTCH_GLAZE_TEMP_THRESHOLD_C: Double = 200.0 // Above this accelerates thermal wear & glazing
+
     // Oil Life Baseline Constants
     const val OIL_CAPACITY_QUARTS: Double = 3.9
     const val BASELINE_OIL_LIFE_MILES: Double = 7500.0 // Full synthetic normal duty interval

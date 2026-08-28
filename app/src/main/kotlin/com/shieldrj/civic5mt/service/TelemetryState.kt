@@ -1,5 +1,6 @@
 package com.shieldrj.civic5mt.service
 
+import com.shieldrj.civic5mt.core.ClutchProfile
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.DtcScanReport
 import com.shieldrj.civic5mt.core.FuelBlendId
@@ -45,6 +46,9 @@ object TelemetryState {
 
     private val _oil = MutableStateFlow<OilLifeProfile?>(null)
     val oil: StateFlow<OilLifeProfile?> = _oil.asStateFlow()
+
+    private val _clutch = MutableStateFlow<ClutchProfile?>(null)
+    val clutch: StateFlow<ClutchProfile?> = _clutch.asStateFlow()
 
     private val _lifetime = MutableStateFlow(LifetimeStats())
     val lifetime: StateFlow<LifetimeStats> = _lifetime.asStateFlow()
@@ -155,6 +159,10 @@ object TelemetryState {
 
     internal fun setOil(oil: OilLifeProfile) {
         _oil.value = oil
+    }
+
+    internal fun setClutch(clutch: ClutchProfile) {
+        _clutch.value = clutch
     }
 
     internal fun setLifetime(stats: LifetimeStats) {
