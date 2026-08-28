@@ -88,62 +88,82 @@ fun RadialGauge(
             val cy = this.size.height / 2f
             // The dial sits inside the box with room for the ticks, which sit outside the arc.
             val radius = min(cx, cy) - this.size.width * 0.09f
-
-            fun coord(r: Float, deg: Float): Offset {
-                val rad = Math.toRadians(deg.toDouble())
-                return Offset(cx + r * cos(rad).toFloat(), cy + r * sin(rad).toFloat())
-            }
-
-            fun arc(color: Color, startDeg: Float, sweepDeg: Float, width: Float) {
-                drawArc(
-                    color = color,
-                    startAngle = startDeg,
-                    sweepAngle = sweepDeg,
-                    useCenter = false,
-                    topLeft = Offset(cx - radius, cy - radius),
-                    size = Size(radius * 2, radius * 2),
-                    style = Stroke(width = width, cap = StrokeCap.Butt),
-                )
-            }
+            val arcTopLeft = Offset(cx - radius, cy - radius)
+            val arcDimensions = Size(radius * 2f, radius * 2f)
 
             val hairline = this.size.width * 0.0068f
             val valueWidth = this.size.width * (if (isHero) 0.0136f else 0.0114f)
 
             // Track.
-            arc(CivicColors.GaugeTrack, START_ANGLE, TOTAL_SWEEP, hairline)
+            drawArc(
+                color = CivicColors.GaugeTrack,
+                startAngle = START_ANGLE,
+                sweepAngle = TOTAL_SWEEP,
+                useCenter = false,
+                topLeft = arcTopLeft,
+                size = arcDimensions,
+                style = Stroke(width = hairline, cap = StrokeCap.Butt),
+            )
 
             // Redline: a hairline in the alert colour. It marks where the scale changes
             // meaning without occupying the scale.
             if (redlineStart != null && redlineStart < max) {
                 val redStart = START_ANGLE + ((redlineStart - min) / (max - min)) * TOTAL_SWEEP
-                arc(CivicColors.Accent, redStart, START_ANGLE + TOTAL_SWEEP - redStart, hairline)
+                drawArc(
+                    color = CivicColors.Accent,
+                    startAngle = redStart,
+                    sweepAngle = START_ANGLE + TOTAL_SWEEP - redStart,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcDimensions,
+                    style = Stroke(width = hairline, cap = StrokeCap.Butt),
+                )
             }
 
             // Value.
             if (ratio > 0.004f) {
-                arc(accentColor, START_ANGLE, TOTAL_SWEEP * ratio, valueWidth)
+                drawArc(
+                    color = accentColor,
+                    startAngle = START_ANGLE,
+                    sweepAngle = TOTAL_SWEEP * ratio,
+                    useCenter = false,
+                    topLeft = arcTopLeft,
+                    size = arcDimensions,
+                    style = Stroke(width = valueWidth, cap = StrokeCap.Butt),
+                )
             }
 
             // Three ticks: the ends and the middle. Enough to read the scale and no more.
             // Unlabelled, because the numeral in the centre is the reading and five small
             // numbers around the rim were competing with it.
-            ticks.forEach { t ->
+            val tickInnerR = radius + this.size.width * 0.027f
+            val tickOuterR = radius + this.size.width * 0.055f
+            val tickStroke = this.size.width * 0.0045f
+            for (t in ticks) {
                 val deg = START_ANGLE + ((t - min) / (max - min)) * TOTAL_SWEEP
+                val rad = Math.toRadians(deg.toDouble())
+                val cosR = cos(rad).toFloat()
+                val sinR = sin(rad).toFloat()
                 drawLine(
                     color = CivicColors.GaugeTick,
-                    start = coord(radius + this.size.width * 0.027f, deg),
-                    end = coord(radius + this.size.width * 0.055f, deg),
-                    strokeWidth = this.size.width * 0.0045f,
+                    start = Offset(cx + tickInnerR * cosR, cy + tickInnerR * sinR),
+                    end = Offset(cx + tickOuterR * cosR, cy + tickOuterR * sinR),
+                    strokeWidth = tickStroke,
                 )
             }
 
             // The hand. Crosses the track, so it points at the scale.
             if (overrideValue == null) {
                 val deg = START_ANGLE + TOTAL_SWEEP * ratio
+                val rad = Math.toRadians(deg.toDouble())
+                val cosR = cos(rad).toFloat()
+                val sinR = sin(rad).toFloat()
+                val handInnerR = radius - this.size.width * 0.036f
+                val handOuterR = radius + this.size.width * 0.009f
                 drawLine(
                     color = accentColor,
-                    start = coord(radius - this.size.width * 0.036f, deg),
-                    end = coord(radius + this.size.width * 0.009f, deg),
+                    start = Offset(cx + handInnerR * cosR, cy + handInnerR * sinR),
+                    end = Offset(cx + handOuterR * cosR, cy + handOuterR * sinR),
                     strokeWidth = this.size.width * (if (isHero) 0.0102f else 0.0091f),
                     cap = StrokeCap.Butt,
                 )

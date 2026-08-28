@@ -52,197 +52,372 @@ fun DriveScreen(
     onStop: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
+    androidx.compose.foundation.layout.BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
             .safeDrawingPadding()
-            .padding(horizontal = 20.dp, vertical = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        ShiftLightBar(
-            rpm = metrics.rpm,
-            stage = metrics.shiftLightStage,
-            shiftMode = shiftMode,
-            shouldShiftUp = metrics.shouldShiftUp,
-            currentGear = metrics.currentGear,
-            onToggleMode = onToggleShiftMode,
-        )
+        val isLandscape = maxWidth > maxHeight
 
-        Spacer(Modifier.height(14.dp))
+        if (isLandscape) {
+            Row(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 24.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Left Column: Shift light, Health banner, Hero Tank Gauge & Range
+                Column(
+                    modifier = Modifier
+                        .weight(1.1f)
+                        .fillMaxSize(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    ShiftLightBar(
+                        rpm = metrics.rpm,
+                        stage = metrics.shiftLightStage,
+                        shiftMode = shiftMode,
+                        shouldShiftUp = metrics.shouldShiftUp,
+                        currentGear = metrics.currentGear,
+                        onToggleMode = onToggleShiftMode,
+                    )
 
-        // Vehicle Health Status Banner: Prominent, glanceable indicator that gives instant peace of mind.
-        // Tapping opens the Diagnostics screen or Clutch screen if clutch alert is active.
-        HealthStatusBanner(
-            status = metrics.healthStatus,
-            onClick = {
-                if (metrics.healthStatus.summary.startsWith("CLUTCH")) {
-                    onOpen(DetailScreen.Clutch)
-                } else {
-                    onOpen(DetailScreen.Codes)
+                    HealthStatusBanner(
+                        status = metrics.healthStatus,
+                        onClick = {
+                            if (metrics.healthStatus.summary.startsWith("CLUTCH")) {
+                                onOpen(DetailScreen.Clutch)
+                            } else {
+                                onOpen(DetailScreen.Codes)
+                            }
+                        },
+                    )
+
+                    RadialGauge(
+                        value = (metrics.tankMpg ?: 0.0).toFloat(),
+                        min = 0f,
+                        max = 50f,
+                        title = "This tank",
+                        unit = "MPG",
+                        overrideValue = if (metrics.tankMpg == null) "—" else null,
+                        subValue = metrics.tankMilesSinceFill?.let { "%.0f mi on this tank".format(it) },
+                        ticks = listOf(0f, 25f, 50f),
+                        size = 200.dp,
+                        isHero = true,
+                    )
+
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        if (metrics.tankBelowSenderZero && metrics.fuelRangeMiles != null) {
+                            Text(
+                                text = "under ",
+                                color = CivicColors.Ink3,
+                                fontSize = 12.sp,
+                                modifier = Modifier.alignByBaseline(),
+                            )
+                        }
+                        Text(
+                            text = metrics.fuelRangeMiles?.toString() ?: "—",
+                            color = CivicColors.Ink,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.Light,
+                            modifier = Modifier.alignByBaseline(),
+                        )
+                        Text(
+                            text = " miles to empty",
+                            color = CivicColors.Ink3,
+                            fontSize = 12.sp,
+                            modifier = Modifier.alignByBaseline(),
+                        )
+                    }
                 }
-            },
-        )
 
-        // The gauge floats in the space above; the supporting figures anchor to the bottom.
-        Spacer(Modifier.weight(1f))
+                // Right Column: Vitals, Trip, and Navigation
+                Column(
+                    modifier = Modifier
+                        .weight(1.2f)
+                        .fillMaxSize(),
+                    verticalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    // Secondary vitals row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                    ) {
+                        val coolantColor = when {
+                            metrics.coolantTempF >= 225 -> CivicColors.Accent
+                            metrics.coolantTempF >= 212 -> CivicColors.Warn
+                            metrics.coolantTempF < 160 && metrics.coolantTempF > 32 -> CivicColors.Cold
+                            metrics.coolantTempF >= 160 -> CivicColors.Good
+                            else -> CivicColors.Ink
+                        }
+                        Stat(
+                            label = "Coolant",
+                            value = if (metrics.coolantTempF > 0) "${metrics.coolantTempF}" else "—",
+                            unit = if (metrics.coolantTempF > 0) "°F" else "",
+                            color = coolantColor,
+                        )
 
-        /*
-         * The hero is the tank, not the moment.
-         */
-        RadialGauge(
-            value = (metrics.tankMpg ?: 0.0).toFloat(),
-            min = 0f,
-            max = 50f,
-            title = "This tank",
-            unit = "MPG",
-            overrideValue = if (metrics.tankMpg == null) "—" else null,
-            subValue = metrics.tankMilesSinceFill?.let { "%.0f mi on this tank".format(it) },
-            ticks = listOf(0f, 25f, 50f),
-            size = 260.dp,
-            isHero = true,
-        )
+                        val volts = metrics.batteryVoltage
+                        val voltageColor = when {
+                            volts == null -> CivicColors.Ink
+                            metrics.rpm >= CivicSpecs.ENGINE_RUNNING_RPM &&
+                                volts < ChargingRules.CRITICAL_VOLTS &&
+                                volts > ChargingRules.MIN_PLAUSIBLE_VOLTS -> CivicColors.Accent
+                            metrics.rpm >= CivicSpecs.ENGINE_RUNNING_RPM &&
+                                volts < ChargingRules.DRAIN_VOLTS &&
+                                volts > ChargingRules.MIN_PLAUSIBLE_VOLTS -> CivicColors.Warn
+                            volts >= ChargingRules.HIGH_OUTPUT_VOLTS -> CivicColors.Good
+                            else -> CivicColors.Ink
+                        }
+                        Stat(
+                            label = "Charging",
+                            value = volts?.let { "%.2f".format(it) } ?: "—",
+                            unit = if (volts != null) "V" else "",
+                            color = voltageColor,
+                        )
 
-        Spacer(Modifier.height(12.dp))
+                        Stat(
+                            label = "Speed",
+                            value = if (metrics.speedMph >= 0) "%.0f".format(metrics.speedMph) else "—",
+                            unit = "MPH",
+                            color = CivicColors.Ink,
+                        )
+                    }
 
-        // Range, directly under the tank figure: stable, non-swinging miles to empty.
-        //
-        // Stable is the point everywhere except at the bottom of the tank, where it stops
-        // being a virtue: under the sender's zero the figure holds still because nothing is
-        // measuring it any more, not because the fuel is lasting. It is labelled as a
-        // ceiling there. See TankState.belowSenderZero.
-        Row(verticalAlignment = Alignment.Bottom) {
-            if (metrics.tankBelowSenderZero && metrics.fuelRangeMiles != null) {
-                Text(
-                    text = "under ",
-                    color = CivicColors.Ink3,
-                    fontSize = 13.sp,
-                    modifier = Modifier.alignByBaseline(),
+                    Hairline()
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = "%.1f mi · %.1f mpg trip".format(trip.distanceMiles, trip.avgMpg),
+                            color = CivicColors.Ink2,
+                            fontSize = 12.sp,
+                        )
+                        Text(
+                            text = if (lifetime.totalMiles > 0) {
+                                "%.1f mpg lifetime".format(lifetime.lifetimeMpg)
+                            } else {
+                                "No lifetime record"
+                            },
+                            color = CivicColors.Ink3,
+                            fontSize = 12.sp,
+                        )
+                    }
+
+                    if (connection == ConnectionStatus.SIMULATING) {
+                        Text(
+                            text = "SIMULATED — NOT RECORDED",
+                            color = CivicColors.Warn,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            letterSpacing = 1.4.sp,
+                        )
+                    }
+
+                    if (connection == ConnectionStatus.RECONNECTING) {
+                        Text(
+                            text = "ADAPTER LOST — RECONNECTING",
+                            color = CivicColors.Warn,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            letterSpacing = 1.4.sp,
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        NavLink("Fuel") { onOpen(DetailScreen.Fuel) }
+                        NavLink("Clutch") { onOpen(DetailScreen.Clutch) }
+                        NavLink("Oil") { onOpen(DetailScreen.Oil) }
+                        NavLink("Codes") { onOpen(DetailScreen.Codes) }
+                        NavLink("Trips") { onOpen(DetailScreen.Trips) }
+                        NavLink("Stop", CivicColors.Accent, onStop)
+                    }
+                }
+            }
+        } else {
+            // Portrait layout
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 20.dp, vertical = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                ShiftLightBar(
+                    rpm = metrics.rpm,
+                    stage = metrics.shiftLightStage,
+                    shiftMode = shiftMode,
+                    shouldShiftUp = metrics.shouldShiftUp,
+                    currentGear = metrics.currentGear,
+                    onToggleMode = onToggleShiftMode,
                 )
+
+                Spacer(Modifier.height(14.dp))
+
+                HealthStatusBanner(
+                    status = metrics.healthStatus,
+                    onClick = {
+                        if (metrics.healthStatus.summary.startsWith("CLUTCH")) {
+                            onOpen(DetailScreen.Clutch)
+                        } else {
+                            onOpen(DetailScreen.Codes)
+                        }
+                    },
+                )
+
+                Spacer(Modifier.weight(1f))
+
+                RadialGauge(
+                    value = (metrics.tankMpg ?: 0.0).toFloat(),
+                    min = 0f,
+                    max = 50f,
+                    title = "This tank",
+                    unit = "MPG",
+                    overrideValue = if (metrics.tankMpg == null) "—" else null,
+                    subValue = metrics.tankMilesSinceFill?.let { "%.0f mi on this tank".format(it) },
+                    ticks = listOf(0f, 25f, 50f),
+                    size = 260.dp,
+                    isHero = true,
+                )
+
+                Spacer(Modifier.height(12.dp))
+
+                Row(verticalAlignment = Alignment.Bottom) {
+                    if (metrics.tankBelowSenderZero && metrics.fuelRangeMiles != null) {
+                        Text(
+                            text = "under ",
+                            color = CivicColors.Ink3,
+                            fontSize = 13.sp,
+                            modifier = Modifier.alignByBaseline(),
+                        )
+                    }
+                    Text(
+                        text = metrics.fuelRangeMiles?.toString() ?: "—",
+                        color = CivicColors.Ink,
+                        fontSize = 30.sp,
+                        fontWeight = FontWeight.Light,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                    Text(
+                        text = " miles to empty",
+                        color = CivicColors.Ink3,
+                        fontSize = 13.sp,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                }
+
+                Spacer(Modifier.weight(1f))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                ) {
+                    val coolantColor = when {
+                        metrics.coolantTempF >= 225 -> CivicColors.Accent
+                        metrics.coolantTempF >= 212 -> CivicColors.Warn
+                        metrics.coolantTempF < 160 && metrics.coolantTempF > 32 -> CivicColors.Cold
+                        metrics.coolantTempF >= 160 -> CivicColors.Good
+                        else -> CivicColors.Ink
+                    }
+                    Stat(
+                        label = "Coolant",
+                        value = if (metrics.coolantTempF > 0) "${metrics.coolantTempF}" else "—",
+                        unit = if (metrics.coolantTempF > 0) "°F" else "",
+                        color = coolantColor,
+                    )
+
+                    val volts = metrics.batteryVoltage
+                    val voltageColor = when {
+                        volts == null -> CivicColors.Ink
+                        metrics.rpm >= CivicSpecs.ENGINE_RUNNING_RPM &&
+                            volts < ChargingRules.CRITICAL_VOLTS &&
+                            volts > ChargingRules.MIN_PLAUSIBLE_VOLTS -> CivicColors.Accent
+                        metrics.rpm >= CivicSpecs.ENGINE_RUNNING_RPM &&
+                            volts < ChargingRules.DRAIN_VOLTS &&
+                            volts > ChargingRules.MIN_PLAUSIBLE_VOLTS -> CivicColors.Warn
+                        volts >= ChargingRules.HIGH_OUTPUT_VOLTS -> CivicColors.Good
+                        else -> CivicColors.Ink
+                    }
+                    Stat(
+                        label = "Charging",
+                        value = volts?.let { "%.2f".format(it) } ?: "—",
+                        unit = if (volts != null) "V" else "",
+                        color = voltageColor,
+                    )
+                }
+
+                Spacer(Modifier.height(18.dp))
+                Hairline()
+                Spacer(Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "%.1f mi · %.1f mpg trip".format(trip.distanceMiles, trip.avgMpg),
+                        color = CivicColors.Ink2,
+                        fontSize = 13.sp,
+                    )
+                    Text(
+                        text = if (lifetime.totalMiles > 0) {
+                            "%.1f mpg lifetime".format(lifetime.lifetimeMpg)
+                        } else {
+                            "No lifetime record yet"
+                        },
+                        color = CivicColors.Ink3,
+                        fontSize = 13.sp,
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+
+                if (connection == ConnectionStatus.SIMULATING) {
+                    Text(
+                        text = "SIMULATED — NOT RECORDED",
+                        color = CivicColors.Warn,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = 1.6.sp,
+                    )
+                }
+
+                if (connection == ConnectionStatus.RECONNECTING) {
+                    Text(
+                        text = "ADAPTER LOST — RECONNECTING",
+                        color = CivicColors.Warn,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = 1.6.sp,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = "Readings below are the last ones received. The drive is still open.",
+                        color = CivicColors.Ink3,
+                        fontSize = 12.sp,
+                    )
+                }
+
+                Spacer(Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    NavLink("Fuel") { onOpen(DetailScreen.Fuel) }
+                    NavLink("Clutch") { onOpen(DetailScreen.Clutch) }
+                    NavLink("Oil") { onOpen(DetailScreen.Oil) }
+                    NavLink("Codes") { onOpen(DetailScreen.Codes) }
+                    NavLink("Trips") { onOpen(DetailScreen.Trips) }
+                    NavLink("Stop", CivicColors.Accent, onStop)
+                }
             }
-            Text(
-                text = metrics.fuelRangeMiles?.toString() ?: "—",
-                color = CivicColors.Ink,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Light,
-                modifier = Modifier.alignByBaseline(),
-            )
-            Text(
-                text = " miles to empty",
-                color = CivicColors.Ink3,
-                fontSize = 13.sp,
-                modifier = Modifier.alignByBaseline(),
-            )
-        }
-
-        Spacer(Modifier.weight(1f))
-
-        // Vitals: Coolant and Charging Voltage only with semantic health colors.
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-        ) {
-            val coolantColor = when {
-                metrics.coolantTempF >= 225 -> CivicColors.Accent
-                metrics.coolantTempF >= 212 -> CivicColors.Warn
-                metrics.coolantTempF < 160 && metrics.coolantTempF > 32 -> CivicColors.Cold
-                metrics.coolantTempF >= 160 -> CivicColors.Good
-                else -> CivicColors.Ink
-            }
-            Stat(
-                label = "Coolant",
-                value = if (metrics.coolantTempF > 0) "${metrics.coolantTempF}" else "—",
-                unit = if (metrics.coolantTempF > 0) "°F" else "",
-                color = coolantColor,
-            )
-
-            // Colour follows the same rules as the banner, and for the same reason: on this
-            // car the ECM parks the alternator in the twelves at cruise on purpose, so
-            // painting every reading under 12.8 amber painted an ordinary drive amber. Only
-            // a reading under a rested battery is worth a colour. See ChargingRules.
-            val volts = metrics.batteryVoltage
-            val voltageColor = when {
-                volts == null -> CivicColors.Ink
-                metrics.rpm >= CivicSpecs.ENGINE_RUNNING_RPM &&
-                    volts < ChargingRules.CRITICAL_VOLTS &&
-                    volts > ChargingRules.MIN_PLAUSIBLE_VOLTS -> CivicColors.Accent
-                metrics.rpm >= CivicSpecs.ENGINE_RUNNING_RPM &&
-                    volts < ChargingRules.DRAIN_VOLTS &&
-                    volts > ChargingRules.MIN_PLAUSIBLE_VOLTS -> CivicColors.Warn
-                volts >= ChargingRules.HIGH_OUTPUT_VOLTS -> CivicColors.Good
-                else -> CivicColors.Ink
-            }
-            Stat(
-                label = "Charging",
-                value = volts?.let { "%.2f".format(it) } ?: "—",
-                unit = if (volts != null) "V" else "",
-                color = voltageColor,
-            )
-        }
-
-        Spacer(Modifier.height(18.dp))
-        Hairline()
-        Spacer(Modifier.height(14.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Text(
-                text = "%.1f mi · %.1f mpg trip".format(trip.distanceMiles, trip.avgMpg),
-                color = CivicColors.Ink2,
-                fontSize = 13.sp,
-            )
-            Text(
-                text = if (lifetime.totalMiles > 0) {
-                    "%.1f mpg lifetime".format(lifetime.lifetimeMpg)
-                } else {
-                    "No lifetime record yet"
-                },
-                color = CivicColors.Ink3,
-                fontSize = 13.sp,
-            )
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        if (connection == ConnectionStatus.SIMULATING) {
-            Text(
-                text = "SIMULATED — NOT RECORDED",
-                color = CivicColors.Warn,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 1.6.sp,
-            )
-        }
-
-        if (connection == ConnectionStatus.RECONNECTING) {
-            Text(
-                text = "ADAPTER LOST — RECONNECTING",
-                color = CivicColors.Warn,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 1.6.sp,
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "Readings below are the last ones received. The drive is still open.",
-                color = CivicColors.Ink3,
-                fontSize = 12.sp,
-            )
-        }
-
-        Spacer(Modifier.height(14.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            NavLink("Fuel") { onOpen(DetailScreen.Fuel) }
-            NavLink("Clutch") { onOpen(DetailScreen.Clutch) }
-            NavLink("Oil") { onOpen(DetailScreen.Oil) }
-            NavLink("Codes") { onOpen(DetailScreen.Codes) }
-            NavLink("Trips") { onOpen(DetailScreen.Trips) }
-            NavLink("Stop", CivicColors.Accent, onStop)
         }
     }
 }
