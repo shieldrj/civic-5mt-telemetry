@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class ClutchHealthModelTest {
@@ -17,35 +18,47 @@ class ClutchHealthModelTest {
         }
     }
 
-    private fun createEngine(clock: MutableClock = MutableClock()): ClutchHealthEngine {
-        val store = InMemoryClutchProfileStore()
-        return ClutchHealthEngine(store = store, clock = clock)
-    }
+    private fun createEngine(clock: MutableClock = MutableClock()): ClutchHealthEngine =
+        ClutchHealthEngine(store = InMemoryClutchProfileStore(), clock = clock)
+
+    /** Locked engine speed for a gear at a road speed, straight from the geometry. */
+    private fun lockedRpm(gear: Int, speedKmh: Double): Double =
+        (speedKmh / 60.0) / CivicSpecs.TIRE_CIRCUMFERENCE_KM *
+            CivicSpecs.GEAR_RATIOS.getValue(gear) * CivicSpecs.FINAL_DRIVE_RATIO
 
     @Nested
     @DisplayName("Torque and Kinematics Estimation")
     inner class Kinematics {
 
         @Test
-        fun `Brake torque scales properly with MAF and engine speed`() {
+        fun `Brake torque is what leaves the crankshaft, not what the combustion made`() {
             val engine = createEngine()
-            // At idle: low MAF (~2.4 g/s), ~750 RPM -> low torque
+            // An idling engine is producing nothing at the flywheel: everything it makes is
+            // spent turning itself over. Before pumping and rubbing losses were subtracted
+            // this read ~36 Nm, which the clutch model then spent on imaginary slip.
             val idleTorque = engine.estimateBrakeTorqueNm(750.0, 2.4, 1.0, 15.0)
-            assertTrue(idleTorque in 10.0..35.0, "Idle torque was $idleTorque")
+            assertTrue(idleTorque in 0.0..25.0, "Idle torque was $idleTorque")
 
-            // Peak torque regime: ~4300 RPM, high MAF (~75 g/s)
             val peakTorque = engine.estimateBrakeTorqueNm(4300.0, 75.0, 0.90, 24.0)
-            assertTrue(peakTorque in 150.0..174.0, "Peak torque was $peakTorque")
+            assertTrue(peakTorque in 145.0..CivicSpecs.ENGINE_PEAK_TORQUE_NM, "Peak torque was $peakTorque")
+        }
+
+        @Test
+        fun `Part-load timing advance is not treated as a fault`() {
+            val engine = createEngine()
+            // A cruising R18Z1 runs 35-45 degrees of advance because that is efficient. The
+            // old symmetric curve about 24 degrees docked it ~19% for doing so.
+            val cruising = engine.estimateBrakeTorqueNm(2200.0, 12.0, 1.0, 38.0)
+            val reference = engine.estimateBrakeTorqueNm(2200.0, 12.0, 1.0, 24.0)
+            assertEquals(reference, cruising, absoluteTolerance = 0.01)
         }
 
         @Test
         fun `Locked cruise in 5th gear shows zero slip and locked classification`() {
             val engine = createEngine()
-            // 5th gear (0.727 * 4.294 = 3.1217 total ratio)
-            // At 115 km/h: wheel RPM = (115/60)/0.0019933 = 961.55 -> engine RPM ~ 3001 RPM
             val (status, _) = engine.recordTelemetryStep(
-                rpm = 3000.0,
-                speedKmh = 114.93,
+                rpm = lockedRpm(5, 115.0),
+                speedKmh = 115.0,
                 throttlePercent = 20.0,
                 mafGramsPerSec = 14.0,
                 lambda = 1.0,
@@ -58,8 +71,74 @@ class ClutchHealthModelTest {
 
             assertEquals(SlipClassification.LOCKED, status.classification)
             assertFalse(status.isSlipping)
-            assertFalse(status.isMacroSlip)
-            assertTrue(status.slipRpm in -30.0..30.0)
+            assertTrue(status.slipRpm in -5.0..5.0)
+        }
+    }
+
+    @Nested
+    @DisplayName("A stationary car is not wearing its clutch")
+    inner class Stationary {
+
+        /** Five minutes of cold fast idle on the driveway, in neutral, foot nowhere near it. */
+        private fun warmUp(engine: ClutchHealthEngine, clock: MutableClock, rpm: Double, seconds: Int) {
+            repeat(seconds * 25 / 2) {
+                clock.advanceSec(0.08)
+                engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = 0.0,
+                    throttlePercent = CivicSpecs.CLOSED_THROTTLE_BASELINE_PERCENT,
+                    mafGramsPerSec = 5.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 12.0,
+                    gearSelection = GearSelection.Neutral,
+                    ambientTempC = 20.0,
+                    speedMph = 0.0,
+                    dtSec = 0.08,
+                )
+            }
+        }
+
+        @Test
+        fun `Cold fast idle on the driveway costs the clutch nothing`() {
+            val clock = MutableClock()
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            // 1300 RPM is an ordinary cold idle on this engine, and comfortably above the
+            // idle+100 that the model used to read as launch slip. Fifteen minutes of it
+            // burned 40% of the modelled clutch life and left the disc permanently glazed.
+            warmUp(engine, clock, rpm = 1300.0, seconds = 900)
+
+            val p = engine.getProfile()
+            assertEquals(0.0, p.accumulatedFrictionEnergyJoules)
+            assertEquals(100.0, p.clutchHealthPercent)
+            assertEquals(0.0, p.degradationBreakdown.thermalGlazePenaltyPercent)
+            assertTrue(p.maxObservedTempC <= 25.0, "Disc heated to ${p.maxObservedTempC}C while parked")
+        }
+
+        @Test
+        fun `Revving in neutral at a red light costs the clutch nothing`() {
+            val clock = MutableClock()
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            repeat(50) {
+                clock.advanceSec(0.08)
+                engine.recordTelemetryStep(
+                    rpm = 3500.0,
+                    speedKmh = 0.0,
+                    throttlePercent = 45.0,
+                    mafGramsPerSec = 25.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 20.0,
+                    gearSelection = GearSelection.Neutral,
+                    ambientTempC = 20.0,
+                    speedMph = 0.0,
+                    dtSec = 0.08,
+                )
+            }
+
+            assertEquals(0.0, engine.getProfile().accumulatedFrictionEnergyJoules)
         }
     }
 
@@ -84,62 +163,193 @@ class ClutchHealthModelTest {
             )
 
             assertEquals(SlipClassification.LAUNCH, status.classification)
-            assertFalse(status.isMacroSlip)
+            assertTrue(status.slipPowerWatts > 0.0, "A launch does dissipate energy")
+        }
+
+        /**
+         * The case the model existed for and could not see.
+         *
+         * Driven through the real [GearCalculatorEngine] rather than by handing the clutch
+         * engine a gear directly, because the gap between them was the bug: at this much
+         * slip the ratio no longer matches 5th, so the calculator stops reporting a gear at
+         * all and the wear went unrecorded.
+         */
+        @Test
+        fun `Worn clutch slipping in 5th is caught even though the ratio no longer matches`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, throttle: Double): ClutchLiveStatus {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, 80.0, throttle)
+                return engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = 80.0,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 55.0,
+                    lambda = 0.92,
+                    timingAdvanceDeg = 22.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = 49.7,
+                    dtSec = 0.08,
+                ).first
+            }
+
+            // Settled in 5th at 80 km/h with the driver's foot in it.
+            repeat(30) { tick(lockedRpm(5, 80.0), 40.0) }
+            assertEquals(5, tick(lockedRpm(5, 80.0), 40.0).attributedGear)
+
+            // Now it lets go: revs climb, road speed does not. At this much slip the ratio
+            // has drifted all the way into 4th's match window, so the calculator does not
+            // report an open driveline - it reports a perfectly healthy 4th gear.
+            assertEquals(GearSelection.Gear(4), gears.analyzeGear(2600.0, 80.0, 90.0).currentGear)
+
+            var last: ClutchLiveStatus? = null
+            repeat(20) { last = tick(2600.0, 90.0) }
+
+            assertNotNull(last)
+            assertEquals(5, last.attributedGear, "Slip must stay attributed to the gear it is happening in")
+            assertEquals(SlipClassification.MACRO_SLIP, last.classification)
+            assertTrue(last.isMacroSlip)
+            assertTrue(last.slipPercent > 20.0, "Slip was ${last.slipPercent}%")
+            assertTrue(
+                engine.getProfile().accumulatedFrictionEnergyJoules > 0.0,
+                "Severe slip has to cost the clutch something",
+            )
         }
 
         @Test
-        fun `Severe macro-slip under WOT in 4th gear is detected and heats up the disc`() {
+        fun `An upshift is not mistaken for slip`() {
             val clock = MutableClock()
             val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
 
-            // In 4th gear (0.949 * 4.294 = 4.075 total ratio)
-            // At 60 km/h: expected engine RPM is ~2045 RPM
-            // If RPM flares to 3200 RPM at 85% throttle -> slip is +1155 RPM!
-            var lastStatus: ClutchLiveStatus? = null
-            for (i in 1..25) { // ~2 seconds of slipping
+            fun tick(rpm: Double, throttle: Double, gear: GearSelection): ClutchLiveStatus {
                 clock.advanceSec(0.08)
-                val (status, _) = engine.recordTelemetryStep(
-                    rpm = 3200.0,
-                    speedKmh = 60.0,
-                    throttlePercent = 85.0,
-                    mafGramsPerSec = 55.0,
-                    lambda = 0.88,
-                    timingAdvanceDeg = 22.0,
-                    gearSelection = GearSelection.Gear(4),
+                return engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = 80.0,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 40.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 24.0,
+                    gearSelection = gear,
                     ambientTempC = 20.0,
-                    speedMph = 37.3,
+                    speedMph = 49.7,
                     dtSec = 0.08,
-                )
-                lastStatus = status
+                ).first
             }
 
-            assertNotNull(lastStatus)
-            assertEquals(SlipClassification.MACRO_SLIP, lastStatus.classification)
-            assertTrue(lastStatus.isSlipping)
-            assertTrue(lastStatus.isMacroSlip)
-            assertTrue(lastStatus.slipRpm > 1000.0)
-            assertTrue(lastStatus.slipPowerWatts > 10000.0, "Slip power was ${lastStatus.slipPowerWatts} W")
-            assertTrue(lastStatus.discTempC > 30.0, "Disc temp was ${lastStatus.discTempC} °C")
+            repeat(30) { tick(lockedRpm(4, 80.0), 50.0, GearSelection.Gear(4)) }
 
-            // Next step: slip stops, incident is recorded
-            clock.advanceSec(0.08)
-            val (_, updatedProfile) = engine.recordTelemetryStep(
-                rpm = 2045.0,
-                speedKmh = 60.0,
-                throttlePercent = 20.0,
-                mafGramsPerSec = 10.0,
-                lambda = 1.0,
-                timingAdvanceDeg = 20.0,
-                gearSelection = GearSelection.Gear(4),
-                ambientTempC = 20.0,
-                speedMph = 37.3,
-                dtSec = 0.08,
-            )
+            // Foot off to change gear. That lift is the signal that the gear may no longer
+            // be 4th, so nothing after it is attributed until a ratio matches again.
+            tick(2400.0, 3.0, GearSelection.Clutch)
+            val midShift = tick(2400.0, 60.0, GearSelection.Clutch)
 
-            assertTrue(updatedProfile.recentIncidents.isNotEmpty())
-            val incident = updatedProfile.recentIncidents.first()
-            assertEquals(4, incident.gear)
-            assertTrue(incident.peakSlipRpm > 1000.0)
+            assertNull(midShift.attributedGear)
+            assertFalse(midShift.isMacroSlip, "A gear change is not a slipping clutch")
+        }
+
+        @Test
+        fun `Incidents record the gear the slip started in`() {
+            val clock = MutableClock()
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, throttle: Double, gear: GearSelection) {
+                clock.advanceSec(0.08)
+                engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = 80.0,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 55.0,
+                    lambda = 0.92,
+                    timingAdvanceDeg = 22.0,
+                    gearSelection = gear,
+                    ambientTempC = 20.0,
+                    speedMph = 49.7,
+                    dtSec = 0.08,
+                )
+            }
+
+            repeat(20) { tick(lockedRpm(5, 80.0), 40.0, GearSelection.Gear(5)) }
+            repeat(20) { tick(2600.0, 90.0, GearSelection.Clutch) }
+            // Driver gives up and drops to 4th, which is what ends the slip.
+            repeat(5) { tick(lockedRpm(4, 80.0), 40.0, GearSelection.Gear(4)) }
+
+            val incident = engine.getProfile().recentIncidents.firstOrNull()
+            assertNotNull(incident, "A sustained macro-slip should be logged")
+            assertEquals(5, incident.gear, "Logged the gear the driver escaped into, not the one that slipped")
+        }
+    }
+
+    @Nested
+    @DisplayName("Tyre geometry is calibrated, not assumed")
+    inner class Calibration {
+
+        private fun cruise(engine: ClutchHealthEngine, clock: MutableClock, bias: Double, ticks: Int, throttle: Double):
+            ClutchLiveStatus {
+            var last: ClutchLiveStatus? = null
+            repeat(ticks) {
+                clock.advanceSec(0.08)
+                last = engine.recordTelemetryStep(
+                    rpm = lockedRpm(4, 90.0) * (1 + bias),
+                    speedKmh = 90.0,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 22.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 30.0,
+                    gearSelection = GearSelection.Gear(4),
+                    ambientTempC = 20.0,
+                    speedMph = 55.9,
+                    dtSec = 0.08,
+                ).first
+            }
+            return last!!
+        }
+
+        @Test
+        fun `A worn set of tyres does not read as a slipping clutch`() {
+            val clock = MutableClock()
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            // Rolling circumference 3% under the geometric figure: ordinary loaded, worn
+            // tyres. This used to manufacture 92 RPM of slip and report micro-slip.
+            val status = cruise(engine, clock, bias = 0.03, ticks = 200, throttle = 45.0)
+
+            assertEquals(SlipClassification.LOCKED, status.classification)
+            assertFalse(status.isSlipping)
+            assertEquals(0.0, engine.getProfile().accumulatedFrictionEnergyJoules)
+        }
+
+        @Test
+        fun `Light-throttle cruise teaches the model the real rolling circumference`() {
+            val clock = MutableClock()
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            cruise(engine, clock, bias = 0.03, ticks = 4000, throttle = 25.0)
+
+            val learned = engine.getProfile().ratioCalibration
+            assertTrue(learned > 1.02, "Calibration only reached $learned")
+            assertTrue(learned <= CivicSpecs.CLUTCH_CALIBRATION_MAX)
+        }
+
+        @Test
+        fun `A slipping clutch cannot teach the model to call itself normal`() {
+            val clock = MutableClock()
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            // Heavy throttle is excluded from the reference, so this never becomes calibration.
+            cruise(engine, clock, bias = 0.20, ticks = 4000, throttle = 70.0)
+
+            assertEquals(1.0, engine.getProfile().ratioCalibration)
         }
     }
 
@@ -147,52 +357,94 @@ class ClutchHealthModelTest {
     @DisplayName("Prognostics, Archard Wear and RUL")
     inner class Prognostics {
 
-        @Test
-        fun `Resetting clutch sets health to 100% and initializes baseline capacity`() {
-            val clock = MutableClock()
+        private fun engineAt(depletionFraction: Double, clock: MutableClock): ClutchHealthEngine {
             val engine = createEngine(clock)
-            val profile = engine.resetClutchProfile(115000.0)
-
-            assertEquals(100.0, profile.clutchHealthPercent)
-            assertEquals(ClutchConditionGrade.EXCELLENT, profile.conditionGrade)
-            assertEquals(0.0, profile.accumulatedFrictionEnergyJoules)
-            assertEquals(0, profile.abnormalSlipCount)
-            assertEquals(CivicSpecs.CLUTCH_NEW_TORQUE_CAPACITY_NM, profile.estimatedTorqueCapacityNm)
-            assertTrue(profile.estimatedMilesRemaining >= 100_000)
-            assertTrue(profile.estimatedShiftsRemaining >= 50_000)
+            engine.resetClutchProfile(100_000.0)
+            engine.saveProfile(
+                engine.getProfile().copy(
+                    accumulatedFrictionEnergyJoules =
+                        CivicSpecs.BASELINE_CLUTCH_LIFETIME_JOULES * depletionFraction,
+                    currentOdometer = 100_000.0 + 150_000.0 * depletionFraction,
+                ),
+            )
+            engine.recalculateClutchHealth()
+            return engine
         }
 
         @Test
-        fun `High friction energy degradation lowers health and changes condition grade`() {
+        fun `A fresh install invents nothing about a clutch it has never seen`() {
+            val profile = createEngine().getProfile()
+
+            assertFalse(profile.baselineKnown)
+            assertEquals(0.0, profile.accumulatedFrictionEnergyJoules)
+            assertEquals(0.0, profile.currentOdometer)
+            assertEquals(0, profile.totalEngagementsCount)
+            assertEquals(0, profile.abnormalSlipCount)
+            assertNull(profile.estimatedMilesRemaining, "Miles remaining is not knowable yet")
+            assertTrue(profile.recentIncidents.isEmpty())
+        }
+
+        @Test
+        fun `Resetting marks the disc as watched from new`() {
+            val profile = createEngine().resetClutchProfile(115_000.0)
+
+            assertTrue(profile.baselineKnown)
+            assertEquals(100.0, profile.clutchHealthPercent)
+            assertEquals(ClutchConditionGrade.EXCELLENT, profile.conditionGrade)
+            assertEquals(CivicSpecs.CLUTCH_NEW_TORQUE_CAPACITY_NM, profile.estimatedTorqueCapacityNm)
+            assertNull(profile.estimatedMilesRemaining, "No miles watched yet, so no projection")
+        }
+
+        @Test
+        fun `Miles remaining stays unstated until there are miles to project from`() {
             val clock = MutableClock()
             val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
 
-            // Simulate accumulating extensive wear energy
-            val initialProfile = engine.resetClutchProfile(100000.0)
-            assertEquals(100.0, initialProfile.clutchHealthPercent)
+            engine.saveProfile(
+                engine.getProfile().copy(
+                    accumulatedFrictionEnergyJoules = 1_000_000.0,
+                    currentOdometer = 100_020.0, // a drive to the shops
+                ),
+            )
+            engine.recalculateClutchHealth()
 
-            // Step with high slip power to accumulate 25 MJ of wear energy
-            // 25 MJ / 42 MJ = ~59.5% depleted
-            for (step in 1..50) {
-                clock.advanceSec(1.0)
-                engine.recordTelemetryStep(
-                    rpm = 4000.0,
-                    speedKmh = 40.0,
-                    throttlePercent = 90.0,
-                    mafGramsPerSec = 60.0,
-                    lambda = 0.9,
-                    timingAdvanceDeg = 20.0,
-                    gearSelection = GearSelection.Gear(4),
-                    ambientTempC = 25.0,
-                    speedMph = 24.8,
-                    dtSec = 1.0,
-                )
-            }
+            assertNull(engine.getProfile().estimatedMilesRemaining)
+        }
 
-            val finalProfile = engine.getProfile()
-            assertTrue(finalProfile.clutchHealthPercent < 100.0)
-            assertTrue(finalProfile.accumulatedFrictionEnergyJoules > 0.0)
-            assertTrue(finalProfile.degradationBreakdown.slipWearPercent > 0.0)
+        @Test
+        fun `Health tracks the friction budget down to zero`() {
+            val clock = MutableClock()
+
+            // Capacity fades with the facing rather than holding at "as new" until the day
+            // it slips, so a spent clutch scores zero instead of bottoming out at 40%.
+            assertEquals(100.0, engineAt(0.0, clock).getProfile().clutchHealthPercent)
+
+            val half = engineAt(0.5, clock).getProfile()
+            assertTrue(half.clutchHealthPercent in 40.0..55.0, "Half spent scored ${half.clutchHealthPercent}")
+            assertEquals(ClutchConditionGrade.MODERATE_WEAR, half.conditionGrade)
+
+            val spent = engineAt(1.0, clock).getProfile()
+            assertEquals(0.0, spent.clutchHealthPercent)
+            assertEquals(ClutchConditionGrade.CRITICAL, spent.conditionGrade)
+            assertEquals(0, spent.estimatedMilesRemaining)
+        }
+
+        @Test
+        fun `The lifetime budget is a service life, not a season`() {
+            // 500 MJ at ~3.6 kJ per mile of mixed driving. The old 42 MJ figure worked out
+            // at roughly 12,000 miles, so the screen called a healthy clutch dead in a year.
+            val milesOfLife = CivicSpecs.BASELINE_CLUTCH_LIFETIME_JOULES / 3_600.0
+            assertTrue(milesOfLife > 100_000, "Modelled clutch life is only ${milesOfLife.toInt()} miles")
+        }
+
+        @Test
+        fun `Shifts remaining is drawn from the shift share of the budget`() {
+            val profile = createEngine().resetClutchProfile(100_000.0)
+            // The whole budget divided by one shift would spend every launch as a shift.
+            val whole = CivicSpecs.BASELINE_CLUTCH_LIFETIME_JOULES / CivicSpecs.CLUTCH_SHIFT_ENERGY_J
+            assertTrue(profile.estimatedShiftsRemaining < whole)
+            assertTrue(profile.estimatedShiftsRemaining > 100_000)
         }
     }
 }
