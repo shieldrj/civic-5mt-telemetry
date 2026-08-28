@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.util.Log
 import com.shieldrj.civic5mt.R
+import com.shieldrj.civic5mt.core.CivicSpecs
 import com.shieldrj.civic5mt.core.ClutchConditionGrade
 import com.shieldrj.civic5mt.core.ClutchProfile
 import com.shieldrj.civic5mt.core.ClutchProfileStore
@@ -39,7 +40,10 @@ import kotlin.math.roundToInt
 private const val PREFS_NAME = "civic_telemetry"
 private const val KEY_LIFETIME = "civic_2013_lifetime_stats_v2"
 private const val KEY_OIL = "civic_2013_oil_profile_v1"
-private const val KEY_CLUTCH = "civic_2013_clutch_profile_v1"
+// v2: v1 records were accumulated against a 42 MJ lifetime budget and seeded from a
+// fabricated 114,250-mile history, so their energy totals and odometer mean nothing
+// under the corrected model. Better to start counting honestly than to reinterpret them.
+private const val KEY_CLUTCH = "civic_2013_clutch_profile_v2"
 private const val KEY_FUEL_BLEND = "civic_2013_fuel_blend_v1"
 private const val KEY_MIGRATION_DONE = "rescued_localstorage_imported_v1"
 private const val KEY_OVERLAY_ENABLED = "overlay_enabled"
@@ -206,7 +210,10 @@ internal fun clutchProfileToJson(p: ClutchProfile): JSONObject {
         .put("abnormalSlipCount", p.abnormalSlipCount)
         .put("maxObservedTempC", p.maxObservedTempC)
         .put("estimatedTorqueCapacityNm", p.estimatedTorqueCapacityNm)
-        .put("estimatedMilesRemaining", p.estimatedMilesRemaining)
+        .put("observedCapacityFloorNm", p.observedCapacityFloorNm)
+        .put("baselineKnown", p.baselineKnown)
+        .put("ratioCalibration", p.ratioCalibration)
+        .put("estimatedMilesRemaining", p.estimatedMilesRemaining ?: JSONObject.NULL)
         .put("estimatedDaysRemaining", p.estimatedDaysRemaining ?: JSONObject.NULL)
         .put("estimatedShiftsRemaining", p.estimatedShiftsRemaining)
         .put("conditionGrade", p.conditionGrade.label)
@@ -249,12 +256,28 @@ internal fun parseClutchProfile(json: JSONObject): ClutchProfile {
         totalEngagementsCount = json.optInt("totalEngagementsCount", 0),
         abnormalSlipCount = json.optInt("abnormalSlipCount", 0),
         maxObservedTempC = json.optDouble("maxObservedTempC", 25.0),
-        estimatedTorqueCapacityNm = json.optDouble("estimatedTorqueCapacityNm", 277.0),
-        estimatedMilesRemaining = json.optInt("estimatedMilesRemaining", 120_000),
+        estimatedTorqueCapacityNm = json.optDouble(
+            "estimatedTorqueCapacityNm",
+            CivicSpecs.CLUTCH_NEW_TORQUE_CAPACITY_NM,
+        ),
+        observedCapacityFloorNm = json.optDouble(
+            "observedCapacityFloorNm",
+            CivicSpecs.CLUTCH_NEW_TORQUE_CAPACITY_NM,
+        ),
+        // Absent on any record this app wrote before the disc was tracked from new, which
+        // is the honest default: it did not watch the clutch from new.
+        baselineKnown = json.optBoolean("baselineKnown", false),
+        ratioCalibration = json.optDouble("ratioCalibration", 1.0)
+            .coerceIn(CivicSpecs.CLUTCH_CALIBRATION_MIN, CivicSpecs.CLUTCH_CALIBRATION_MAX),
+        // Both projections are recomputed on load anyway; null is what "not yet known"
+        // looks like, and it beats restoring a guess of 120,000 miles.
+        estimatedMilesRemaining =
+            if (json.isNull("estimatedMilesRemaining")) null
+            else json.optInt("estimatedMilesRemaining").takeIf { it > 0 },
         estimatedDaysRemaining =
             if (json.isNull("estimatedDaysRemaining")) null
             else json.optInt("estimatedDaysRemaining").takeIf { it > 0 },
-        estimatedShiftsRemaining = json.optInt("estimatedShiftsRemaining", 56_000),
+        estimatedShiftsRemaining = json.optInt("estimatedShiftsRemaining", 0),
         conditionGrade = clutchGradeFromLabel(json.optString("conditionGrade")),
         degradationBreakdown = ClutchWearBreakdown(
             shiftWearPercent = breakdown.optDouble("shiftWearPercent", 0.0),

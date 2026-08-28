@@ -1,5 +1,9 @@
 package com.shieldrj.civic5mt.service
 
+import com.shieldrj.civic5mt.core.ClutchConditionGrade
+import com.shieldrj.civic5mt.core.ClutchProfile
+import com.shieldrj.civic5mt.core.ClutchSlipIncident
+import com.shieldrj.civic5mt.core.ClutchWearBreakdown
 import com.shieldrj.civic5mt.core.DegradationBreakdown
 import com.shieldrj.civic5mt.core.LifetimeStats
 import com.shieldrj.civic5mt.core.OilConditionGrade
@@ -293,6 +297,86 @@ class PersistentStoresJsonTest {
             assertFalse(restored.calibrated)
             assertEquals(100.0, restored.lowestLevelPercent)
             assertEquals(0.132, restored.gallonsPerPercent)
+        }
+    }
+
+    @Nested
+    @DisplayName("The clutch profile")
+    inner class Clutch {
+
+        private fun profile() = ClutchProfile(
+            lastResetTimestamp = 1_700_000_000_000,
+            lastResetOdometer = 112_000.0,
+            currentOdometer = 118_430.5,
+            clutchHealthPercent = 74.3,
+            baselineKnown = true,
+            accumulatedFrictionEnergyJoules = 96_400_000.0,
+            totalEngagementsCount = 41_200,
+            abnormalSlipCount = 3,
+            maxObservedTempC = 168.2,
+            estimatedTorqueCapacityNm = 249.1,
+            observedCapacityFloorNm = 262.0,
+            ratioCalibration = 1.028,
+            estimatedMilesRemaining = 61_500,
+            estimatedDaysRemaining = 740,
+            estimatedShiftsRemaining = 169_512,
+            conditionGrade = ClutchConditionGrade.GOOD,
+            degradationBreakdown = ClutchWearBreakdown(
+                shiftWearPercent = 8.2,
+                launchWearPercent = 6.1,
+                slipWearPercent = 4.9,
+                thermalGlazePenaltyPercent = 0.0,
+            ),
+            recentIncidents = listOf(
+                ClutchSlipIncident(
+                    timestamp = 1_700_000_500_000,
+                    gear = 5,
+                    peakSlipRpm = 512.4,
+                    peakTorqueNm = 151.0,
+                    speedKmh = 80.0,
+                    durationSec = 1.6,
+                ),
+            ),
+        )
+
+        @Test
+        @DisplayName("survives a round-trip through JSON")
+        fun roundTrip() {
+            val original = profile()
+            val restored = parseClutchProfile(JSONObject(clutchProfileToJson(original).toString()))
+
+            assertEquals(original, restored)
+        }
+
+        /**
+         * The learned tyre correction is the one field here that is expensive to reacquire -
+         * it takes miles of steady cruise to settle. Losing it silently sends every expected
+         * RPM back out by the rolling-radius error the calibration existed to remove.
+         */
+        @Test
+        @DisplayName("keeps the learned rolling-radius correction")
+        fun keepsCalibration() {
+            val restored = parseClutchProfile(JSONObject(clutchProfileToJson(profile()).toString()))
+
+            assertEquals(1.028, restored.ratioCalibration)
+        }
+
+        /**
+         * An empty document is a clutch nobody has watched, and it has to read that way. The
+         * screen keys off both of these: a stored `true` here would present wear the app
+         * happened to see as though it were the disc's whole history, and a restored mileage
+         * would put a projection on the gauge that no drive ever supported.
+         */
+        @Test
+        @DisplayName("reads an empty document as a clutch with no known history")
+        fun missingKeysAreSane() {
+            val restored = parseClutchProfile(JSONObject("{}"))
+
+            assertFalse(restored.baselineKnown)
+            assertNull(restored.estimatedMilesRemaining)
+            assertNull(restored.estimatedDaysRemaining)
+            assertEquals(0.0, restored.accumulatedFrictionEnergyJoules)
+            assertEquals(1.0, restored.ratioCalibration)
         }
     }
 }

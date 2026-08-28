@@ -151,28 +151,40 @@ private fun ClutchBody(p: ClutchProfile, live: ClutchLiveStatus) {
 
         Column {
             Text(
-                text = "ESTIMATED LIFE",
+                text = if (p.baselineKnown) "ESTIMATED LIFE" else "WEAR WATCHED SO FAR",
                 color = CivicColors.Ink3,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Medium,
                 letterSpacing = 1.6.sp,
             )
             Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.Bottom) {
+            val milesLeft = p.estimatedMilesRemaining
+            if (milesLeft == null) {
+                // No wear rate yet. An unqualified mileage here would be the app's own
+                // guess wearing the clothes of a measurement.
                 Text(
-                    text = "%,d".format(p.estimatedMilesRemaining),
-                    color = CivicColors.Ink,
-                    fontSize = 26.sp,
+                    text = "Not enough miles yet",
+                    color = CivicColors.Ink2,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.Light,
-                    modifier = Modifier.alignByBaseline(),
                 )
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    text = "mi",
-                    color = CivicColors.Ink3,
-                    fontSize = 12.sp,
-                    modifier = Modifier.alignByBaseline(),
-                )
+            } else {
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(
+                        text = "%,d".format(milesLeft),
+                        color = CivicColors.Ink,
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.Light,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "mi",
+                        color = CivicColors.Ink3,
+                        fontSize = 12.sp,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                }
             }
             Spacer(Modifier.height(4.dp))
             Text(
@@ -184,6 +196,18 @@ private fun ClutchBody(p: ClutchProfile, live: ClutchLiveStatus) {
                 fontSize = 12.sp,
             )
         }
+    }
+
+    if (!p.baselineKnown) {
+        Spacer(Modifier.height(14.dp))
+        Text(
+            text = "This is wear the app has watched, not the clutch's whole life. It has " +
+                "no way to know what the disc did before it started counting. Press " +
+                "\"Reset\" below when the clutch is actually replaced, and from then on " +
+                "this figure covers all of it.",
+            color = CivicColors.Ink3,
+            fontSize = 12.sp,
+        )
     }
 
     Spacer(Modifier.height(24.dp))
@@ -296,7 +320,7 @@ private fun ClutchBody(p: ClutchProfile, live: ClutchLiveStatus) {
     Text(
         text = "Clutch holding capacity and RUL are computed via thermodynamic slip energy " +
             "integration and Archard friction material wear modeling calibrated for the " +
-            "2013 Civic 5MT (212mm disc, 4500 N clamp load).",
+            "2013 Civic LX 5MT (215mm disc, 4500 N clamp load).",
         color = CivicColors.Ink4,
         fontSize = 12.sp,
     )

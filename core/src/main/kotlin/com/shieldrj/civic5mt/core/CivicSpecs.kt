@@ -182,14 +182,82 @@ object CivicSpecs {
     )
     const val POWER_SHIFT_POINT_RPM: Int = 6500 // Near peak horsepower (6,500 RPM @ 143 hp)
 
-    // Clutch & Manual Transmission Physical Constants (2013 Civic 5MT / R18Z1)
-    const val CLUTCH_DISC_DIAMETER_MM: Int = 212 // Stock Exedy / Honda OEM 212mm disc
-    const val CLUTCH_MEAN_RADIUS_METERS: Double = 0.088 // Effective friction radius Rm ~88mm
+    // Clutch & Manual Transmission Physical Constants (2013 Civic LX 5MT / R18Z1)
+    //
+    // The OE replacement for the 06-15 Civic 1.8 is the Exedy HCK1002, a 215mm single
+    // organic disc. An earlier revision here said 212mm and cited HCK1005; that is a
+    // different kit and does not fit this car.
+    const val CLUTCH_DISC_DIAMETER_MM: Int = 215
+    const val CLUTCH_MEAN_RADIUS_METERS: Double = 0.090 // (OD 215 + ID ~145) / 4
     const val CLUTCH_NOMINAL_CLAMPING_FORCE_N: Double = 4500.0 // Diaphragm spring nominal clamp load
     const val CLUTCH_NOMINAL_FRICTION_COEFF: Double = 0.35 // Organic friction facing mu
-    const val CLUTCH_NEW_TORQUE_CAPACITY_NM: Double = 277.0 // 2 * mu * Fn * Rm (~1.59x safety margin over peak engine torque)
-    const val ENGINE_PEAK_TORQUE_NM: Double = 174.0 // R18Z1 peak engine torque @ 4300 RPM
-    const val BASELINE_CLUTCH_LIFETIME_JOULES: Double = 42_000_000.0 // ~42 MJ nominal lifecycle friction energy
+    const val CLUTCH_NEW_TORQUE_CAPACITY_NM: Double = 283.5 // 2 * mu * Fn * Rm - two friction faces
+    const val ENGINE_PEAK_TORQUE_NM: Double = 174.0 // R18Z1, 128 lb-ft @ 4300 RPM
+
+    /**
+     * Friction work a healthy disc is expected to absorb over its whole life.
+     *
+     * Derived rather than picked, because every health figure on the clutch screen has
+     * this number as its denominator. Per mile of mixed driving:
+     *
+     *     launches  ~0.3/mile at ~7 kJ each  = 2.1 kJ
+     *     shifts    ~1.5/mile at ~1 kJ each  = 1.5 kJ
+     *                                          ---------
+     *                                          3.6 kJ/mile
+     *
+     * Over the ~150,000 miles an original Civic clutch is expected to reach, that is
+     * ~540 MJ. 500 MJ is the conservative round number.
+     *
+     * This was 42 MJ, which works out at about 12,000 miles. Health, miles remaining and
+     * shifts remaining all divide by it, so the screen would have called a healthy clutch
+     * dead inside a year of ordinary driving.
+     */
+    const val BASELINE_CLUTCH_LIFETIME_JOULES: Double = 500_000_000.0
+
+    /** Friction work in one ordinary clean upshift. */
+    const val CLUTCH_SHIFT_ENERGY_J: Double = 1_000.0
+
+    /**
+     * The share of the lifetime budget that shifting accounts for, per the derivation
+     * above - 1.5 of the 3.6 kJ per mile. "Shifts remaining" is computed from the shift
+     * slice rather than the whole budget, which would spend every launch as a shift.
+     */
+    const val CLUTCH_SHIFT_ENERGY_SHARE: Double = 0.42
+
+    /**
+     * Below this the car is stopped, as far as the clutch model is concerned.
+     *
+     * A stationary car cannot be wearing its clutch: with no road speed there is no
+     * relative motion at the friction face to wear it, whatever the engine is doing. The
+     * model used to read any RPM above idle+100 at a standstill as launch slip. This
+     * engine idles at 1200-1400 RPM cold and higher again with the A/C on, so a warm-up
+     * on the driveway registered as a clutch being burned - 4% of its modelled life in
+     * five minutes, with nobody's foot on the pedal.
+     */
+    const val CLUTCH_MIN_TRACKING_SPEED_KMH: Double = 1.0
+
+    /** Above this a crawl is no longer a launch, and anything unmatched is a coast. */
+    const val CLUTCH_LAUNCH_MAX_SPEED_KMH: Double = 20.0
+
+    /**
+     * Slip below this fraction of locked engine speed counts as locked.
+     *
+     * The threshold has to clear the residual error in the inputs, not merely sensor
+     * noise. Rolling circumference under load runs 2-3% below the geometric figure above,
+     * OBD road speed on this car carries the speedometer's own optimistic bias, and PID
+     * 010D arrives quantised to whole km/h. [ClutchHealthEngine] learns the steady-state
+     * part of that away; 4% sits outside what is left. At the old 2.5% a worn set of
+     * tyres alone was enough to report a slipping clutch.
+     */
+    const val CLUTCH_LOCKED_SLIP_RATIO: Double = 0.04
+
+    /** Sustained slip past this fraction under throttle is a clutch that is not holding. */
+    const val CLUTCH_MACRO_SLIP_RATIO: Double = 0.12
+
+    /** Bounds on the learned rolling-radius correction. Outside these it is not tyre error. */
+    const val CLUTCH_CALIBRATION_MIN: Double = 0.94
+    const val CLUTCH_CALIBRATION_MAX: Double = 1.06
+
     const val CLUTCH_THERMAL_MASS_J_PER_K: Double = 4500.0 // Flywheel + pressure plate friction face thermal capacity
     const val CLUTCH_COOLING_COEFF_W_PER_K: Double = 18.0 // Convective bellhousing dissipation rate
     const val CLUTCH_NORMAL_TEMP_THRESHOLD_C: Double = 130.0 // Below this is standard wear
