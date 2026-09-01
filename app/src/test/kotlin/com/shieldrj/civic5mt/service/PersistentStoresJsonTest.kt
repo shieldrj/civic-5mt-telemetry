@@ -1,5 +1,6 @@
 package com.shieldrj.civic5mt.service
 
+import com.shieldrj.civic5mt.core.CivicSpecs
 import com.shieldrj.civic5mt.core.ClutchConditionGrade
 import com.shieldrj.civic5mt.core.ClutchProfile
 import com.shieldrj.civic5mt.core.ClutchSlipIncident
@@ -298,7 +299,7 @@ class PersistentStoresJsonTest {
 
             assertFalse(restored.calibrated)
             assertEquals(100.0, restored.lowestLevelPercent)
-            assertEquals(0.132, restored.gallonsPerPercent)
+            assertEquals(CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT, restored.gallonsPerPercent)
         }
     }
 

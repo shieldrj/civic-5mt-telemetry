@@ -41,10 +41,15 @@ data class TankState(
     /**
      * Gallons per one percent of sender reading, measured on this car.
      *
-     * Starts at the nominal figure - tank capacity divided by 100 - and is replaced by a
-     * measured one as soon as a tank has been run down far enough to measure it.
+     * Starts at [CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT] - the sender's real span,
+     * not the tank's - and is replaced by a measured one as soon as a tank has been run down
+     * far enough to measure it.
+     *
+     * It used to start at tank capacity divided by a hundred, which quietly asserted that the
+     * sender's zero is an empty tank. It is not, and the consequence landed in
+     * [reserveGallons]: 0.92 gallons under the sender's zero against Honda's published 1.9.
      */
-    val gallonsPerPercent: Double = CivicSpecs.FUEL_TANK_CAPACITY_GALLONS / 100.0,
+    val gallonsPerPercent: Double = CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT,
     /** Whether [gallonsPerPercent] has been measured, or is still the nominal figure. */
     val calibrated: Boolean = false,
     /** Sender reading, smoothed. Raw readings move with fuel sloshing in the tank. */
@@ -207,7 +212,7 @@ object TankRules {
     /**
      * Gallons per percent has to stay inside the physically possible.
      *
-     * The nominal figure for this car is 0.132. A measurement outside this range means
+     * The nominal figure for this car is about 0.1215. A measurement outside this range means
      * something else went wrong - the app was closed for part of the tank, or a fill was
      * missed - and a bad calibration would then be applied to every later reading.
      */
@@ -228,10 +233,15 @@ object TankRules {
     /**
      * The most fuel that may be claimed to sit below the sender's zero.
      *
-     * Two gallons is already generous for this car - the low fuel light comes on with roughly
-     * that much left, and the gauge goes on to E some way after. Anything larger is not a
-     * reserve, it is a bad gallons-per-percent measurement arriving by another route, and a
-     * range figure inflated by it is exactly the mistake nobody can afford here.
+     * Two gallons is just above what this car actually holds down there, which is the right
+     * place for a cap: it admits the real figure and rejects anything that is not one. Honda's
+     * manual puts 1.9 US gal in the tank when the low fuel light comes on, and owners who ran
+     * a 9th-gen to a zero range reading and then filled to the click pumped about 11.5 of the
+     * 13.2 gallons, leaving 1.7. See [CivicSpecs.FUEL_RESERVE_BELOW_SENDER_ZERO_GALLONS].
+     *
+     * Anything larger is not a reserve, it is a bad gallons-per-percent measurement arriving
+     * by another route, and a range figure inflated by it is exactly the mistake nobody can
+     * afford here.
      */
     const val MAX_RESERVE_GALLONS = 2.0
 

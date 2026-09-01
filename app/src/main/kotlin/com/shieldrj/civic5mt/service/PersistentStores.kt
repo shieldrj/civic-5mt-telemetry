@@ -348,7 +348,13 @@ internal fun parseTank(j: JSONObject): TankState = TankState(
     levelPercentAtFill = j.optDouble("levelPercentAtFill", 0.0),
     milesSinceFill = j.optDouble("milesSinceFill", 0.0),
     gallonsUsedSinceFill = j.optDouble("gallonsUsedSinceFill", 0.0),
-    gallonsPerPercent = j.optDouble("gallonsPerPercent", 0.132),
+    // The nominal sender span, matching TankState's own default. A literal here drifted from
+    // it once already - it was still 0.132 after the default moved - and a damaged record
+    // would then load a figure the rest of the app had stopped believing.
+    gallonsPerPercent = j.optDouble(
+        "gallonsPerPercent",
+        CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT,
+    ),
     calibrated = j.optBoolean("calibrated", false),
     smoothedLevelPercent = j.optDouble("smoothedLevelPercent", 0.0),
     lowestLevelPercent = j.optDouble("lowestLevelPercent", 100.0),

@@ -162,6 +162,50 @@ object CivicSpecs {
     const val FUEL_TANK_CAPACITY_GALLONS: Double = 13.2 // 2013 Civic LX sedan factory tank spec
 
     /**
+     * Fuel still in the tank when the gauge has run out of things to say.
+     *
+     * Honda publishes this one: the owner's manual puts 1.9 US gal (7.5 L) in the tank when
+     * the low fuel light comes on, which it does as the reading approaches E. Owners who have
+     * run a 9th-gen down until the range read zero and then filled to the click report pumping
+     * about 11.5 gallons into a 13.2 gallon tank, which is the same figure arrived at from the
+     * other direction.
+     *
+     * It is a starting estimate and nothing more. [TankState.reserveGallons] measures the real
+     * one on this particular car - a sender is an analogue float and no two sit at exactly the
+     * same place - and replaces this the moment there is a measurement to replace it with.
+     * What this fixes is the case before that: a tank whose scale has never been measured.
+     */
+    const val FUEL_RESERVE_BELOW_SENDER_ZERO_GALLONS: Double = 1.9
+
+    /**
+     * What this car's sender reads with the tank brimmed.
+     *
+     * Not 100. The sender is a float on an arm in a tank with a shape, and its top end stops
+     * where the arm stops - about 93 on this car, which is the figure the fuel screen has been
+     * showing at the pump all along.
+     */
+    const val NOMINAL_FULL_SENDER_PERCENT: Double = 93.0
+
+    /**
+     * Gallons per one percent of sender reading, before this car has measured its own.
+     *
+     * This used to be [FUEL_TANK_CAPACITY_GALLONS] / 100, and that division encodes a claim
+     * that is knowably false: that the sender's zero is an empty tank and its hundred is a
+     * full one. Neither is true. It reads about 93 brimmed, and it reaches zero with
+     * [FUEL_RESERVE_BELOW_SENDER_ZERO_GALLONS] still in the tank, so the span it actually
+     * reports is 11.3 gallons across 93 percent rather than 13.2 across 100.
+     *
+     * The old figure was 0.132 and this one is about 0.1215 - a ten percent difference, but
+     * the interesting part is where it lands. Feeding 0.132 back through
+     * [TankState.reserveGallons] produced a reserve of 0.92 gallons, against a published 1.9,
+     * so an uncalibrated app understated the fuel under the sender's zero by roughly a gallon.
+     * This figure reproduces the manual's number instead, by construction.
+     */
+    val NOMINAL_GALLONS_PER_SENDER_PERCENT: Double =
+        (FUEL_TANK_CAPACITY_GALLONS - FUEL_RESERVE_BELOW_SENDER_ZERO_GALLONS) /
+            NOMINAL_FULL_SENDER_PERCENT
+
+    /**
      * Fallback multiplier for range-to-empty before this car has measured its own economy.
      *
      * The 5-speed manual's combined rating, which is 31 - 28 city, 36 highway. It was 32 here,

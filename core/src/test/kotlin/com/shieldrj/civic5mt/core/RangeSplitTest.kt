@@ -152,6 +152,104 @@ class RangeSplitTest {
         }
     }
 
+    /**
+     * The fuel under the sender's zero, checked against figures Honda and its owners publish.
+     *
+     * This is the one quantity in the whole fuel model that has an outside reference. The
+     * manual puts 1.9 US gal (7.5 L) in the tank when the low fuel light comes on; owners who
+     * ran a 9th-gen until the range read zero and then filled to the click pumped about 11.5
+     * of 13.2 gallons, which is 1.7 left. Both say the same thing from opposite directions,
+     * and the app can now be held to it.
+     */
+    @Nested
+    @DisplayName("The reserve, against the published figures")
+    inner class PublishedReserve {
+
+        @Test
+        fun `an uncalibrated tank reproduces the manual's 1_9 gallons`() {
+            // No measurement has been taken, so this is the nominal figure doing the work.
+            val fresh = TankState(
+                fillTimestamp = 1L,
+                smoothedLevelPercent = 50.0,
+                fullMarkPercent = CivicSpecs.NOMINAL_FULL_SENDER_PERCENT,
+            )
+            assertEquals(
+                CivicSpecs.FUEL_RESERVE_BELOW_SENDER_ZERO_GALLONS,
+                fresh.reserveGallons,
+                1e-9,
+            )
+        }
+
+        /**
+         * What the old default did, kept as a test so the regression cannot come back quietly.
+         *
+         * Tank capacity over a hundred asserts that the sender's zero is a dry tank. It is
+         * not, and this is the size of the error: under a gallon claimed where there are
+         * nearly two, which at highway economy is about forty miles the driver was never told
+         * about.
+         */
+        @Test
+        fun `the old tank-over-100 default understated it by about a gallon`() {
+            val old = TankState(
+                fillTimestamp = 1L,
+                smoothedLevelPercent = 50.0,
+                gallonsPerPercent = CivicSpecs.FUEL_TANK_CAPACITY_GALLONS / 100.0,
+                fullMarkPercent = CivicSpecs.NOMINAL_FULL_SENDER_PERCENT,
+            )
+            assertTrue(old.reserveGallons < 1.0, "old default gave ${old.reserveGallons}")
+            assertTrue(
+                CivicSpecs.FUEL_RESERVE_BELOW_SENDER_ZERO_GALLONS - old.reserveGallons > 0.9,
+                "the correction should be worth about a gallon",
+            )
+        }
+
+        @Test
+        fun `the published figure sits under the cap, so a real reserve is never clipped`() {
+            assertTrue(
+                CivicSpecs.FUEL_RESERVE_BELOW_SENDER_ZERO_GALLONS < TankRules.MAX_RESERVE_GALLONS,
+                "the cap has to admit the real figure, not clip it",
+            )
+        }
+
+        @Test
+        fun `the nominal span stays inside the plausible band a measurement is checked against`() {
+            assertTrue(
+                CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT
+                    in TankRules.MIN_GALLONS_PER_PERCENT..TankRules.MAX_GALLONS_PER_PERCENT,
+                "nominal ${CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT} is outside the band",
+            )
+        }
+
+        /**
+         * The nominal figure is a starting point, not a belief. A car whose sender really does
+         * span a different volume must be able to say so and be believed.
+         */
+        @Test
+        fun `a measured span overrides the published estimate`() {
+            val measured = TankState(
+                fillTimestamp = 1L,
+                smoothedLevelPercent = 50.0,
+                gallonsPerPercent = 0.128,
+                calibrated = true,
+                fullMarkPercent = 95.0,
+            )
+            // 13.2 - (0.128 x 95) = 1.04, which is this car rather than the published one.
+            assertEquals(1.04, measured.reserveGallons, 1e-9)
+        }
+
+        @Test
+        fun `a tank that has never seen a full mark still claims no reserve at all`() {
+            // Unchanged behaviour, and the reason the new default is safe: the nominal figure
+            // only ever produces a reserve once a genuinely full tank has been observed.
+            val neverFull = TankState(
+                fillTimestamp = 1L,
+                smoothedLevelPercent = 50.0,
+                fullMarkPercent = 40.0,
+            )
+            assertEquals(0.0, neverFull.reserveGallons)
+        }
+    }
+
     @Nested
     @DisplayName("The corrections reaching the fuel model")
     inner class ModelWiring {

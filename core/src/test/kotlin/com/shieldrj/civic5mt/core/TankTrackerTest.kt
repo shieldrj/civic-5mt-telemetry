@@ -108,14 +108,17 @@ class TankTrackerTest {
 
         @Test
         fun `A sender that reads 93 percent when full still gives the right gallons`() {
-            // The reported symptom. The nominal conversion says 93% of 13.2 gallons is 12.3.
-            // If this car's real full tank is 13.2 at a sender reading of 93, then every
-            // gallons figure taken from the specification is 7% low, and so is the range.
+            // A car at the other extreme from the nominal one: a sender that really does span
+            // the whole tank, so a reading of 93 is 13.2 gallons and there is no reserve
+            // underneath it at all. The nominal figure assumes the opposite - 11.3 gallons
+            // across the sender's span with 1.9 below its zero - so this is the case that
+            // proves the tracker measures rather than assumes. Get it wrong here and every
+            // gallons figure is 7% out, and so is the range.
             val realGallonsPerPercent = 13.2 / 93.0 // 0.142
             val clock = MutableClock(1_700_000_000_000)
             val t = TankTracker(InMemoryTankStore(), clock)
 
-            // First tank: the tracker is still using the nominal figure and cannot know better.
+            // First tank: the tracker is still on the nominal span and cannot know better.
             driveDown(t, clock, 93.0, 30.0, realGallonsPerPercent, mpg = 32.0)
             assertFalse(t.get().calibrated, "nothing measured yet")
 
