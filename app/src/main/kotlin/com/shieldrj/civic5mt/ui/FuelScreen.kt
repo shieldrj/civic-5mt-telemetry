@@ -2,6 +2,7 @@ package com.shieldrj.civic5mt.ui
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,19 +16,28 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -37,8 +47,8 @@ import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.FUEL_BLENDS
 import com.shieldrj.civic5mt.core.FuelBlendId
 import com.shieldrj.civic5mt.core.GasPriceSnapshot
-import com.shieldrj.civic5mt.core.OUNCES_PER_US_GALLON
 import com.shieldrj.civic5mt.core.LiveMetrics
+import com.shieldrj.civic5mt.core.OUNCES_PER_US_GALLON
 import com.shieldrj.civic5mt.core.TripAnalytics
 import com.shieldrj.civic5mt.core.fuelBlend
 import com.shieldrj.civic5mt.core.isClosedLoop
@@ -46,8 +56,8 @@ import com.shieldrj.civic5mt.data.GasPriceRepository
 import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.service.saveFuelBlend
-import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
+import kotlinx.coroutines.launch
 
 /**
  * What the engine is actually burning, and what it is burning.
@@ -134,23 +144,7 @@ fun FuelScreen(
 
         if (live && metrics.fuelLevelPercent != null) {
             Spacer(Modifier.height(24.dp))
-            SectionHeading("Just filled up?", null)
-            Text(
-                text = "A fill is normally noticed on its own, from the level rising. Use this " +
-                    "for a few gallons rather than a tankful, or if the count looks wrong. It " +
-                    "restarts the miles and the fuel for this tank.",
-                color = CivicColors.Ink3,
-                fontSize = 12.5.sp,
-            )
-            Text(
-                text = "Start a new tank",
-                color = CivicColors.Accent,
-                fontSize = 15.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { TelemetryService.markFilled(context) }
-                    .padding(vertical = 12.dp),
-            )
+            FillLogSection(context)
         }
 
         if (live) {
@@ -391,6 +385,58 @@ private fun TankSection(
                 metrics.fuelRangeMiles == null -> null
                 bounded -> "the gauge is on E"
                 else -> "at this tank's economy"
+            },
+        )
+        // The split between fuel the sender can see and fuel underneath its zero.
+        //
+        // This row is the answer to "why does the dash say fifty-four when this says a hundred
+        // and thirty". It is not a disagreement about fuel: Honda's figure stops at the
+        // sender's zero on purpose and this one counts the reserve underneath it. Printing one
+        // number made that look like an error rather than a different question.
+        val reserveMiles = metrics.fuelRangeReserveMiles
+        if (reserveMiles != null && reserveMiles > 0) {
+            ValueRow(
+                label = "Before the gauge reads E",
+                value = "${metrics.fuelRangeToSenderZeroMiles} mi",
+                note = "then $reserveMiles mi of reserve the sender cannot see",
+            )
+        }
+        if (metrics.rangeMpgUsed != null) {
+            ValueRow(
+                label = "Range is built on",
+                value = "%.1f mpg".format(metrics.rangeMpgUsed),
+                note = when {
+                    metrics.verifiedMpg != null -> "measured against %.1f gal of receipts"
+                        .format(metrics.verifiedGallons)
+                    metrics.lifetimeMiles >= 20 -> "this car's lifetime average"
+                    else -> "the EPA rating, until this car has measured its own"
+                },
+            )
+        }
+        // What the pump receipts have taught, and how far apart they are. The spread is the
+        // honest width of every figure above it: a range of two hundred miles from fills
+        // scattered by three percent is two hundred give or take six, and a driver asking for
+        // the last mile deserves to be told which mile the measurement can actually see.
+        ValueRow(
+            label = "Sensors checked",
+            value = when {
+                metrics.calibrationFillCount == 0 -> "not yet"
+                else -> "%d fill%s".format(
+                    metrics.calibrationFillCount,
+                    if (metrics.calibrationFillCount == 1) "" else "s",
+                )
+            },
+            note = when {
+                metrics.calibrationFillCount == 0 ->
+                    "log a fill-up below and the pump becomes the reference"
+                else -> buildString {
+                    val off = (metrics.fuelCorrectionFactor - 1.0) * 100
+                    append("fuel %+.1f%%".format(off))
+                    if (metrics.distanceCorrectionFactor != 1.0) {
+                        append(", distance %+.1f%%".format((metrics.distanceCorrectionFactor - 1.0) * 100))
+                    }
+                    metrics.calibrationSpreadPercent?.let { append(", spread ±%.1f%%".format(it)) }
+                }
             },
         )
         // Whether the gallons-per-percent figure behind all of this was measured on this car
@@ -700,6 +746,192 @@ private fun priceAge(ageMillis: Long): String {
         hours < 24L -> hours.toString() + " hours ago"
         hours < 48L -> "yesterday"
         else -> (hours / 24L).toString() + " days ago"
+    }
+}
+
+/**
+ * Logging a fill-up, which is the only measurement in this app that comes from outside it.
+ *
+ * Everything else on this screen is the car talking to itself: a mass airflow reading divided
+ * by an assumed density, a road speed integrated over time, a float in a tank. All of it is
+ * good and none of it was ever checked. The two numbers asked for here - what the pump charged
+ * for, and the odometer - are the check, and they are the reason the range figure can be
+ * trusted to a few miles rather than to a few tens of miles.
+ *
+ * The "to the click" question is not a detail and is deliberately the one thing that cannot be
+ * skipped. The whole method rests on the tank starting and finishing at the same level: fill
+ * to the automatic shutoff twice and the gallons between them are the gallons burned, exactly.
+ * Stop early and the receipt measures nothing except where the nozzle happened to stop, so a
+ * part fill is logged and honestly refused rather than quietly averaged in.
+ */
+@Composable
+private fun FillLogSection(context: android.content.Context) {
+    var gallons by remember { mutableStateOf("") }
+    var odometer by remember { mutableStateOf("") }
+    var toShutoff by remember { mutableStateOf(true) }
+
+    val calibration by TelemetryState.calibration.collectAsStateWithLifecycle()
+    val pumpGallons = gallons.trim().toDoubleOrNull()
+    val odometerMiles = odometer.trim().toDoubleOrNull()
+
+    SectionHeading("Just filled up?", null)
+    Text(
+        text = "The pump receipt is the reference every other fuel figure here is measured " +
+            "against. Two fills to the automatic shutoff are what it takes: whatever the pump " +
+            "put in the second time is what the engine burned in between, which is the one " +
+            "fuel measurement in this app that no sensor guessed at.",
+        color = CivicColors.Ink3,
+        fontSize = 12.5.sp,
+    )
+    Spacer(Modifier.height(14.dp))
+
+    EntryField(
+        label = "GALLONS ON THE PUMP",
+        value = gallons,
+        onChange = { gallons = it },
+        hint = "11.42",
+    )
+    Spacer(Modifier.height(12.dp))
+    EntryField(
+        label = "ODOMETER (OPTIONAL)",
+        value = odometer,
+        onChange = { odometer = it },
+        // Optional and worth explaining, because it corrects a different error from the
+        // gallons. The road-speed PID arrives in whole km/h and usually reads a little fast,
+        // so the miles this app counts are not quite the miles the car counts. Two odometer
+        // readings a tank apart measure that, and nothing else here can.
+        hint = "142380",
+    )
+    Spacer(Modifier.height(12.dp))
+
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { toShutoff = !toShutoff }
+            .padding(vertical = 10.dp),
+    ) {
+        Box(
+            Modifier
+                .width(18.dp)
+                .height(18.dp)
+                .background(
+                    if (toShutoff) CivicColors.Accent else Color.Transparent,
+                    RoundedCornerShape(3.dp),
+                )
+                .border(
+                    1.dp,
+                    if (toShutoff) CivicColors.Accent else CivicColors.Ink4,
+                    RoundedCornerShape(3.dp),
+                ),
+        )
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text("Filled to the automatic shutoff", color = CivicColors.Ink, fontSize = 14.sp)
+            Text(
+                text = if (toShutoff) {
+                    "This one can be measured."
+                } else {
+                    "A part fill. It still starts a new tank, and the next fill to the click " +
+                        "gets measured from it."
+                },
+                color = CivicColors.Ink3,
+                fontSize = 12.sp,
+            )
+        }
+    }
+
+    Spacer(Modifier.height(6.dp))
+    val ready = pumpGallons != null && pumpGallons > 0
+    Text(
+        text = if (ready) "Log this fill" else "Enter the gallons to log this fill",
+        color = if (ready) CivicColors.Accent else CivicColors.Ink4,
+        fontSize = 15.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(
+                if (ready) {
+                    Modifier.clickable {
+                        TelemetryService.recordFill(
+                            context = context,
+                            pumpGallons = pumpGallons,
+                            filledToShutoff = toShutoff,
+                            odometerMiles = odometerMiles,
+                        )
+                        gallons = ""
+                        odometer = ""
+                    }
+                } else {
+                    Modifier
+                }
+            )
+            .padding(vertical = 12.dp),
+    )
+
+    // The receipt-free path, kept because it is still the right answer sometimes: a fill
+    // somebody else paid for, or one the app missed while the adapter was elsewhere. It
+    // restarts the tank without claiming to have measured anything.
+    Text(
+        text = "Start a new tank without a receipt",
+        color = CivicColors.Ink2,
+        fontSize = 14.sp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { TelemetryService.markFilled(context) }
+            .padding(vertical = 10.dp),
+    )
+
+    if (calibration.samples.isNotEmpty()) {
+        Text(
+            text = "Clear the ${calibration.samples.size} logged fill-ups",
+            color = CivicColors.Ink3,
+            fontSize = 13.sp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { TelemetryService.resetFuelCalibration(context) }
+                .padding(vertical = 10.dp),
+        )
+        Text(
+            text = "Only after a new MAF sensor or a tyre size change - either makes every " +
+                "stored fill a measurement of a car that no longer exists.",
+            color = CivicColors.Ink4,
+            fontSize = 11.5.sp,
+        )
+    }
+}
+
+/** A plain number entry, hand-rolled to match the rest of the screen. */
+@Composable
+private fun EntryField(
+    label: String,
+    value: String,
+    onChange: (String) -> Unit,
+    hint: String,
+) {
+    Label(label)
+    Spacer(Modifier.height(5.dp))
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .background(CivicColors.Hairline, RoundedCornerShape(4.dp))
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+    ) {
+        if (value.isEmpty()) {
+            Text(hint, color = CivicColors.Ink4, fontSize = 16.sp)
+        }
+        BasicTextField(
+            value = value,
+            // Filtered on the way in rather than validated on the way out. A stray character
+            // in a gallons figure is not a thing to explain to someone standing at a pump.
+            onValueChange = { entered ->
+                onChange(entered.filter { it.isDigit() || it == '.' }.take(9))
+            },
+            singleLine = true,
+            textStyle = TextStyle(color = CivicColors.Ink, fontSize = 16.sp),
+            cursorBrush = SolidColor(CivicColors.Accent),
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 

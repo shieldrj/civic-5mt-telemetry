@@ -4,6 +4,7 @@ import com.shieldrj.civic5mt.core.ClutchProfile
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.DtcScanReport
 import com.shieldrj.civic5mt.core.FuelBlendId
+import com.shieldrj.civic5mt.core.FuelCalibrationState
 import com.shieldrj.civic5mt.core.LifetimeStats
 import com.shieldrj.civic5mt.core.LiveMetrics
 import com.shieldrj.civic5mt.core.OilLifeProfile
@@ -52,6 +53,16 @@ object TelemetryState {
 
     private val _lifetime = MutableStateFlow(LifetimeStats())
     val lifetime: StateFlow<LifetimeStats> = _lifetime.asStateFlow()
+
+    /**
+     * What the logged fill-ups taught, kept separately from [metrics] on purpose.
+     *
+     * The live metrics carry the corrections too, but they only exist while something is
+     * connected. The fill history is the opposite kind of record - it is read standing at a
+     * pump with the ignition off, which is exactly when there are no metrics.
+     */
+    private val _calibration = MutableStateFlow(FuelCalibrationState())
+    val calibration: StateFlow<FuelCalibrationState> = _calibration.asStateFlow()
 
     /** Human-readable progress during the handshake, and the failure text if it fails. */
     private val _statusMessage = MutableStateFlow("Not connected")
@@ -167,6 +178,10 @@ object TelemetryState {
 
     internal fun setLifetime(stats: LifetimeStats) {
         _lifetime.value = stats
+    }
+
+    internal fun setCalibration(state: FuelCalibrationState) {
+        _calibration.value = state
     }
 
     internal fun setStatusMessage(message: String) {

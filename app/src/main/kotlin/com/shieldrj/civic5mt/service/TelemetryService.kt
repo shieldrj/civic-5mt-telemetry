@@ -21,6 +21,10 @@ import com.shieldrj.civic5mt.core.ClutchHealthEngine
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.DtcScanner
 import com.shieldrj.civic5mt.core.Elm327Client
+import com.shieldrj.civic5mt.core.FillOutcome
+import com.shieldrj.civic5mt.core.FillRejection
+import com.shieldrj.civic5mt.core.FuelCalibrationEngine
+import com.shieldrj.civic5mt.core.FuelCalibrationRules
 import com.shieldrj.civic5mt.core.ObdTransportError
 import com.shieldrj.civic5mt.core.ReconnectPolicy
 import com.shieldrj.civic5mt.core.OilLifeEngine
@@ -126,10 +130,12 @@ class TelemetryService : Service() {
             oilLife = OilLifeEngine(PrefsOilProfileStore(applicationContext)),
             clutchHealth = ClutchHealthEngine(PrefsClutchProfileStore(applicationContext)),
             tank = TankTracker(PrefsTankStore(applicationContext)),
+            fuelCalibration = FuelCalibrationEngine(PrefsFuelCalibrationStore(applicationContext)),
         )
         TelemetryState.setLifetime(manager.getLifetimeStats())
         TelemetryState.setOil(manager.oilLife.getProfile())
         TelemetryState.setClutch(manager.clutchHealth.getProfile())
+        TelemetryState.setCalibration(manager.getCalibration())
 
         recorder = TripRecorder(TripDatabase.get(applicationContext).tripDao())
 
@@ -485,6 +491,24 @@ class TelemetryService : Service() {
 
             ACTION_SCAN_DTC -> scanForCodes()
 
+            ACTION_RECORD_FILL -> {
+                recordFill(
+                    pumpGallons = intent.getDoubleExtra(EXTRA_PUMP_GALLONS, 0.0),
+                    filledToShutoff = intent.getBooleanExtra(EXTRA_FILLED_TO_SHUTOFF, false),
+                    // -1 stands in for "not entered". An odometer of zero is a real reading on
+                    // a car that has none to give, and the two must not collapse together.
+                    odometerMiles = intent.getDoubleExtra(EXTRA_ODOMETER_MILES, -1.0)
+                        .takeIf { it > 0.0 },
+                )
+            }
+
+            ACTION_RESET_FUEL_CALIBRATION -> {
+                manager.resetFuelCalibration()
+                TelemetryState.setStatusMessage(
+                    "Fuel calibration cleared. The next two fills to the click will measure it again.",
+                )
+            }
+
             ACTION_MARK_FILLED -> {
                 markFilled()
                 stopIfIdle()
@@ -778,6 +802,69 @@ class TelemetryService : Service() {
      * adapter. It uses the level the car is reporting now, so it is worth doing with the
      * ignition on rather than from the driveway.
      */
+    /**
+     * Logs a fill with the pump's own figure attached.
+     *
+     * The status message is the whole user interface for this: someone standing at a pump has
+     * typed a number in and wants to know whether it counted. Saying "logged" either way would
+     * be the worst of both - the fills that teach nothing look identical to the ones that do,
+     * and the correction never appears to improve.
+     */
+    private fun recordFill(pumpGallons: Double, filledToShutoff: Boolean, odometerMiles: Double?) {
+        val level = TelemetryState.metrics.value.fuelLevelPercent
+        if (level == null) {
+            TelemetryState.setStatusMessage("No tank level from the car, so there is nothing to reset.")
+            return
+        }
+
+        val outcome = manager.recordFill(
+            pumpGallons = pumpGallons,
+            filledToShutoff = filledToShutoff,
+            levelPercent = level,
+            odometerMiles = odometerMiles,
+        )
+        TelemetryState.setCalibration(manager.getCalibration())
+
+        TelemetryState.setStatusMessage(
+            when (outcome) {
+                is FillOutcome.Accepted -> {
+                    val state = outcome.state
+                    val off = (state.fuelCorrectionFactor - 1.0) * 100
+                    val direction = if (off >= 0) "under" else "over"
+                    "Fill logged. The tank sensors read %.1f%% %s the pump, over %d fill%s."
+                        .format(kotlin.math.abs(off), direction, state.samples.size, if (state.samples.size == 1) "" else "s")
+                }
+
+                is FillOutcome.Rejected -> when (outcome.reason) {
+                    FillRejection.NOT_FILLED_TO_SHUTOFF ->
+                        "New tank started. A part fill cannot be measured, but the next fill to " +
+                            "the click will be measured from it."
+
+                    FillRejection.NO_FULL_FILL_BASELINE ->
+                        "New tank started. Fill to the click again next time and that one gets " +
+                            "measured - it takes two to make a span."
+
+                    FillRejection.SPAN_TOO_SHORT ->
+                        "New tank started. Too small to measure from: it takes about " +
+                            "${FuelCalibrationRules.MIN_PUMP_GALLONS.toInt()} gallons and " +
+                            "${FuelCalibrationRules.MIN_MILES.toInt()} miles."
+
+                    FillRejection.IMPLAUSIBLE_PUMP_GALLONS ->
+                        "New tank started. That is more than the tank holds, so it was not used " +
+                            "for the calibration."
+
+                    FillRejection.NO_MEASUREMENT ->
+                        "New tank started. The app tracked nothing across that tank, so there " +
+                            "was nothing to compare the receipt against."
+
+                    FillRejection.IMPLAUSIBLE_RATIO ->
+                        "New tank started. The receipt and the sensors are too far apart to be " +
+                            "a sensor error - a missed fill, most likely - so it was not used."
+                }
+            },
+        )
+    }
+
     private fun markFilled() {
         val level = TelemetryState.metrics.value.fuelLevelPercent
         if (level == null) {
@@ -1021,6 +1108,11 @@ class TelemetryService : Service() {
         const val ACTION_RESET_OIL = "com.shieldrj.civic5mt.RESET_OIL"
         const val ACTION_RESET_CLUTCH = "com.shieldrj.civic5mt.RESET_CLUTCH"
         const val ACTION_MARK_FILLED = "com.shieldrj.civic5mt.MARK_FILLED"
+        const val ACTION_RECORD_FILL = "com.shieldrj.civic5mt.RECORD_FILL"
+        const val ACTION_RESET_FUEL_CALIBRATION = "com.shieldrj.civic5mt.RESET_FUEL_CALIBRATION"
+        const val EXTRA_PUMP_GALLONS = "pump_gallons"
+        const val EXTRA_FILLED_TO_SHUTOFF = "filled_to_shutoff"
+        const val EXTRA_ODOMETER_MILES = "odometer_miles"
         const val ACTION_DISCONNECT = "com.shieldrj.civic5mt.DISCONNECT"
         const val EXTRA_DEVICE_ADDRESS = "deviceAddress"
 
@@ -1081,6 +1173,34 @@ class TelemetryService : Service() {
         fun clearCodes(context: Context) {
             context.startService(
                 Intent(context, TelemetryService::class.java).apply { action = ACTION_CLEAR_DTC }
+            )
+        }
+
+        /**
+         * Logs a fill with the receipt attached, which is the only way anything here gets
+         * checked against a measurement this app did not make.
+         */
+        fun recordFill(
+            context: Context,
+            pumpGallons: Double,
+            filledToShutoff: Boolean,
+            odometerMiles: Double?,
+        ) {
+            context.startService(
+                Intent(context, TelemetryService::class.java).apply {
+                    action = ACTION_RECORD_FILL
+                    putExtra(EXTRA_PUMP_GALLONS, pumpGallons)
+                    putExtra(EXTRA_FILLED_TO_SHUTOFF, filledToShutoff)
+                    putExtra(EXTRA_ODOMETER_MILES, odometerMiles ?: -1.0)
+                }
+            )
+        }
+
+        fun resetFuelCalibration(context: Context) {
+            context.startService(
+                Intent(context, TelemetryService::class.java).apply {
+                    action = ACTION_RESET_FUEL_CALIBRATION
+                }
             )
         }
 
