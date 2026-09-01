@@ -27,6 +27,7 @@ class TelemetryManager(
     val clutchHealth: ClutchHealthEngine = ClutchHealthEngine(clock = clock),
     val fuelModel: FuelModelEngine = FuelModelEngine(),
     val tank: TankTracker = TankTracker(clock = clock),
+    val fuelCalibration: FuelCalibrationEngine = FuelCalibrationEngine(clock = clock),
     val charging: ChargingMonitor = ChargingMonitor(),
     private val gearCalculator: GearCalculatorEngine = GearCalculatorEngine(clock),
 ) {
@@ -51,6 +52,25 @@ class TelemetryManager(
 
     /** Holds the distance-to-empty figure still enough to read. Display only. */
     private val rangeDamper = RangeDamper()
+
+    init {
+        // The stored correction has to reach the fuel model before the first tick, not at the
+        // first fill. Everything the engine has already learned lives on disk; leaving it there
+        // until someone next stands at a pump would mean every restart spent a tank running
+        // uncorrected and calling it measured.
+        applyCalibration()
+    }
+
+    /**
+     * Hands the learned corrections to the two places that create measurements from sensors.
+     *
+     * Fuel goes into [FuelModelEngine], which is where gallons are made. Distance is applied at
+     * the point of integration below rather than being pushed anywhere, because miles are made
+     * from a speed reading in this file and nowhere else.
+     */
+    private fun applyCalibration() {
+        fuelModel.setFuelCorrectionFactor(fuelCalibration.fuelFactor())
+    }
 
     /**
      * One step.
@@ -84,6 +104,18 @@ class TelemetryManager(
         //    accumulate a bias over thousands of ticks.
         val speedMphRaw = raw.speedKmh * KM_PER_HOUR_TO_MPH
         val speedMph = roundTo(speedMphRaw, 1)
+
+        // The same speed, corrected to what the odometer says the car actually covers.
+        //
+        // Two speeds on purpose. The displayed one stays exactly as the car reported it,
+        // because a speed readout is a sensor reading and the project does not invent those -
+        // and because a driver comparing it against the dashboard needs to see what the car
+        // said, not what the app concluded. Everything that accumulates uses this one instead:
+        // the road-speed PID arrives as whole km/h and, on most cars, reads a little fast, and
+        // a bias of two percent applied ten times a second for a tank is the difference
+        // between a distance-to-empty that is right and one that is confidently eight miles
+        // long. Which of those two it is, is measured - see FuelCalibrationState.
+        val speedMphForDistance = speedMphRaw * fuelCalibration.distanceFactor()
         val coolantF = ((raw.coolantC * 9) / 5 + 32).roundToInt()
         val outsideAirF = raw.ambientC?.let { ((it * 9) / 5 + 32).roundToInt() }
 
@@ -97,7 +129,11 @@ class TelemetryManager(
         val flow = fuelModel.calculateFuelFlow(raw.maf, afr, isDfco)
 
         // 4. MPG, in its three forms - instantaneous, rolling, and damped for reading.
-        val instantMpg = fuelModel.calculateInstantMpg(speedMph, flow.fuelFlowGalPerHour, isDfco)
+        // Corrected speed, so that every economy figure in the app - instant, rolling, this
+        // tank, lifetime and verified - is built on the same miles. They disagreed by whatever
+        // the speed bias was before, which is a small error that reads as an untrustworthy app.
+        val instantMpg =
+            fuelModel.calculateInstantMpg(speedMphForDistance, flow.fuelFlowGalPerHour, isDfco)
         val rollingMpg = fuelModel.updateRollingMpg(instantMpg)
         val displayMpg = fuelModel.updateDisplayMpg(instantMpg, speedMph, isDfco, dtSec)
         // Range comes from the tank tracker now, further down, once this step has been added
@@ -105,14 +141,21 @@ class TelemetryManager(
         // what made it swing: it is a record of the last hill, not an economy figure.
 
         // 5. Integrate the trip, and the permanent record if this is a real adapter.
-        updateTrip(integrationDtSec, speedMphRaw, flow.fuelFlowGalPerHour, isDfco, raw.rpm, status)
+        updateTrip(
+            integrationDtSec,
+            speedMphForDistance,
+            flow.fuelFlowGalPerHour,
+            isDfco,
+            raw.rpm,
+            status,
+        )
 
         // 6. The tank. Real driving only, for the same reason the lifetime record is: a bench
         //    run must not report that fuel was burned or that a tank was filled.
         if (IntegrationRules.shouldRecordLifetime(status) && integrationDtSec > 0 && raw.rpm >= 350) {
             tank.record(
                 levelPercent = raw.fuelLevelPercent,
-                milesStep = (speedMphRaw / 3600) * integrationDtSec,
+                milesStep = (speedMphForDistance / 3600) * integrationDtSec,
                 gallonsStep = (flow.fuelFlowGalPerHour / 3600) * integrationDtSec,
                 dtSec = integrationDtSec,
             )
@@ -126,16 +169,27 @@ class TelemetryManager(
         // record means nothing has been tracked yet - a bench run, or the first seconds of a
         // real drive - and "0 miles to empty" there is an alarm about nothing.
         val tankKnown = raw.fuelLevelPercent != null && tankState.fillTimestamp != 0L
-        val fuelRange = if (tankKnown) {
+        val calibration = fuelCalibration.get()
+        val verifiedMpg = calibration.verifiedMpg.takeIf { calibration.verifiedMpgUsable }
+        val mpgForRange = TankRules.mpgForRange(
+            tankMpg = tankState.tankMpg,
+            tankGallonsUsed = tankState.gallonsUsedSinceFill,
+            lifetimeMpg = lifetime.lifetimeMpg,
+            lifetimeMiles = lifetime.totalMiles,
+            verifiedMpg = verifiedMpg,
+        )
+        val range = if (tankKnown) {
             // Damped on the way out rather than computed differently: the arithmetic was
             // already right, it was the last digit that would not sit still. See RangeDamper.
-            rangeDamper.update(
-                rawRangeMiles(tankState, lifetime.lifetimeMpg, lifetime.totalMiles),
+            val total = rangeDamper.update(
+                rawRangeMiles(tankState, lifetime.lifetimeMpg, lifetime.totalMiles, verifiedMpg),
                 dtSec,
             )
+            splitRange(tankState, total, mpgForRange)
         } else {
             null
         }
+        val fuelRange = range?.totalMiles
 
         // 7. Engine wear - real driving only.
         //
@@ -241,6 +295,15 @@ class TelemetryManager(
             tankGallonsRemaining = if (tankKnown) tankState.gallonsRemaining else null,
             tankCalibrated = tankState.calibrated,
             tankBelowSenderZero = tankKnown && tankState.belowSenderZero,
+            fuelRangeToSenderZeroMiles = range?.toSenderZeroMiles,
+            fuelRangeReserveMiles = range?.reserveMiles,
+            rangeMpgUsed = if (tankKnown) roundTo(mpgForRange, 1) else null,
+            verifiedMpg = calibration.verifiedMpg?.let { roundTo(it, 1) },
+            verifiedGallons = roundTo(calibration.verifiedGallons, 2),
+            fuelCorrectionFactor = calibration.fuelCorrectionFactor,
+            distanceCorrectionFactor = calibration.distanceCorrectionFactor,
+            calibrationFillCount = calibration.samples.size,
+            calibrationSpreadPercent = calibration.spreadPercent?.let { roundTo(it, 1) },
             currentGear = gear.currentGear,
             gearRatio = roundTo(gear.calculatedRatio, 2),
             isClutchSlipping = gear.isClutchSlipping || clutchLive.isSlipping,
@@ -459,6 +522,7 @@ class TelemetryManager(
         oilLife.saveProfile()
         clutchHealth.saveProfile()
         tank.flush()
+        fuelCalibration.flush()
     }
 
     fun resetTrip() {
@@ -506,4 +570,49 @@ class TelemetryManager(
     }
 
     fun getFuelBlend(): FuelBlendProperties = fuelModel.getFuelBlend()
+
+    /**
+     * Logs a fill-up, learns what it can from it, and starts the new tank.
+     *
+     * The order is the whole point and it is easy to get backwards. What this tank measured -
+     * its miles and its gallons - is read out first, because [TankTracker.markFilled] resets
+     * both to zero. Then the receipt is compared against them, which is where the corrections
+     * come from. Then the corrections are handed to the fuel model, so the tank that starts
+     * next is measured with what this fill just taught rather than with what the fill before
+     * it taught. Restarting the tank first would compare a pump receipt against a tank that
+     * had already been emptied to zero, and every fill would look like a total sensor failure.
+     *
+     * @param pumpGallons what the pump charged for
+     * @param filledToShutoff whether the nozzle clicked off by itself. A partial fill cannot be
+     *   measured - the tank did not end where it started - but it is still logged, and it
+     *   becomes the start point the next fill is measured against.
+     * @param levelPercent the sender reading now, for the new tank
+     * @param odometerMiles the odometer now, if it was read
+     */
+    fun recordFill(
+        pumpGallons: Double,
+        filledToShutoff: Boolean,
+        levelPercent: Double,
+        odometerMiles: Double? = null,
+    ): FillOutcome {
+        val closing = tank.get()
+        val outcome = fuelCalibration.recordFill(
+            pumpGallons = pumpGallons,
+            filledToShutoff = filledToShutoff,
+            measuredGallons = closing.gallonsUsedSinceFill,
+            measuredMiles = closing.milesSinceFill,
+            odometerMiles = odometerMiles,
+        )
+        applyCalibration()
+        tank.markFilled(levelPercent)
+        return outcome
+    }
+
+    fun getCalibration(): FuelCalibrationState = fuelCalibration.get()
+
+    /** Forgets every logged fill. For a MAF replacement or a tyre size change. */
+    fun resetFuelCalibration() {
+        fuelCalibration.reset()
+        applyCalibration()
+    }
 }

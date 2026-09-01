@@ -11,7 +11,10 @@ import com.shieldrj.civic5mt.core.ClutchProfileStore
 import com.shieldrj.civic5mt.core.ClutchSlipIncident
 import com.shieldrj.civic5mt.core.ClutchWearBreakdown
 import com.shieldrj.civic5mt.core.DegradationBreakdown
+import com.shieldrj.civic5mt.core.FillSample
 import com.shieldrj.civic5mt.core.FuelBlendId
+import com.shieldrj.civic5mt.core.FuelCalibrationState
+import com.shieldrj.civic5mt.core.FuelCalibrationStore
 import com.shieldrj.civic5mt.core.GasPrice
 import com.shieldrj.civic5mt.core.GasPriceSnapshot
 import com.shieldrj.civic5mt.core.LifetimeStats
@@ -58,6 +61,7 @@ private const val KEY_BACKUP_TREE_URI = "backup_tree_uri"
 private const val KEY_BACKUP_DOC_URI = "backup_doc_uri"
 private const val KEY_LAST_BACKUP_AT = "last_backup_at"
 private const val KEY_GAS_PRICES = "costco_gas_prices_v1"
+private const val KEY_FUEL_CALIBRATION = "civic_2013_fuel_calibration_v1"
 
 private const val TAG = "PersistentStores"
 
@@ -354,6 +358,87 @@ internal fun parseTank(j: JSONObject): TankState = TankState(
     fullMarkPercent = j.optDouble("fullMarkPercent", 0.0),
 )
 
+// ── What the pump receipts taught ────────────────────────────────────────────────
+
+/**
+ * The fill history, which is the only thing in this app that ever checked a sensor.
+ *
+ * Worth more per byte than anything else stored here. A gallons-per-percent figure is measured
+ * once a tank and can be measured again next tank; this is measured once a tank too, but the
+ * corrections it produces are averaged over six of them, so losing the file costs three months
+ * of fills and sends every range figure back to trusting the MAF unchecked.
+ */
+class PrefsFuelCalibrationStore(context: Context) : FuelCalibrationStore {
+    private val prefs = telemetryPrefs(context)
+
+    override fun load(): FuelCalibrationState? {
+        val raw = prefs.getString(KEY_FUEL_CALIBRATION, null) ?: return null
+        return runCatching { parseFuelCalibration(JSONObject(raw)) }
+            .onFailure { Log.w(TAG, "Fuel calibration unreadable, ignoring", it) }
+            .getOrNull()
+    }
+
+    override fun save(state: FuelCalibrationState) {
+        prefs.edit()
+            .putString(KEY_FUEL_CALIBRATION, fuelCalibrationToJson(state).toString())
+            .apply()
+    }
+}
+
+internal fun fuelCalibrationToJson(state: FuelCalibrationState): JSONObject {
+    val samples = JSONArray()
+    for (s in state.samples) {
+        samples.put(
+            JSONObject()
+                .put("timestampMillis", s.timestampMillis)
+                .put("pumpGallons", s.pumpGallons)
+                .put("measuredGallons", s.measuredGallons)
+                .put("measuredMiles", s.measuredMiles)
+                .put("fuelFactorInEffect", s.fuelFactorInEffect)
+                .put("distanceFactorInEffect", s.distanceFactorInEffect)
+                // Written as null rather than as zero. Zero odometer miles is a claim that the
+                // car did not move, and the pooled distance correction would then divide by a
+                // total that a skipped reading had quietly dragged down.
+                .put("odometerMiles", s.odometerMiles ?: JSONObject.NULL),
+        )
+    }
+    return JSONObject()
+        .put("samples", samples)
+        .put("lastFillWasFull", state.lastFillWasFull)
+        .put("lastOdometerMiles", state.lastOdometerMiles ?: JSONObject.NULL)
+        // Derived, and written only so a human reading the file can see what it concluded.
+        // Both are recomputed from the samples on load, the same way lifetime MPG is.
+        .put("fuelCorrectionFactor", state.fuelCorrectionFactor)
+        .put("distanceCorrectionFactor", state.distanceCorrectionFactor)
+}
+
+internal fun parseFuelCalibration(j: JSONObject): FuelCalibrationState {
+    val array = j.optJSONArray("samples") ?: JSONArray()
+    val samples = buildList {
+        for (i in 0 until array.length()) {
+            val o = array.optJSONObject(i) ?: continue
+            add(
+                FillSample(
+                    timestampMillis = o.optLong("timestampMillis", 0L),
+                    pumpGallons = o.optDouble("pumpGallons", 0.0),
+                    measuredGallons = o.optDouble("measuredGallons", 0.0),
+                    measuredMiles = o.optDouble("measuredMiles", 0.0),
+                    // One rather than zero on an old or damaged record: a factor of zero would
+                    // make rawGallons infinite and take the whole correction with it.
+                    fuelFactorInEffect = o.optDouble("fuelFactorInEffect", 1.0).takeIf { it > 0 } ?: 1.0,
+                    distanceFactorInEffect = o.optDouble("distanceFactorInEffect", 1.0).takeIf { it > 0 } ?: 1.0,
+                    odometerMiles = if (o.isNull("odometerMiles")) null else o.optDouble("odometerMiles"),
+                ),
+            )
+        }
+    }
+    return FuelCalibrationState(
+        samples = samples,
+        lastFillWasFull = j.optBoolean("lastFillWasFull", false),
+        lastOdometerMiles = if (j.isNull("lastOdometerMiles")) null else j.optDouble("lastOdometerMiles"),
+    )
+}
+
 // ── The adapter last used ────────────────────────────────────────────────────────
 
 /**
@@ -621,6 +706,7 @@ fun snapshotRecords(context: Context): JSONObject {
         .put(KEY_CLUTCH, prefs.getString(KEY_CLUTCH, null) ?: JSONObject.NULL)
         .put(KEY_TANK, prefs.getString(KEY_TANK, null) ?: JSONObject.NULL)
         .put(KEY_FUEL_BLEND, prefs.getString(KEY_FUEL_BLEND, null) ?: JSONObject.NULL)
+        .put(KEY_FUEL_CALIBRATION, prefs.getString(KEY_FUEL_CALIBRATION, null) ?: JSONObject.NULL)
 }
 
 /**
@@ -662,6 +748,14 @@ fun restoreRecords(context: Context, backup: JSONObject): List<String> {
             PrefsTankStore(context).save(it)
             messages += "tank state"
         }
+    }
+
+    if (prefs.getString(KEY_FUEL_CALIBRATION, null) == null && !backup.isNull(KEY_FUEL_CALIBRATION)) {
+        runCatching { parseFuelCalibration(JSONObject(backup.getString(KEY_FUEL_CALIBRATION))) }
+            .getOrNull()?.let {
+                PrefsFuelCalibrationStore(context).save(it)
+                messages += "${it.samples.size} logged fill-ups"
+            }
     }
 
     backup.optString(KEY_FUEL_BLEND).takeIf { it.isNotBlank() }?.let { blend ->

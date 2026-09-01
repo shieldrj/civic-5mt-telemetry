@@ -35,3 +35,5 @@ Android telemetry, diagnostics, and prognostics application for the **2013 Honda
 2. **Motion Gating**: Physical wear integrals must check `speed > 0`.
 3. **Gear Latching on Slip**: Keep gear context engaged during throttle flaring.
 4. **Minimal Overlay HUD**: `HudContent.kt` over Google Maps is kept clean and minimal; full metrics live on dedicated pages.
+5. **Pump-Verified Fuel**: MAF-derived gallons and speed-derived miles are both inferences and both drift. `FuelCalibration.kt` corrects them against fill-to-shutoff receipts and odometer deltas. Two invariants: a sample stores the factor that was in effect when it was taken (so the correction never learns from its own output), and a partial fill is refused rather than averaged in (the tank-to-tank identity needs both ends at the same level).
+6. **Range Is Two Numbers**: distance to empty is reported as miles-to-sender-zero (comparable with the dashboard, which excludes the reserve by design) plus reserve miles. Presenting only the total is what made the app read 130 against the dash's 54.

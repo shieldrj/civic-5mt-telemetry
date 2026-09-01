@@ -287,11 +287,17 @@ object TankRules {
         tankGallonsUsed: Double,
         lifetimeMpg: Double,
         lifetimeMiles: Double,
+        verifiedMpg: Double? = null,
     ): Double {
-        val baseline = if (lifetimeMpg > 10.0 && lifetimeMiles >= MIN_LIFETIME_MILES_FOR_RANGE) {
-            lifetimeMpg
-        } else {
-            CivicSpecs.EPA_COMBINED_MPG_DEFAULT
+        val baseline = when {
+            // Odometer miles over pump gallons. Nothing in this app measured either one, which
+            // is exactly why it outranks the lifetime figure: the lifetime average is a very
+            // long integration of the same MAF chain that the fills exist to check. Once the
+            // corrections are applied the two converge, and that convergence is the evidence
+            // the calibration is working rather than a coincidence to lean on.
+            verifiedMpg != null && verifiedMpg > 10.0 -> verifiedMpg
+            lifetimeMpg > 10.0 && lifetimeMiles >= MIN_LIFETIME_MILES_FOR_RANGE -> lifetimeMpg
+            else -> CivicSpecs.EPA_COMBINED_MPG_DEFAULT
         }
         if (tankMpg == null || tankMpg <= 10.0 || tankMpg >= 65.0) return baseline
 
@@ -487,19 +493,51 @@ class TankTracker(
  * Kept apart from [TankState] because it needs the lifetime figure as well, and because the
  * fallback order is the interesting part rather than the multiplication.
  */
-fun rangeMiles(tank: TankState, lifetimeMpg: Double, lifetimeMiles: Double = Double.MAX_VALUE): Int =
-    rawRangeMiles(tank, lifetimeMpg, lifetimeMiles).toInt()
+fun rangeMiles(
+    tank: TankState,
+    lifetimeMpg: Double,
+    lifetimeMiles: Double = Double.MAX_VALUE,
+    verifiedMpg: Double? = null,
+): Int = rawRangeMiles(tank, lifetimeMpg, lifetimeMiles, verifiedMpg).toInt()
 
 /** [rangeMiles] before it is rounded, which is what [RangeDamper] needs to smooth. */
 fun rawRangeMiles(
     tank: TankState,
     lifetimeMpg: Double,
     lifetimeMiles: Double = Double.MAX_VALUE,
+    verifiedMpg: Double? = null,
 ): Double = tank.gallonsRemaining * TankRules.mpgForRange(
     tankMpg = tank.tankMpg,
     tankGallonsUsed = tank.gallonsUsedSinceFill,
     lifetimeMpg = lifetimeMpg,
     lifetimeMiles = lifetimeMiles,
+    verifiedMpg = verifiedMpg,
+)
+
+/**
+ * Distance to empty, split at the point the fuel gauge stops being able to see.
+ *
+ * The split is the difference between this app's answer and the dashboard's, and it is not a
+ * disagreement about fuel - it is a disagreement about which question is being asked. Honda's
+ * distance to empty counts down to zero with the reserve still in the tank, on purpose. This
+ * app counts the reserve, because it was asked for what is actually there.
+ *
+ * Both are true and they are two different numbers, so both are returned. [toSenderZero] is
+ * the one that lines up with the dashboard and the one to plan a fuel stop around;
+ * [reserve] is the fuel underneath the sender's zero, which is real, is measured
+ * (see [TankState.reserveGallons]) and is the least certain fuel in the tank - it is the only
+ * part no sensor watches going down. Presenting it as part of one long number is what made
+ * the app read a hundred and thirty when the dash read fifty-four.
+ */
+data class RangeEstimate(
+    /** Everything in the tank, reserve included. */
+    val totalMiles: Int,
+    /** Miles before the sender reads zero. Comparable with the dashboard's figure. */
+    val toSenderZeroMiles: Int,
+    /** Miles held in the reserve below the sender's zero. */
+    val reserveMiles: Int,
+    /** The economy figure the whole estimate was built on. */
+    val mpgUsed: Double,
 )
 
 /**
@@ -534,6 +572,28 @@ class RangeDamper(
         damped = next
         return max(0.0, next).toInt()
     }
+}
+
+/**
+ * Splits a settled distance-to-empty figure into the part the sender can see and the part it
+ * cannot.
+ *
+ * The split is taken as a proportion of the damped total rather than computed fresh from the
+ * gallons, so both halves inherit the same smoothing and always add back up to the number on
+ * screen. A split computed independently would drift a mile or two away from its own total
+ * during the three minutes [RangeDamper] takes to settle, and two figures that do not add up
+ * is precisely the kind of small wrongness that makes someone stop believing the large one.
+ */
+fun splitRange(tank: TankState, dampedTotalMiles: Int, mpgUsed: Double): RangeEstimate {
+    val gallons = tank.gallonsRemaining
+    val reserveShare = if (gallons > 0.001) (tank.reserveGallons / gallons).coerceIn(0.0, 1.0) else 0.0
+    val reserveMiles = (dampedTotalMiles * reserveShare).toInt()
+    return RangeEstimate(
+        totalMiles = dampedTotalMiles,
+        toSenderZeroMiles = (dampedTotalMiles - reserveMiles).coerceAtLeast(0),
+        reserveMiles = reserveMiles,
+        mpgUsed = mpgUsed,
+    )
 }
 
 /** True when the two independent ways of knowing the fuel level disagree enough to matter. */

@@ -66,6 +66,27 @@ class FuelModelEngine {
     fun getFuelBlend(): FuelBlendProperties = blend
 
     /**
+     * What the MAF chain's answer has to be multiplied by to match the pump.
+     *
+     * One until a fill-to-shutoff says otherwise, so an app that has never been given a
+     * receipt behaves exactly as it did before calibration existed. See [FuelCalibration].
+     *
+     * It is applied here, at the one place gallons are created, rather than at the tank. Every
+     * consumer downstream - instant MPG, the trip, the lifetime record, the tank's
+     * gallons-per-percent - divides or integrates this same number, so correcting it once is
+     * the only way they can agree. Correcting it at the tank instead would have left the
+     * lifetime MPG describing the uncorrected sensor and the tank describing the pump, and
+     * range is built from both.
+     */
+    private var fuelCorrectionFactor: Double = 1.0
+
+    fun setFuelCorrectionFactor(factor: Double) {
+        fuelCorrectionFactor = if (factor.isFinite() && factor > 0) factor else 1.0
+    }
+
+    fun getFuelCorrectionFactor(): Double = fuelCorrectionFactor
+
+    /**
      * Calculates actual air:fuel ratio from wideband lambda, or from fuel trims when the car
      * has no wideband PID to read.
      *
@@ -138,7 +159,13 @@ class FuelModelEngine {
         // Fuel mass flow (g/s) = air mass flow (g/s) / AFR. MAF measures air mass directly,
         // so this chain stays in mass until the final division by density - which is where
         // the blend's density has to be the real one.
-        val fuelFlowGramsPerSec = maf / afr
+        //
+        // The correction goes on the mass, not on the volume, because that is where the error
+        // being corrected lives: a drifted MAF misreports air mass, and the density and AFR
+        // downstream are then dividing an already-wrong number. Applying it here means the
+        // grams-per-second figure this returns is corrected too, so anything reading it gets
+        // the same story as the gallons.
+        val fuelFlowGramsPerSec = (maf / afr) * fuelCorrectionFactor
 
         return FuelFlow(
             fuelFlowGramsPerSec = fuelFlowGramsPerSec,

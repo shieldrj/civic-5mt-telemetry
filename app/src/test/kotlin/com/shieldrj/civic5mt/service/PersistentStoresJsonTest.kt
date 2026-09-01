@@ -5,6 +5,8 @@ import com.shieldrj.civic5mt.core.ClutchProfile
 import com.shieldrj.civic5mt.core.ClutchSlipIncident
 import com.shieldrj.civic5mt.core.ClutchWearBreakdown
 import com.shieldrj.civic5mt.core.DegradationBreakdown
+import com.shieldrj.civic5mt.core.FillSample
+import com.shieldrj.civic5mt.core.FuelCalibrationState
 import com.shieldrj.civic5mt.core.LifetimeStats
 import com.shieldrj.civic5mt.core.OilConditionGrade
 import com.shieldrj.civic5mt.core.OilLifeProfile
@@ -377,6 +379,105 @@ class PersistentStoresJsonTest {
             assertNull(restored.estimatedDaysRemaining)
             assertEquals(0.0, restored.accumulatedFrictionEnergyJoules)
             assertEquals(1.0, restored.ratioCalibration)
+        }
+    }
+
+    /**
+     * The fill history, which is the record that cost the most to produce.
+     *
+     * Every other stored figure can be measured again in a tank or two of driving. The
+     * corrections here are pooled over six fills - three months of them - and two fields are
+     * load-bearing in a way that is easy to miss: the factors that were in effect when each
+     * sample was taken. Lose those and every stored sample starts being read as though it had
+     * been measured with no correction applied, which is exactly the compounding the core
+     * model goes out of its way to avoid.
+     */
+    @Nested
+    @DisplayName("The fill history")
+    inner class FuelCalibrationRecord {
+
+        private val sample = FillSample(
+            timestampMillis = 1_770_000_000_000L,
+            pumpGallons = 11.42,
+            measuredGallons = 10.88,
+            measuredMiles = 402.7,
+            fuelFactorInEffect = 1.031,
+            distanceFactorInEffect = 0.978,
+            odometerMiles = 396.0,
+        )
+
+        @Test
+        @DisplayName("survives a round trip with every field intact")
+        fun roundTrips() {
+            val state = FuelCalibrationState(
+                samples = listOf(sample, sample.copy(pumpGallons = 9.9, odometerMiles = null)),
+                lastFillWasFull = true,
+                lastOdometerMiles = 142_380.0,
+            )
+
+            val restored = parseFuelCalibration(JSONObject(fuelCalibrationToJson(state).toString()))
+
+            assertEquals(2, restored.samples.size)
+            assertEquals(sample.pumpGallons, restored.samples[0].pumpGallons)
+            assertEquals(sample.measuredGallons, restored.samples[0].measuredGallons)
+            assertEquals(sample.measuredMiles, restored.samples[0].measuredMiles)
+            assertEquals(sample.fuelFactorInEffect, restored.samples[0].fuelFactorInEffect)
+            assertEquals(sample.distanceFactorInEffect, restored.samples[0].distanceFactorInEffect)
+            assertEquals(sample.odometerMiles, restored.samples[0].odometerMiles)
+            assertEquals(sample.timestampMillis, restored.samples[0].timestampMillis)
+            assertTrue(restored.lastFillWasFull)
+            assertEquals(142_380.0, restored.lastOdometerMiles)
+            assertEquals(state.fuelCorrectionFactor, restored.fuelCorrectionFactor, 1e-9)
+        }
+
+        /**
+         * A skipped odometer must come back as skipped, not as zero.
+         *
+         * Zero odometer miles is a claim that the car did not move, and the pooled distance
+         * correction is a sum over samples - a zero dragged into that numerator would make the
+         * app conclude the speed sensor reads high by however much the missing tank was worth.
+         */
+        @Test
+        @DisplayName("keeps a skipped odometer reading absent rather than turning it into zero")
+        fun absentOdometerStaysAbsent() {
+            val state = FuelCalibrationState(samples = listOf(sample.copy(odometerMiles = null)))
+
+            val restored = parseFuelCalibration(JSONObject(fuelCalibrationToJson(state).toString()))
+
+            assertNull(restored.samples[0].odometerMiles)
+            assertEquals(1.0, restored.distanceCorrectionFactor)
+        }
+
+        @Test
+        @DisplayName("reads an empty document as a car whose sensors have never been checked")
+        fun missingKeysAreSane() {
+            val restored = parseFuelCalibration(JSONObject("{}"))
+
+            assertTrue(restored.samples.isEmpty())
+            assertFalse(restored.calibrated)
+            assertFalse(restored.lastFillWasFull)
+            assertNull(restored.lastOdometerMiles)
+            assertEquals(1.0, restored.fuelCorrectionFactor)
+            assertEquals(1.0, restored.distanceCorrectionFactor)
+        }
+
+        /**
+         * A stored factor of zero would make rawGallons infinite and take the whole correction
+         * with it. Damaged records read as uncorrected rather than as catastrophic.
+         */
+        @Test
+        @DisplayName("reads a damaged correction factor as no correction at all")
+        fun zeroFactorIsRepaired() {
+            val doc = JSONObject(
+                """{"samples":[{"pumpGallons":11.0,"measuredGallons":10.0,"measuredMiles":350.0,
+                   "fuelFactorInEffect":0.0,"distanceFactorInEffect":0.0}]}""",
+            )
+
+            val restored = parseFuelCalibration(doc)
+
+            assertEquals(1.0, restored.samples[0].fuelFactorInEffect)
+            assertEquals(1.0, restored.samples[0].distanceFactorInEffect)
+            assertEquals(1.1, restored.fuelCorrectionFactor, 1e-9)
         }
     }
 }

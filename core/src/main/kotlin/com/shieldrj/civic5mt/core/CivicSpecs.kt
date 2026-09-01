@@ -161,8 +161,20 @@ object CivicSpecs {
     const val GAS_PRICE_DEFAULT_DOLLARS_PER_GALLON: Double = 3.45
     const val FUEL_TANK_CAPACITY_GALLONS: Double = 13.2 // 2013 Civic LX sedan factory tank spec
 
-    /** Fallback multiplier for range-to-empty before a rolling MPG sample exists. */
-    const val EPA_COMBINED_MPG_DEFAULT: Double = 32.0
+    /**
+     * Fallback multiplier for range-to-empty before this car has measured its own economy.
+     *
+     * The 5-speed manual's combined rating, which is 31 - 28 city, 36 highway. It was 32 here,
+     * which is the 5-speed automatic's number: the automatic's taller top gear buys it 39 on
+     * the highway against the manual's 36. One MPG, always in the optimistic direction, on the
+     * figure that stands in before anything real has been measured.
+     *
+     * It matters less than it did. A car that has logged fills builds range on a verified
+     * miles-per-gallon figure instead (see FuelCalibrationState.verifiedMpg), and this is only
+     * the first few tanks - but the first few tanks are exactly when nobody knows yet whether
+     * to believe the number.
+     */
+    const val EPA_COMBINED_MPG_DEFAULT: Double = 31.0
 
     /**
      * The telemetry loop's period. A spec rather than a literal in the tick loop because

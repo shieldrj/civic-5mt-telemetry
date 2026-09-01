@@ -93,6 +93,41 @@ data class LiveMetrics(
      */
     val tankBelowSenderZero: Boolean = false,
 
+    // ── What the pump receipts have taught ──────────────────────────────────────────
+    /**
+     * Miles before the sender reads zero, which is the figure the dashboard is showing.
+     *
+     * Null when there is no range at all. Equal to [fuelRangeMiles] on a tank with no measured
+     * reserve, which is the honest answer there: no reserve has been measured, so none is
+     * being claimed.
+     */
+    val fuelRangeToSenderZeroMiles: Int? = null,
+    /** Miles held below the sender's zero - real fuel, and the least certain fuel in the tank. */
+    val fuelRangeReserveMiles: Int? = null,
+    /** The economy figure the range was built on, so a screen can say where the number came from. */
+    val rangeMpgUsed: Double? = null,
+    /**
+     * Odometer miles over pump gallons, across the logged fills. Null before there are enough.
+     *
+     * The only economy figure here that no sensor in this app contributed to.
+     */
+    val verifiedMpg: Double? = null,
+    /** Pump gallons behind [verifiedMpg]. */
+    val verifiedGallons: Double = 0.0,
+    /** What the MAF chain's gallons are being multiplied by. 1.0 means nothing has corrected it. */
+    val fuelCorrectionFactor: Double = 1.0,
+    /** What integrated miles are being multiplied by. 1.0 means no odometer reading has been given. */
+    val distanceCorrectionFactor: Double = 1.0,
+    /** Fills behind the corrections. */
+    val calibrationFillCount: Int = 0,
+    /**
+     * How far the individual fills disagree with the pooled correction, as a percentage.
+     *
+     * The honest width of the range figure: two hundred miles at three percent spread is two
+     * hundred give or take six. Null before two fills, because one fill agrees with itself.
+     */
+    val calibrationSpreadPercent: Double? = null,
+
     // Manual transmission dynamics
     val currentGear: GearSelection = GearSelection.Neutral,
     val gearRatio: Double = 0.0,
