@@ -284,7 +284,9 @@ class ClutchHealthEngine(
         if (reportedGear != null) {
             if (confirmedGear == null || liftedSinceGearConfirmed || reportedGear == confirmedGear) {
                 confirmedGear = reportedGear
-                liftedSinceGearConfirmed = false
+                if (throttlePercent >= LIFT_THROTTLE_PERCENT) {
+                    liftedSinceGearConfirmed = false
+                }
                 return reportedGear
             }
             // A *different* gear, with no lift in between. The gearbox cannot have changed

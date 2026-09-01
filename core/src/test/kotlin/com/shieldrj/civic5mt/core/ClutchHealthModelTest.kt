@@ -285,6 +285,50 @@ class ClutchHealthModelTest {
             assertNotNull(incident, "A sustained macro-slip should be logged")
             assertEquals(5, incident.gear, "Logged the gear the driver escaped into, not the one that slipped")
         }
+
+        @Test
+        fun `Coasting down from 5th to low speed and accelerating in 2nd does not trigger slip`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double): ClutchLiveStatus {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                return engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = if (throttle > 20.0) 35.0 else 4.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 20.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                ).first
+            }
+
+            // 1. Cruising in 5th gear at 95 km/h (~60 mph)
+            repeat(20) { tick(lockedRpm(5, 95.0), 95.0, 25.0) }
+
+            // 2. Slowing down to 30 km/h (~18 mph) with clutch in, idling at 720 RPM
+            repeat(20) { tick(720.0, 30.0, 14.9) }
+
+            // 3. Shift into 2nd gear and accelerate to 45 km/h under 37% throttle
+            var lastStatus: ClutchLiveStatus? = null
+            repeat(15) {
+                lastStatus = tick(lockedRpm(2, 40.0), 40.0, 37.0)
+            }
+
+            assertNotNull(lastStatus)
+            assertEquals(2, lastStatus.attributedGear)
+            assertEquals(SlipClassification.LOCKED, lastStatus.classification)
+            assertFalse(lastStatus.isMacroSlip)
+            assertFalse(lastStatus.isSlipping)
+            assertTrue(engine.getProfile().recentIncidents.isEmpty(), "No slip incidents should be logged")
+        }
     }
 
     @Nested

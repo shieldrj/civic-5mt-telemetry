@@ -105,6 +105,16 @@ class GearCalculatorEngine(private val clock: MillisClock = SystemMillisClock) {
             }
         }
 
+        // If the engine is idling with closed throttle at low speeds, high gear ratios
+        // (3rd-5th) that happen to numerically match the idle RPM to wheel speed ratio are
+        // an open driveline coasting, not high-gear driving.
+        if (detectedGearNumber != null && detectedGearNumber >= 3 && rpm <= 1000 &&
+            throttlePercent < CivicSpecs.CLOSED_THROTTLE_BASELINE_PERCENT + 4.0 && speedKmh < 50.0
+        ) {
+            detectedGearNumber = null
+            expectedRatio = 0.0
+        }
+
         // If the ratio matched no gear: idling while rolling is neutral, anything else is
         // the clutch being in - shifting, rev-matching, or a disengaged drivetrain.
         val detectedGear: GearSelection = when {
