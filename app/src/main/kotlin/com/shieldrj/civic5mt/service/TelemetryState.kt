@@ -68,6 +68,21 @@ object TelemetryState {
     private val _statusMessage = MutableStateFlow("Not connected")
     val statusMessage: StateFlow<String> = _statusMessage.asStateFlow()
 
+    /**
+     * The outcome of something the driver just tapped, for the screen that has the button on it.
+     *
+     * Separate from [statusMessage], which is the connection's running commentary and is drawn
+     * only on the dashboard. "Start a new tank" posted its result there and nowhere else, so
+     * tapping it on the Fuel tab did nothing a driver could see - whether it had worked, or
+     * had refused because the car was not reporting a level. Not knowing which is worse than
+     * either.
+     *
+     * Carries a sequence number rather than only text, so tapping twice and getting the same
+     * answer twice still reads as two answers.
+     */
+    private val _actionFeedback = MutableStateFlow<ActionFeedback?>(null)
+    val actionFeedback: StateFlow<ActionFeedback?> = _actionFeedback.asStateFlow()
+
     private val _protocolLog = MutableStateFlow<List<ProtocolLogEntry>>(emptyList())
     val protocolLog: StateFlow<List<ProtocolLogEntry>> = _protocolLog.asStateFlow()
 
@@ -188,6 +203,19 @@ object TelemetryState {
         _statusMessage.value = message
     }
 
+    internal fun postActionFeedback(message: String, worked: Boolean) {
+        _actionFeedback.value = ActionFeedback(
+            sequence = (_actionFeedback.value?.sequence ?: 0) + 1,
+            message = message,
+            worked = worked,
+        )
+    }
+
+    /** Drops the message once it has been on screen long enough, unless a newer one replaced it. */
+    fun clearActionFeedback(sequence: Long) {
+        if (_actionFeedback.value?.sequence == sequence) _actionFeedback.value = null
+    }
+
     internal fun setProtocolLog(entries: List<ProtocolLogEntry>) {
         _protocolLog.value = entries
     }
@@ -212,6 +240,15 @@ object TelemetryState {
  * on this car lambda comes from 34 and outside air falls back to intake air, and a screen
  * that cannot say so is the screen that used to show a fabricated 22 °C.
  */
+/** What happened when the driver last tapped something. See [TelemetryState.actionFeedback]. */
+data class ActionFeedback(
+    /** Rises on every post, so two identical answers in a row are still two answers. */
+    val sequence: Long,
+    val message: String,
+    /** False when the action was refused, which the screen colours differently. */
+    val worked: Boolean,
+)
+
 data class ResolvedPids(
     val lambda: Int? = null,
     val preCat: Int? = null,
