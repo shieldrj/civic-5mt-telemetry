@@ -82,10 +82,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # Built up in a file rather than inline. A release note is several lines, and a
+          # multi-line string written inside this block ends the YAML block scalar at the
+          # first line that starts in column one - which is a workflow that never runs
+          # rather than one that fails a step.
+          {
+            git log -1 --pretty=%B
+            echo
+            echo "Install: tap the .apk below on the phone. It upgrades the app that is already there and keeps its data."
+          } > release-notes.md
           gh release create "v${{ steps.version.outputs.code }}" \
             "dist/civic-5mt-${{ steps.version.outputs.name }}.apk" \
             --title "Build ${{ steps.version.outputs.code }}" \
-            --notes "$(git log -1 --pretty=%B)
-
-Install: tap the .apk below on the phone. It upgrades the app that is already there and keeps its data." \
+            --notes-file release-notes.md \
             --latest
