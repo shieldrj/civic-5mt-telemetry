@@ -4,6 +4,7 @@ import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -170,6 +171,149 @@ class TankTrackerTest {
             }
 
             assertFalse(t.get().calibrated, "too short a span to measure from")
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    @Nested
+    @DisplayName("Driving the app is not there for")
+    inner class UnwatchedMiles {
+
+        /**
+         * The reported fault, with the numbers off the car it was reported on.
+         *
+         * Filled the tank, sender read 93 as it always does, and the app said 74%.
+         */
+        @Test
+        fun `A tank filled to the top reads a hundred percent, not seventy-four`() {
+            val fromThePhone = TankState(
+                fillTimestamp = 1788307040945,
+                levelPercentAtFill = 93.3,
+                milesSinceFill = 30.47874689064641,
+                gallonsUsedSinceFill = 0.8288988559047098,
+                gallonsPerPercent = 0.08349220080916235,
+                calibrated = true,
+                smoothedLevelPercent = 93.26096013714532,
+                lowestLevelPercent = 89.75975334594914,
+                fullMarkPercent = 93.3,
+            )
+
+            // What the car was actually showing, and why: 0.0835 a percent cannot account
+            // for a 13.2 gallon tank across 93 points of sender, so the missing 5.4 gallons
+            // hit the two-gallon reserve cap and 3.4 gallons of a full tank vanished.
+            assertEquals(74, fromThePhone.fuelPercentRemaining.toInt())
+            assertEquals(TankRules.MAX_RESERVE_GALLONS, fromThePhone.reserveGallons)
+
+            val healed = fromThePhone.withUsableCalibration()
+
+            assertFalse(healed.calibrated, "a figure that cannot be reconciled is not a measurement")
+            assertEquals(CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT, healed.gallonsPerPercent)
+            assertEquals(100, healed.fuelPercentRemaining.roundToInt())
+        }
+
+        @Test
+        fun `A stored figure that cannot be reconciled does not survive a restart`() {
+            val store = InMemoryTankStore(
+                TankState(
+                    fillTimestamp = 1,
+                    gallonsPerPercent = 0.0835,
+                    calibrated = true,
+                    smoothedLevelPercent = 93.3,
+                    lowestLevelPercent = 89.8,
+                    levelPercentAtFill = 93.3,
+                    fullMarkPercent = 93.3,
+                ),
+            )
+
+            val t = TankTracker(store, MutableClock(1_700_000_000_000))
+
+            assertFalse(t.get().calibrated)
+            assertEquals(CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT, t.get().gallonsPerPercent)
+            assertEquals(100, t.get().fuelPercentRemaining.roundToInt())
+        }
+
+        /**
+         * The cause, rather than the symptom.
+         *
+         * The app runs for some drives and not others - on the car this came from it had seen
+         * 843 of the 2106 miles on the odometer. The sender falls for all of them; the fuel
+         * counter only advances for the ones it was there for. Dividing the second by the
+         * first is what manufactured 0.0835.
+         */
+        @Test
+        fun `Fuel burned while the app was shut does not drag the measurement down`() {
+            val real = 0.132
+            val clock = MutableClock(1_700_000_000_000)
+            val store = InMemoryTankStore()
+
+            // Fill, then run the tank down in three drives with the app shut between them.
+            // Two thirds of the tank is burned while nothing is counting.
+            var t = TankTracker(store, clock)
+            t.record(93.0, 0.0, 0.0, 1.0)
+            t.flush()
+
+            var level = 93.0
+            repeat(3) {
+                t = TankTracker(store, clock) // app restarted: a fresh tracker, stored state
+                driveDown(t, clock, level, level - 8.0, real, mpg = 32.0)
+                level -= 8.0
+                t.flush()
+
+                // Driven without the app: the sender falls, nothing counts the fuel.
+                clock.advanceMillis(48 * 3600 * 1000L)
+                level -= 16.0
+            }
+
+            // Fill up. The measurement is taken here.
+            t = TankTracker(store, clock)
+            repeat(300) {
+                clock.advanceMillis(1_000)
+                t.record(93.0, 0.0, 0.0, 1.0)
+            }
+
+            val measured = t.get().gallonsPerPercent
+            assertTrue(
+                abs(measured - real) < 0.01,
+                "measured $measured from the watched miles, real $real",
+            )
+            assertEquals(100, t.get().fuelPercentRemaining.roundToInt(), "a full tank is full")
+        }
+
+        @Test
+        fun `Whatever is measured, a brimmed tank still reads full`() {
+            // The invariant the fix rests on. Inside the reconciled range the reserve is not
+            // clamped, so gallons at the full mark come to `g * full + (capacity - g * full)`
+            // and the calibration cancels exactly - whatever it happens to be.
+            for (fullMark in listOf(88.0, 90.0, 93.3, 97.0, 100.0)) {
+                val range = TankRules.physicalGallonsPerPercent(fullMark)
+                assertNotNull(range, "a full mark of $fullMark is a full tank")
+                for (g in listOf(range.start, (range.start + range.endInclusive) / 2, range.endInclusive)) {
+                    val brimmed = TankState(
+                        fillTimestamp = 1,
+                        smoothedLevelPercent = fullMark,
+                        gallonsPerPercent = g,
+                        fullMarkPercent = fullMark,
+                    )
+                    assertEquals(
+                        100,
+                        brimmed.fuelPercentRemaining.roundToInt(),
+                        "full mark $fullMark at $g gallons per percent",
+                    )
+                }
+            }
+        }
+
+        @Test
+        fun `A measurement a hair outside the possible is noise, not a broken tank`() {
+            // 0.142 is 13.2/93: a sender whose zero really is empty. It sits exactly on the
+            // top edge, so real measurement noise lands either side of it, and refusing the
+            // ones that land above would throw away good tanks.
+            val nudged = TankRules.reconcileGallonsPerPercent(0.1435, 93.0)
+            assertNotNull(nudged)
+            assertTrue(nudged <= 13.2 / 93.0, "pulled onto the edge, not left outside it")
+
+            // The one that caused the fault misses by seven times the tolerance.
+            assertNull(TankRules.reconcileGallonsPerPercent(0.0835, 93.3))
         }
     }
 
