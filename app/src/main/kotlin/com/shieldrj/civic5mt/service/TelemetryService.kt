@@ -868,11 +868,16 @@ class TelemetryService : Service() {
     private fun markFilled() {
         val level = TelemetryState.metrics.value.fuelLevelPercent
         if (level == null) {
-            TelemetryState.setStatusMessage("No tank level from the car, so there is nothing to reset.")
+            val refusal = "No tank level from the car, so there is nothing to reset. " +
+                "Connect to the adapter and try again."
+            TelemetryState.setStatusMessage(refusal)
+            TelemetryState.postActionFeedback(refusal, worked = false)
             return
         }
         manager.tank.markFilled(level)
-        TelemetryState.setStatusMessage("Started a new tank at " + level.toInt() + "%")
+        val done = "Started a new tank at " + level.toInt() + "%"
+        TelemetryState.setStatusMessage(done)
+        TelemetryState.postActionFeedback(done, worked = true)
     }
 
     /**

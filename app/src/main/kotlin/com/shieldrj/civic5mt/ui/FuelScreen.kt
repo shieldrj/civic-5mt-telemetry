@@ -57,6 +57,7 @@ import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.service.saveFuelBlend
 import kotlin.math.roundToInt
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -880,6 +881,25 @@ private fun FillLogSection(context: android.content.Context) {
             .clickable { TelemetryService.markFilled(context) }
             .padding(vertical = 10.dp),
     )
+
+    // What the tap did. The work happens in the service, which reported it to the dashboard's
+    // status line and nowhere else, so from here the button looked dead whether it had started
+    // a tank or refused to. A refusal is the more important of the two to be able to see: it
+    // means the car is not reporting a level, which is a thing to go and fix rather than a
+    // thing to tap again.
+    val feedback by TelemetryState.actionFeedback.collectAsStateWithLifecycle()
+    feedback?.let { result ->
+        LaunchedEffect(result.sequence) {
+            delay(6_000)
+            TelemetryState.clearActionFeedback(result.sequence)
+        }
+        Text(
+            text = result.message,
+            color = if (result.worked) CivicColors.Good else CivicColors.Warn,
+            fontSize = 13.sp,
+            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
+        )
+    }
 
     if (calibration.samples.isNotEmpty()) {
         Text(
