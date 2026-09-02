@@ -22,8 +22,12 @@ android {
         minSdk = 29
         targetSdk = 36
 
-        versionCode = 1
-        versionName = "2.0.0-native"
+        // Overridable from the release workflow, so every APK published to GitHub Releases
+        // carries a higher version code than the one before it and therefore installs over
+        // the app already on the phone instead of being refused. A local build passes
+        // neither property and stays on the baseline.
+        versionCode = (findProperty("civicVersionCode") as String?)?.toInt() ?: 1
+        versionName = (findProperty("civicVersionName") as String?) ?: "2.0.0-native"
     }
 
     buildTypes {
