@@ -44,6 +44,8 @@ class OverlayHost(
     private val content: @Composable () -> Unit,
     private val onTap: (() -> Unit)? = null,
     private val onLongPress: (() -> Unit)? = null,
+    /** Tapping the card's top-right corner, where [HudContent] draws the close cross. */
+    private val onClose: (() -> Unit)? = null,
 ) : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
 
     private val lifecycleRegistry = LifecycleRegistry(this)
@@ -128,6 +130,8 @@ class OverlayHost(
                 onMoved = { x, y -> saveOverlayPosition(context, x, y) },
                 onTap = onTap,
                 onLongPress = onLongPress,
+                onClose = onClose,
+                closeTargetPx = CLOSE_TARGET_DP * context.resources.displayMetrics.density,
             )
         )
 
@@ -204,6 +208,8 @@ class OverlayHost(
         private val onMoved: (x: Int, y: Int) -> Unit,
         private val onTap: (() -> Unit)?,
         private val onLongPress: (() -> Unit)?,
+        private val onClose: (() -> Unit)?,
+        private val closeTargetPx: Float,
     ) : View.OnTouchListener {
         private var initialX = 0
         private var initialY = 0
@@ -211,6 +217,7 @@ class OverlayHost(
         private var touchY = 0f
         private var downAt = 0L
         private var dragged = false
+        private var startedOnClose = false
 
         override fun onTouch(v: View, event: MotionEvent): Boolean = when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -220,6 +227,9 @@ class OverlayHost(
                 touchY = event.rawY
                 downAt = System.currentTimeMillis()
                 dragged = false
+                // Decided on the way down, not the way up, so that sliding off the cross
+                // before lifting cannot turn a miss into a dismissal.
+                startedOnClose = event.x >= v.width - closeTargetPx && event.y <= closeTargetPx
                 true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -236,6 +246,9 @@ class OverlayHost(
             MotionEvent.ACTION_UP -> {
                 when {
                     dragged -> onMoved(params.x, params.y)
+                    // Before the long-press check, so that resting a thumb on the cross
+                    // dismisses the card rather than cycling its theme.
+                    startedOnClose && onClose != null -> onClose.invoke()
                     System.currentTimeMillis() - downAt >= LONG_PRESS_MS -> onLongPress?.invoke()
                     else -> onTap?.invoke()
                 }
@@ -273,5 +286,16 @@ class OverlayHost(
 
         /** Holding still this long is a long-press, not a tap. */
         private const val LONG_PRESS_MS = 400L
+
+        /**
+         * The square in the card's top-right corner that dismisses it.
+         *
+         * Larger than the cross [HudContent] draws there, deliberately. The cross has to be
+         * small - the card is 128dp wide and sits over a map someone is navigating by - but
+         * the thing being aimed at is a moving car's dashboard, so the target is the
+         * conventional 44dp rather than the size of the glyph. It reaches the card's own
+         * padding and no further, so nothing else is inside it.
+         */
+        private const val CLOSE_TARGET_DP = 44f
     }
 }
