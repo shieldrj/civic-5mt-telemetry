@@ -276,6 +276,13 @@ class TelemetryService : Service() {
                                 { HudContent() },
                                 onTap = { openFuelScreen() },
                                 onLongPress = { cycleHudThemeWithFeedback() },
+                                // Both the flow and the file, the same pair the switch in the
+                                // app writes. Setting only the flow would put the card back on
+                                // the next drive, which is not what dismissing something means.
+                                onClose = {
+                                    TelemetryState.setOverlayEnabled(false)
+                                    saveOverlayEnabled(applicationContext, false)
+                                },
                             )
                             overlay?.show()
                         } else {

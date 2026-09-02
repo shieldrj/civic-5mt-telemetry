@@ -129,12 +129,28 @@ fun HudContent() {
         ) {
             val fuelPercent = metrics.fuelPercentRemaining
 
-            Text(
-                text = "Fuel left",
-                color = tokens.OnSurfaceVariant,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Medium,
-            )
+            // The close target lives in the heading row rather than floating over the card,
+            // so it cannot land on top of a number. It is drawn here and *hit* in
+            // OverlayHost.DragHandler, which owns the only touch listener on this window -
+            // see CLOSE_TARGET_DP, which is what keeps the two in agreement.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = "Fuel left",
+                    color = tokens.OnSurfaceVariant,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Text(
+                    text = "✕",
+                    color = tokens.OnSurfaceVariant,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+            }
             Spacer(Modifier.height(1.dp))
             // Once the sender is on its stop, the percentage stops counting down - there is
             // fuel below there but nothing measuring it - so the card says "under 7" rather
