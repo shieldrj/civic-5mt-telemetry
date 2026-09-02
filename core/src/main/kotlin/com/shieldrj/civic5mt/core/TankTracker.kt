@@ -34,6 +34,12 @@ data class TankState(
      * The highest, not the first. A fill is detected as soon as the level has risen five
      * percent, which is part way up the rise - the pump is still running. Recording that
      * moment as the fill level put the tank at 35% when it was on its way to 93%.
+     *
+     * A record of the tank rather than an input to anything. It used to be one half of the
+     * calibration - this minus [lowestLevelPercent] was the span the fuel was divided by -
+     * and that is exactly what made the calibration wrong, because the span included every
+     * mile driven with the app shut and the fuel figure did not. [observedDropPercent] is
+     * the span now.
      */
     val levelPercentAtFill: Double = 0.0,
     val milesSinceFill: Double = 0.0,
@@ -73,6 +79,23 @@ data class TankState(
      * later corrects it.
      */
     val fullMarkPercent: Double = 0.0,
+    /**
+     * Sender percent that dropped *while the app was watching it*, since the fill.
+     *
+     * Not the same as the level at the fill minus the level now, and the difference is the
+     * whole reason this field exists. The app is not running for most of a tank - it is
+     * launched for some drives and not for others - so the sender falls whether or not
+     * anything is counting the fuel that made it fall. Measuring gallons-per-percent as
+     * [gallonsUsedSinceFill] over that whole span divides fuel the app *did* see by percent
+     * it mostly *did not*, and the answer comes out low in exact proportion to how much of
+     * the tank went unwatched.
+     *
+     * This is the paired figure: it only advances on the same steps [observedGallons] does,
+     * so a gap in one is a gap in the other and the ratio survives it.
+     */
+    val observedDropPercent: Double = 0.0,
+    /** Fuel burned on the steps counted in [observedDropPercent], and only those. */
+    val observedGallons: Double = 0.0,
 ) {
     /**
      * Miles per gallon for this tank, or null before there is enough to divide.
@@ -160,6 +183,30 @@ data class TankState(
         get() = reserveGallons > 0.0 && smoothedLevelPercent <= TankRules.SENDER_FLOOR_PERCENT
 }
 
+/**
+ * Drops a stored calibration that cannot be reconciled with the stored full mark.
+ *
+ * Read once, when a tank is loaded, and it exists because a bad figure is durable. Gallons
+ * per percent is measured at a fill and then kept, so a tank measured wrongly - or measured
+ * correctly by an older version that did not know to discount the miles it had not seen -
+ * goes on being applied to every reading for as long as the record survives. On the car this
+ * was found on, a stored 0.0835 had been reporting a full tank as 74% across several fills,
+ * and would have gone on doing so after the measurement itself was fixed.
+ *
+ * Falls back to the nominal figure and clears [TankState.calibrated], which is the state the
+ * app would have been in had the bad tank never been measured. The next fill measures again.
+ */
+fun TankState.withUsableCalibration(): TankState {
+    // Nothing to distrust in a figure that never claimed to be measured.
+    if (!calibrated) return this
+    val usable = TankRules.reconcileGallonsPerPercent(gallonsPerPercent, fullMarkPercent)
+        ?: return copy(
+            gallonsPerPercent = CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT,
+            calibrated = false,
+        )
+    return if (usable == gallonsPerPercent) this else copy(gallonsPerPercent = usable)
+}
+
 object TankRules {
 
     /**
@@ -170,11 +217,18 @@ object TankRules {
     const val FILL_RISE_PERCENT = 10.0
 
     /**
-     * The sender must fall this far before gallons-per-percent is measured from it.
+     * The sender must fall this far *while being watched* before gallons-per-percent is
+     * measured from it. See [TankState.observedDropPercent].
      *
      * A short span divides a small fuel figure by a small percent figure, and the error in
      * both lands in the answer. Twenty percent of a tank is roughly 2.6 gallons, which is far
      * larger than anything the sender's own resolution can contribute.
+     *
+     * Twenty watched points is a good deal more driving than twenty points of tank, and on a
+     * car the app is not running in all the time some tanks will not reach it. Those tanks
+     * measure nothing and the nominal figure stays, which is the right outcome: a full tank
+     * still reads 100% on the nominal figure, and [TankState.calibrated] says plainly that
+     * nothing has been measured yet.
      */
     const val MIN_DROP_FOR_CALIBRATION = 20.0
 
@@ -212,12 +266,93 @@ object TankRules {
     /**
      * Gallons per percent has to stay inside the physically possible.
      *
-     * The nominal figure for this car is about 0.1215. A measurement outside this range means
-     * something else went wrong - the app was closed for part of the tank, or a fill was
-     * missed - and a bad calibration would then be applied to every later reading.
+     * These are the loose bounds, and they only apply before a full tank has ever been seen.
+     * Once there is a full mark, [physicalGallonsPerPercent] is far tighter and is derived
+     * rather than chosen, so it is what actually does the work - which matters, because the
+     * nominal figure for this car is about 0.1215 and these bounds cheerfully admit 0.0835.
      */
     const val MIN_GALLONS_PER_PERCENT = 0.08
     const val MAX_GALLONS_PER_PERCENT = 0.20
+
+    /**
+     * How far outside the physically possible a measurement may land and still be believed.
+     *
+     * Not zero, because the bounds below are exact and a measurement never is. It comes from
+     * a smoothed level and an integrated fuel figure, either of which can be a little out,
+     * and refusing a reading that misses a hard edge by a hair would throw away good tanks.
+     *
+     * Half a hundredth of a gallon per sender point is about half a gallon across a whole
+     * tank: comfortably more than the measurement's own noise, and nowhere near enough to
+     * let a genuinely broken figure through. The one that caused this - 0.083 against a
+     * floor of 0.120 - misses by seven times this.
+     */
+    const val CALIBRATION_TOLERANCE_GALLONS_PER_PERCENT = 0.005
+
+    /**
+     * The gallons-per-percent figures that can be reconciled with a full tank, or null
+     * before a full mark exists to reconcile against.
+     *
+     * This is the guard that was missing, and it is not a chosen range - it follows from two
+     * figures already here. A full tank holds [CivicSpecs.FUEL_TANK_CAPACITY_GALLONS] and
+     * reads [fullMarkPercent] on the sender, so the sender's span accounts for
+     * `gallonsPerPercent * fullMarkPercent` gallons and the rest is [TankState.reserveGallons].
+     * That reserve cannot be negative, and it cannot exceed [MAX_RESERVE_GALLONS]. Those two
+     * statements are the two ends of this range, rearranged.
+     *
+     * What makes it worth deriving rather than guessing is the invariant it buys. For any
+     * figure inside this range the reserve is not clamped, so the gallons at a full tank come
+     * to `g * full + (capacity - g * full)` - the calibration cancels, exactly, and a brimmed
+     * tank reads 100% whatever `g` turned out to be. Outside the range the clamp bites, the
+     * cancellation fails, and a full tank reads low: the reported fault was a stored 0.0835
+     * against a floor of 0.120, which put a freshly filled tank at 74%.
+     */
+    fun physicalGallonsPerPercent(fullMarkPercent: Double): ClosedFloatingPointRange<Double>? {
+        if (fullMarkPercent < FULL_MARK_MIN_PERCENT) return null
+        val capacity = CivicSpecs.FUEL_TANK_CAPACITY_GALLONS
+        return ((capacity - MAX_RESERVE_GALLONS) / fullMarkPercent)..(capacity / fullMarkPercent)
+    }
+
+    /**
+     * Takes a gallons-per-percent figure and returns one that can be used, or null to refuse.
+     *
+     * Refusing is the important half. A figure that cannot be reconciled with a full tank is
+     * not a slightly-off calibration to be nudged into shape, it is evidence that the tank it
+     * came from was not fully measured, and the honest answer is to keep the nominal figure
+     * and say so via [TankState.calibrated] rather than to print a confident wrong number.
+     *
+     * Inside the tolerance the value is pulled onto the edge instead. That is not inventing a
+     * measurement: it is a real one carrying real noise, and the edges are hard physical
+     * facts - a reserve below zero or above two gallons does not exist in this car.
+     */
+    fun reconcileGallonsPerPercent(perPercent: Double, fullMarkPercent: Double): Double? {
+        val physical = physicalGallonsPerPercent(fullMarkPercent)
+            ?: return perPercent.takeIf {
+                it in MIN_GALLONS_PER_PERCENT..MAX_GALLONS_PER_PERCENT
+            }
+        val slack = CALIBRATION_TOLERANCE_GALLONS_PER_PERCENT
+        if (perPercent < physical.start - slack) return null
+        if (perPercent > physical.endInclusive + slack) return null
+        return perPercent.coerceIn(physical)
+    }
+
+    /**
+     * Two sender readings further apart in time than this are not consecutive.
+     *
+     * The span between them is measured as the fall from one raw reading to the next, which
+     * is only fuel if nothing happened in between. Thirty seconds is many times the loop's
+     * 80ms tick, so this catches a real interruption - the link dropping, the phone sleeping -
+     * rather than a slow tick.
+     */
+    const val MAX_CONTIGUOUS_STEP_SEC = 30.0
+
+    /**
+     * How long after the level stops being pushed up before measuring resumes.
+     *
+     * Fuel going in is not fuel coming out, and the moment the pump stops is not the moment
+     * the float settles. A minute of quiet before counting again costs nothing on a tank that
+     * takes a fortnight and keeps the end of a fill out of the measurement.
+     */
+    const val SETTLE_AFTER_FILL_SEC = 60.0
 
     /**
      * A sender reading has to reach this before it counts as a full tank.
@@ -333,12 +468,31 @@ class TankTracker(
     private val store: TankStore = InMemoryTankStore(),
     private val clock: MillisClock = SystemMillisClock,
 ) {
-    private var state: TankState = store.load() ?: TankState()
+    private var state: TankState = (store.load() ?: TankState()).withUsableCalibration()
     private var lastSaveAt: Long = 0L
     private var started = false
 
     /** How long the sender has been reading well above the smoothed level. */
     private var risingForSec: Double = 0.0
+
+    /**
+     * The previous raw sender reading, or null when there isn't one to compare against.
+     *
+     * The span is measured from this rather than from the smoothed level, and that choice is
+     * the fix. A smoothed level carries the past in it: coming back to a car driven without
+     * the app, it spends minutes easing down from where it was left to where the fuel
+     * actually is, and every one of those minutes looks like a fast-draining tank - a large
+     * fall in percent against almost no fuel. Raw readings carry nothing. The fall from one
+     * to the next is fuel or it is noise, and noise cancels over a tank because the falls are
+     * added signed.
+     *
+     * Null at the start of every run, which is exactly where the seam is: whatever the sender
+     * did while the app was shut happened between two readings this never saw together.
+     */
+    private var lastRawLevel: Double? = null
+
+    /** How long since the sender was last being pushed up. See [TankRules.SETTLE_AFTER_FILL_SEC]. */
+    private var settledForSec: Double = 0.0
 
     fun get(): TankState = state
 
@@ -396,10 +550,26 @@ class TankTracker(
         val alpha = 1 - exp(-dtSec / timeConstant)
         val smoothed = state.smoothedLevelPercent + above * alpha
 
+        // Whether this step may be measured from. Two readings taken far enough apart that
+        // anything could have happened between them are not a measurement, and neither is a
+        // fill or the minute after one.
+        settledForSec = if (risingForSec > 0.0) 0.0 else settledForSec + dtSec
+        val previousRaw = lastRawLevel
+        lastRawLevel = levelPercent
+        val measurable = previousRaw != null &&
+            dtSec <= TankRules.MAX_CONTIGUOUS_STEP_SEC &&
+            settledForSec >= TankRules.SETTLE_AFTER_FILL_SEC
+        val droppedThisStep = if (measurable) previousRaw!! - levelPercent else 0.0
+
         state = state.copy(
             smoothedLevelPercent = smoothed,
             milesSinceFill = state.milesSinceFill + milesStep,
             gallonsUsedSinceFill = state.gallonsUsedSinceFill + gallonsStep,
+            // Signed, so that a slosh up cancels the slosh back down. Taking only the falls
+            // would count the noise as fuel and bias this high, which is the same mistake as
+            // the one being fixed, pointing the other way.
+            observedDropPercent = state.observedDropPercent + droppedThisStep,
+            observedGallons = state.observedGallons + if (measurable) gallonsStep else 0.0,
             levelPercentAtFill = max(state.levelPercentAtFill, smoothed),
             lowestLevelPercent = min(state.lowestLevelPercent, smoothed),
             // The full mark is the highest this sender has ever gone, over the life of the
@@ -429,19 +599,36 @@ class TankTracker(
      * on the first one is kept.
      */
     private fun startNewTank(levelNow: Double, snapLevel: Double? = null) {
-        val dropped = state.levelPercentAtFill - state.lowestLevelPercent
+        // Taken before the state is replaced, because the mark this measurement has to be
+        // reconciled against includes the fill happening right now.
+        val newFullMark = max(state.fullMarkPercent, snapLevel ?: state.smoothedLevelPercent)
+
+        // Measured from the watched part of the tank only. Using the whole span - the level
+        // at the fill minus the lowest it reached - against fuel counted only while the app
+        // ran is what produced 0.0835 gallons per percent on a car whose real figure is
+        // 0.132, and a freshly filled tank reading 74%.
         val measured = if (
-            dropped >= TankRules.MIN_DROP_FOR_CALIBRATION &&
-            state.gallonsUsedSinceFill > 0
+            state.observedDropPercent >= TankRules.MIN_DROP_FOR_CALIBRATION &&
+            state.observedGallons > 0
         ) {
-            val perPercent = state.gallonsUsedSinceFill / dropped
-            if (perPercent in TankRules.MIN_GALLONS_PER_PERCENT..TankRules.MAX_GALLONS_PER_PERCENT) {
-                perPercent
-            } else {
-                // Outside the possible. The app missed part of the tank, or a fill went
-                // unseen. Keeping the previous figure is better than adopting a wrong one.
-                null
-            }
+            TankRules.reconcileGallonsPerPercent(
+                state.observedGallons / state.observedDropPercent,
+                newFullMark,
+            )
+        } else {
+            null
+        }
+
+        // The figure already in hand gets the same test, not just the new one. A fill is when
+        // the full mark moves, so it is also when a calibration carried over from before -
+        // possibly from a version that measured it the old way, possibly from a tank taken
+        // before this car had ever been seen full - can first be shown to be impossible.
+        //
+        // Only a measured one. The nominal figure is not a measurement to be reconciled, it
+        // is what the app falls back to for want of one, and quietly nudging it about would
+        // be inventing a calibration out of a car that has never been measured.
+        val carried = if (state.calibrated) {
+            TankRules.reconcileGallonsPerPercent(state.gallonsPerPercent, newFullMark)
         } else {
             null
         }
@@ -451,8 +638,8 @@ class TankTracker(
             levelPercentAtFill = levelNow,
             milesSinceFill = 0.0,
             gallonsUsedSinceFill = 0.0,
-            gallonsPerPercent = measured ?: state.gallonsPerPercent,
-            calibrated = measured != null || state.calibrated,
+            gallonsPerPercent = measured ?: carried ?: CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT,
+            calibrated = measured != null || (carried != null && state.calibrated),
             // The smoothed level is carried over rather than snapped to the reading at this
             // instant, because the pump is still running: this is part way up the rise and
             // the level has to go on climbing. Snapping here reported 12.0 gallons in a tank
@@ -468,6 +655,10 @@ class TankTracker(
             // time it is ever set.
             fullMarkPercent = max(state.fullMarkPercent, snapLevel ?: state.smoothedLevelPercent),
         )
+        // A new tank is measured from scratch, and the reading this fill was detected on is
+        // not one half of a pair with anything.
+        lastRawLevel = null
+        settledForSec = 0.0
         store.save(state)
         lastSaveAt = clock.nowMillis()
     }

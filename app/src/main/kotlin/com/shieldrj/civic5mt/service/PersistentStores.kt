@@ -342,6 +342,8 @@ internal fun tankToJson(state: TankState): JSONObject = JSONObject()
     .put("smoothedLevelPercent", state.smoothedLevelPercent)
     .put("lowestLevelPercent", state.lowestLevelPercent)
     .put("fullMarkPercent", state.fullMarkPercent)
+    .put("observedDropPercent", state.observedDropPercent)
+    .put("observedGallons", state.observedGallons)
 
 internal fun parseTank(j: JSONObject): TankState = TankState(
     fillTimestamp = j.optLong("fillTimestamp", 0L),
@@ -362,6 +364,13 @@ internal fun parseTank(j: JSONObject): TankState = TankState(
     // and is exactly right: the percentage falls back to the sender's own scale until the
     // next fill teaches it where full is.
     fullMarkPercent = j.optDouble("fullMarkPercent", 0.0),
+    // Zero on a record written before the watched-span figures existed, which reads as
+    // "nothing measured on this tank yet". That is right rather than merely safe: the tank
+    // in progress was counted the old way, across gaps the app was not there for, and there
+    // is no way to tell after the fact how much of it went unwatched. The next fill starts
+    // the measurement properly.
+    observedDropPercent = j.optDouble("observedDropPercent", 0.0),
+    observedGallons = j.optDouble("observedGallons", 0.0),
 )
 
 // ── What the pump receipts taught ────────────────────────────────────────────────
