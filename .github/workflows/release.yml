@@ -1,0 +1,91 @@
+name: Release APK
+
+# Publishes an installable APK to the repo's Releases page every time main moves.
+#
+# The point is to be able to update the phone without the laptop. Open the Releases page
+# on the phone, tap the .apk, install over the top. That works from anywhere, which the
+# adb-over-wifi path in deploy.ps1 does not.
+#
+# It builds the *debug* variant on purpose. That is the build that is actually on the
+# phone and has been daily-driven; the release variant has a different application ID, so
+# installing one would land beside the working app with an empty database rather than
+# upgrading it. Switching to a release build is a migration, not a build-flag change.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Needed to create the release and upload the APK to it.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v7
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-release-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-release-${{ runner.os }}-
+
+      # Without this the runner generates a throwaway debug keystore per run, every APK is
+      # signed by a different key, and the phone refuses each update as a signature
+      # mismatch. This is the same key deploy.ps1 signs with, so a downloaded APK and a
+      # laptop-built one are interchangeable and neither wipes the app's data.
+      - name: Restore the signing key
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          if [ -z "$DEBUG_KEYSTORE_B64" ]; then
+            echo "DEBUG_KEYSTORE_B64 is not set. Without it the APK cannot install over the app on the phone." >&2
+            exit 1
+          fi
+          mkdir -p "$HOME/.android"
+          echo "$DEBUG_KEYSTORE_B64" | base64 -d > "$HOME/.android/debug.keystore"
+
+      # Version code climbs with the run number so each published APK outranks the last.
+      # Version name carries the short commit, so what is on the phone can be traced back
+      # to a commit in the repo.
+      - name: Work out the version
+        id: version
+        run: |
+          echo "code=${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+          echo "name=2.0.0-native.${{ github.run_number }}+$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Build the APK
+        run: |
+          ./gradlew --no-daemon :app:assembleDebug \
+            -PcivicVersionCode=${{ steps.version.outputs.code }} \
+            -PcivicVersionName=${{ steps.version.outputs.name }}
+
+      - name: Name the file after the version
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk \
+             "dist/civic-5mt-${{ steps.version.outputs.name }}.apk"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ steps.version.outputs.code }}" \
+            "dist/civic-5mt-${{ steps.version.outputs.name }}.apk" \
+            --title "Build ${{ steps.version.outputs.code }}" \
+            --notes "$(git log -1 --pretty=%B)
+
+Install: tap the .apk below on the phone. It upgrades the app that is already there and keeps its data." \
+            --latest

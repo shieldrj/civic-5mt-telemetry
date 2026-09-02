@@ -11,6 +11,11 @@ Android telemetry, diagnostics, and prognostics application for the **2013 Honda
   ```powershell
   $env:ADB_MDNS_OPENSCREEN = "1"; adb connect <phone-ip>:<port>; adb -s <phone-ip>:<port> install -r app/build/outputs/apk/debug/app-debug.apk
   ```
+- **Install without the laptop**: every push to `main` runs `.github/workflows/release.yml`, which
+  builds the debug APK and attaches it to a new GitHub Release. Open the repo's Releases page on
+  the phone and tap the `.apk`. It is the same variant (`com.shieldrj.civic5mt.dev`) signed with
+  the same key as `deploy.ps1` uses, so it upgrades the installed app in place and keeps its data.
+  The key lives in the `DEBUG_KEYSTORE_B64` repo secret; the workflow fails loudly if it is gone.
 
 ## Architecture & Code Structure
 - **`core/`**: Pure Kotlin JVM module.
