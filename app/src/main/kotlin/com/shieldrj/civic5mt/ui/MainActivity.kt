@@ -183,6 +183,12 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
     val tripCount by remember { TripDatabase.get(context).tripDao().observeRealTripCount() }
         .collectAsStateWithLifecycle(0)
 
+    // Held in state, not read from the file at each composition. The tile used to call
+    // loadAutoConnect() for its own subtitle, so writing the preference changed nothing Compose
+    // was watching and the label never moved. The setting flipped on every press; the screen
+    // just never said so, which reads exactly like a dead button.
+    var autoConnect by remember { mutableStateOf(loadAutoConnect(context)) }
+
     var permissionEpoch by remember { mutableStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { permissionEpoch++ }
     val canOverlay = remember(permissionEpoch) { OverlayHost.canDrawOverlays(context) }
@@ -403,10 +409,11 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
                         },
                         Feature(
                             "Auto-connect",
-                            if (loadAutoConnect(context)) "Starts with the Civic" else "Off",
+                            if (autoConnect) "Starts with the Civic" else "Off",
                             Icons.Outlined.Bluetooth,
                         ) {
-                            saveAutoConnect(context, !loadAutoConnect(context))
+                            autoConnect = !autoConnect
+                            saveAutoConnect(context, autoConnect)
                         },
                     )
                 )
