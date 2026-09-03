@@ -329,6 +329,91 @@ class ClutchHealthModelTest {
             assertFalse(lastStatus.isSlipping)
             assertTrue(engine.getProfile().recentIncidents.isEmpty(), "No slip incidents should be logged")
         }
+
+        @Test
+        fun `Rev-matched downshift from 5th to 2nd without throttle lift does not trigger slip`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double): ClutchLiveStatus {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                return engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = if (throttle > 20.0) 45.0 else 10.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 22.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                ).first
+            }
+
+            // 1. Cruising in 5th gear at 90 km/h under 30% throttle
+            repeat(20) { tick(lockedRpm(5, 90.0), 90.0, 30.0) }
+
+            // 2. Slowing down to 62 km/h and rev-matching into 2nd gear without throttle dropping below 25%
+            var lastStatus: ClutchLiveStatus? = null
+            repeat(30) {
+                lastStatus = tick(lockedRpm(2, 62.0), 62.0, 45.0)
+            }
+
+            assertNotNull(lastStatus)
+            assertEquals(2, lastStatus.attributedGear, "Multi-gear jump to 2nd must be recognized immediately")
+            assertEquals(SlipClassification.LOCKED, lastStatus.classification)
+            assertFalse(lastStatus.isMacroSlip)
+            assertFalse(lastStatus.isSlipping)
+            assertTrue(engine.getProfile().recentIncidents.isEmpty(), "No slip incidents should be logged for 2nd gear downshift")
+        }
+
+        @Test
+        fun `Downshift from 5th to 4th with clutch disengagement does not trigger slip`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double): ClutchLiveStatus {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                return engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = if (throttle > 20.0) 40.0 else 12.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 24.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                ).first
+            }
+
+            // 1. Cruising in 5th gear at 85 km/h
+            repeat(20) { tick(lockedRpm(5, 85.0), 85.0, 25.0) }
+
+            // 2. Clutch pedal depressed (open driveline, revs drop or fluctuate around 1800, throttle 22%)
+            repeat(4) { tick(1800.0, 80.0, 22.0) }
+
+            // 3. Shift into 4th gear and accelerate under 55% throttle at 68 km/h
+            var lastStatus: ClutchLiveStatus? = null
+            repeat(25) {
+                lastStatus = tick(lockedRpm(4, 68.0), 68.0, 55.0)
+            }
+
+            assertNotNull(lastStatus)
+            assertEquals(4, lastStatus.attributedGear, "4th gear must be accepted after driveline disengagement")
+            assertEquals(SlipClassification.LOCKED, lastStatus.classification)
+            assertFalse(lastStatus.isMacroSlip)
+            assertFalse(lastStatus.isSlipping)
+            assertTrue(engine.getProfile().recentIncidents.isEmpty(), "No slip incidents should be logged for 4th gear downshift")
+        }
     }
 
     @Nested

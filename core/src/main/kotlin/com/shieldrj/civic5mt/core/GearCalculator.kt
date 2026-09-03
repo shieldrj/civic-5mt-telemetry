@@ -132,12 +132,12 @@ class GearCalculatorEngine(private val clock: MillisClock = SystemMillisClock) {
             val rpmRate = (rpm - previousRpm) / dt
             val speedRate = (speedKmh - previousSpeedKmh) / dt
 
-            val isKinematicSlip = slipDeltaRpm > 150.0
-            val isFlareSlip = rpmRate > 1000.0 && speedRate < 1.2
+            val isKinematicSlip = slipDeltaRpm > 250.0
+            val isFlareSlip = rpmRate > 1500.0 && speedRate <= 0.0
 
             if (isKinematicSlip || isFlareSlip) {
                 slipConfirmationCounter++
-                if (slipConfirmationCounter >= 2) {
+                if (slipConfirmationCounter >= 3) {
                     isClutchSlipping = true
                 }
             } else {
