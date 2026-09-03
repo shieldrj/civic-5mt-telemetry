@@ -417,6 +417,217 @@ class ClutchHealthModelTest {
     }
 
     @Nested
+    @DisplayName("Clutch engagements and gear shifts are counted accurately")
+    inner class ShiftCounting {
+
+        @Test
+        fun `Normal upshift 1st to 2nd through clutch disengagement increments count by 1`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double) {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 20.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 20.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+
+            // 1. Accelerating in 1st gear (counts 1 launch engagement)
+            repeat(10) { tick(lockedRpm(1, 15.0), 15.0, 30.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount, "Launch into 1st counts 1 engagement")
+
+            // 2. Driver pushes clutch in to shift (open driveline for 4 ticks, ~320ms)
+            repeat(4) { tick(2500.0, 18.0, 10.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount, "Clutch in does not increment engagement count")
+
+            // 3. Driver re-engages clutch in 2nd gear
+            repeat(10) { tick(lockedRpm(2, 22.0), 22.0, 30.0) }
+            assertEquals(2, engine.getProfile().totalEngagementsCount, "Upshift to 2nd must increment count to 2")
+        }
+
+        @Test
+        fun `Launch from standstill into 1st gear increments count by 1`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double) {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 10.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 15.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+
+            // 1. Standing still at traffic light (0 km/h)
+            repeat(20) { tick(750.0, 0.0, 0.0) }
+            assertEquals(0, engine.getProfile().totalEngagementsCount, "Stationary idle counts no engagements")
+
+            // 2. Pull away in 1st gear
+            repeat(10) { tick(lockedRpm(1, 12.0), 12.0, 25.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount, "Pulling away in 1st counts as 1 engagement")
+        }
+
+        @Test
+        fun `Multi-gear downshift 5th to 2nd increments shift count by 1`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double) {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 35.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 24.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+
+            // 1. Cruising in 5th gear at 90 km/h
+            repeat(20) { tick(lockedRpm(5, 90.0), 90.0, 30.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount, "Initial gear engagement counted")
+
+            // 2. Clutch depressed, slowing down to 50 km/h (idling at 900 RPM)
+            repeat(6) { tick(900.0, 60.0, 5.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount)
+
+            // 3. Shift into 2nd gear at 50 km/h
+            repeat(15) { tick(lockedRpm(2, 50.0), 50.0, 40.0) }
+            assertEquals(2, engine.getProfile().totalEngagementsCount, "5th to 2nd downshift increments count to 2")
+        }
+
+        @Test
+        fun `Single sample 80ms noise glitch in 4th gear does not increment shift count`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double) {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 30.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 24.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+
+            // 1. Cruising in 4th gear at 70 km/h
+            repeat(20) { tick(lockedRpm(4, 70.0), 70.0, 35.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount)
+
+            // 2. 1-sample road bump / noise tick where RPM momentarily spikes or drops (gear = null)
+            clock.advanceSec(0.08)
+            engine.recordTelemetryStep(
+                rpm = 3500.0,
+                speedKmh = 70.0,
+                throttlePercent = 35.0,
+                mafGramsPerSec = 30.0,
+                lambda = 1.0,
+                timingAdvanceDeg = 24.0,
+                gearSelection = GearSelection.Clutch, // 1 sample glitch
+                ambientTempC = 20.0,
+                speedMph = 70.0 * 0.621371,
+                dtSec = 0.08,
+            )
+
+            // 3. Resumes 4th gear cruise
+            repeat(20) { tick(lockedRpm(4, 70.0), 70.0, 35.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount, "1-sample glitch must NOT increment shift count")
+        }
+
+        @Test
+        fun `Same gear clutch-in and re-engagement after 0_5s increments count by 1`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double) {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 25.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 22.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+
+            // 1. Driving in 3rd gear at 50 km/h
+            repeat(20) { tick(lockedRpm(3, 50.0), 50.0, 30.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount)
+
+            // 2. Driver pushes clutch in to coast for 0.56s (7 ticks at 80ms)
+            repeat(7) {
+                clock.advanceSec(0.08)
+                engine.recordTelemetryStep(
+                    rpm = 900.0,
+                    speedKmh = 48.0,
+                    throttlePercent = 5.0,
+                    mafGramsPerSec = 8.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 15.0,
+                    gearSelection = GearSelection.Clutch,
+                    ambientTempC = 20.0,
+                    speedMph = 48.0 * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+            assertEquals(1, engine.getProfile().totalEngagementsCount)
+
+            // 3. Driver re-engages clutch in 3rd gear
+            repeat(15) { tick(lockedRpm(3, 47.0), 47.0, 30.0) }
+            assertEquals(2, engine.getProfile().totalEngagementsCount, "Re-engaging 3rd after 0.56s must increment count to 2")
+        }
+    }
+
+    @Nested
     @DisplayName("Tyre geometry is calibrated, not assumed")
     inner class Calibration {
 
