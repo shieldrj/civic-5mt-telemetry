@@ -145,7 +145,11 @@ class ClutchHealthEngine(
     private var lastSaveTimestamp: Long = 0L
 
     // Shift engagement transition tracking
-    private var previousGearNumber: Int? = null
+    private var lastEngagedGear: Int? = null
+    private var disengagedDurationSec: Double = 0.0
+    private var pendingGear: Int? = null
+    private var pendingGearTicks: Int = 0
+    private var currentReportedGear: Int? = null
     private var timeInCurrentGearSec: Double = 0.0
 
     /**
@@ -374,11 +378,8 @@ class ClutchHealthEngine(
         val torqueNm = estimateBrakeTorqueNm(rpm, mafGramsPerSec, lambda, timingAdvanceDeg)
 
         val reportedGear = (gearSelection as? GearSelection.Gear)?.number
-        if (reportedGear != previousGearNumber) {
-            if (previousGearNumber != null && reportedGear != null) {
-                profile = profile.copy(totalEngagementsCount = profile.totalEngagementsCount + 1)
-            }
-            previousGearNumber = reportedGear
+        if (reportedGear != currentReportedGear) {
+            currentReportedGear = reportedGear
             timeInCurrentGearSec = 0.0
         } else {
             timeInCurrentGearSec += stepDt
@@ -386,6 +387,37 @@ class ClutchHealthEngine(
 
         // 1. Drivetrain kinematics
         val stationary = speedKmh < CivicSpecs.CLUTCH_MIN_TRACKING_SPEED_KMH
+
+        // Track clutch engagements & gear shifts
+        if (stationary) {
+            lastEngagedGear = null
+            pendingGear = null
+            pendingGearTicks = 0
+            disengagedDurationSec = 0.0
+        } else if (reportedGear == null) {
+            disengagedDurationSec += stepDt
+            pendingGear = null
+            pendingGearTicks = 0
+        } else {
+            if (reportedGear == pendingGear) {
+                pendingGearTicks++
+            } else {
+                pendingGear = reportedGear
+                pendingGearTicks = 1
+            }
+
+            if (pendingGearTicks >= 2) {
+                if (pendingGear != lastEngagedGear) {
+                    profile = profile.copy(totalEngagementsCount = profile.totalEngagementsCount + 1)
+                    lastEngagedGear = pendingGear
+                    disengagedDurationSec = 0.0
+                } else if (disengagedDurationSec >= 0.35) {
+                    // Re-engagement in the same gear after coasting with clutch depressed
+                    profile = profile.copy(totalEngagementsCount = profile.totalEngagementsCount + 1)
+                    disengagedDurationSec = 0.0
+                }
+            }
+        }
         val wheelRpm = if (stationary) 0.0 else (speedKmh / 60.0) / CivicSpecs.TIRE_CIRCUMFERENCE_KM
         val attributedGear = attributeGear(reportedGear, throttlePercent, stationary)
         updateCalibration(reportedGear, rpm, wheelRpm, throttlePercent, speedKmh)
@@ -685,6 +717,12 @@ class ClutchHealthEngine(
         confirmedGear = null
         liftedSinceGearConfirmed = true
         drivelineDisengagedSinceConfirmed = false
+        lastEngagedGear = null
+        disengagedDurationSec = 0.0
+        pendingGear = null
+        pendingGearTicks = 0
+        currentReportedGear = null
+        timeInCurrentGearSec = 0.0
         saveProfile()
         return profile
     }
