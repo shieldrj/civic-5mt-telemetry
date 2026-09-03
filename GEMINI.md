@@ -1,4 +1,4 @@
-﻿# Civic 5MT Telemetry Project Guide
+# Civic 5MT Telemetry Project Guide
 
 Android telemetry, diagnostics, and prognostics application for the **2013 Honda Civic LX 5MT (1.8L SOHC i-VTEC R18Z1)**.
 
@@ -7,7 +7,9 @@ Android telemetry, diagnostics, and prognostics application for the **2013 Honda
 - **Run core physics tests only**: `./gradlew.bat :core:test`
 - **Run app unit tests**: `./gradlew.bat :app:testDebugUnitTest`
 - **Build debug APK**: `./gradlew.bat assembleDebug`
-- **Install to device via wireless ADB**:
+- **Connect phone wirelessly (1-click)**: Run `.\connect-phone.bat` or `.\connect-phone.ps1` (auto-discovers phone via mDNS and Wi-Fi scan).
+- **Deploy and install to phone**: Run `powershell -ExecutionPolicy Bypass -File .\deploy.ps1`
+- **Manual wireless connect**:
   ```powershell
   $env:ADB_MDNS_OPENSCREEN = "1"; adb connect <phone-ip>:<port>; adb -s <phone-ip>:<port> install -r app/build/outputs/apk/debug/app-debug.apk
   ```

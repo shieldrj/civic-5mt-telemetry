@@ -125,9 +125,9 @@ private const val MIN_MILES_FOR_RATE = 200.0
 
 /**
  * Throttle below this counts as a lift: the accelerator came up, so the clutch pedal may
- * have gone down and the gear may have changed. Honda's DBW reads ~14% at foot-off idle.
+ * have gone down and the gear may have changed. Honda's DBW reads ~14-17% at foot-off idle.
  */
-private const val LIFT_THROTTLE_PERCENT = 18.0
+private const val LIFT_THROTTLE_PERCENT = 20.0
 
 /** Throttle above this is a driver asking for torque, so slip there is the clutch's doing. */
 private const val LOADED_THROTTLE_PERCENT = 35.0
@@ -154,6 +154,7 @@ class ClutchHealthEngine(
      */
     private var confirmedGear: Int? = null
     private var liftedSinceGearConfirmed: Boolean = true
+    private var drivelineDisengagedSinceConfirmed: Boolean = false
 
     init {
         profile = store.load() ?: defaultProfile().also { store.save(it) }
@@ -277,31 +278,44 @@ class ClutchHealthEngine(
             // Stopped: whatever gear it was in, the next move re-establishes it.
             confirmedGear = null
             liftedSinceGearConfirmed = true
+            drivelineDisengagedSinceConfirmed = true
             return null
         }
         if (throttlePercent < LIFT_THROTTLE_PERCENT) liftedSinceGearConfirmed = true
 
-        if (reportedGear != null) {
-            if (confirmedGear == null || liftedSinceGearConfirmed || reportedGear == confirmedGear) {
-                confirmedGear = reportedGear
-                if (throttlePercent >= LIFT_THROTTLE_PERCENT) {
-                    liftedSinceGearConfirmed = false
-                }
-                return reportedGear
-            }
-            // A *different* gear, with no lift in between. The gearbox cannot have changed
-            // gear without one, so the ratio did not move because the driver moved the
-            // lever - it moved because the clutch is slipping. This is the case that made
-            // the bug dangerous rather than merely blind: at around 25% slip in 5th the
-            // ratio drifts into 4th's match window, so the calculator does not report an
-            // open driveline, it reports a perfectly healthy lower gear.
-            //
-            // A heel-toe downshift quick enough to lift and re-apply inside one 80ms tick
-            // would be misread here, but only until the next lift, and an incident needs
-            // 0.3s of sustained slip before it is recorded.
-            return confirmedGear
+        if (reportedGear == null) {
+            // Driveline is disengaged: clutch pedal is down or car is in neutral.
+            // When a gear engages next, this proves a shift occurred.
+            drivelineDisengagedSinceConfirmed = true
+            return if (!liftedSinceGearConfirmed) confirmedGear else null
         }
-        return if (!liftedSinceGearConfirmed) confirmedGear else null
+
+        if (confirmedGear == null || liftedSinceGearConfirmed || drivelineDisengagedSinceConfirmed || reportedGear == confirmedGear) {
+            confirmedGear = reportedGear
+            drivelineDisengagedSinceConfirmed = false
+            if (throttlePercent >= LIFT_THROTTLE_PERCENT) {
+                liftedSinceGearConfirmed = false
+            }
+            return reportedGear
+        }
+
+        // A *different* gear with no explicit lift or open driveline sample seen.
+        // 1. Multi-gear downshifts (e.g. 5th -> 3rd/2nd, 4th -> 2nd/1st):
+        //    A clutch slipping in 5th gear cannot produce a stable 70% to 230% ratio jump
+        //    that matches a gear 2 or more steps lower. This is physically a downshift.
+        if (abs(confirmedGear!! - reportedGear) >= 2) {
+            confirmedGear = reportedGear
+            drivelineDisengagedSinceConfirmed = false
+            if (throttlePercent >= LIFT_THROTTLE_PERCENT) {
+                liftedSinceGearConfirmed = false
+            }
+            return reportedGear
+        }
+
+        // 2. Adjacent gear downshift (e.g. 5th -> 4th, a 30.5% ratio step):
+        //    Sustained slip in 5th can momentarily drift into 4th's match window. Keep
+        //    attributing to 5th unless a lift, open driveline, or stop has occurred.
+        return confirmedGear
     }
 
     /**
@@ -670,6 +684,7 @@ class ClutchHealthEngine(
         currentDiscTempC = 25.0
         confirmedGear = null
         liftedSinceGearConfirmed = true
+        drivelineDisengagedSinceConfirmed = false
         saveProfile()
         return profile
     }

@@ -242,7 +242,7 @@ class TelemetryManager(
         val health = evaluateHealthStatus(
             rpm = raw.rpm,
             coolantF = coolantF,
-            isClutchSlipping = gear.isClutchSlipping || clutchLive.isSlipping,
+            isClutchSlipping = clutchLive.isSlipping,
             clutchLive = clutchLive,
             clutchProfile = clutchProfile,
             gear = gear.currentGear,
@@ -306,7 +306,7 @@ class TelemetryManager(
             calibrationSpreadPercent = calibration.spreadPercent?.let { roundTo(it, 1) },
             currentGear = gear.currentGear,
             gearRatio = roundTo(gear.calculatedRatio, 2),
-            isClutchSlipping = gear.isClutchSlipping || clutchLive.isSlipping,
+            isClutchSlipping = clutchLive.isSlipping,
             optimalShiftRpm = gear.optimalShiftRpm,
             shouldShiftUp = gear.shouldShiftUp,
             shiftLightStage = gear.shiftLightStage,
