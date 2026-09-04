@@ -15,10 +15,15 @@ import android.text.format.DateUtils
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import com.shieldrj.civic5mt.data.BackupManager
+import com.shieldrj.civic5mt.service.AutoStartReceiver
 import com.shieldrj.civic5mt.service.loadAutoConnect
 import com.shieldrj.civic5mt.service.loadBackupTreeUri
+import com.shieldrj.civic5mt.service.loadCarBluetoothAddress
+import com.shieldrj.civic5mt.service.loadCarBluetoothName
 import com.shieldrj.civic5mt.service.loadLastBackupAt
 import com.shieldrj.civic5mt.service.saveAutoConnect
+import com.shieldrj.civic5mt.service.saveCarBluetooth
+import androidx.compose.material3.AlertDialog
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.size
@@ -183,11 +188,23 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
     val tripCount by remember { TripDatabase.get(context).tripDao().observeRealTripCount() }
         .collectAsStateWithLifecycle(0)
 
-    // Held in state, not read from the file at each composition. The tile used to call
-    // loadAutoConnect() for its own subtitle, so writing the preference changed nothing Compose
-    // was watching and the label never moved. The setting flipped on every press; the screen
-    // just never said so, which reads exactly like a dead button.
     var autoConnect by remember { mutableStateOf(loadAutoConnect(context)) }
+    var carBtAddress by remember { mutableStateOf(loadCarBluetoothAddress(context)) }
+    var carBtName by remember { mutableStateOf(loadCarBluetoothName(context)) }
+    var showAutoConnectDialog by remember { mutableStateOf(false) }
+
+    // If no car Bluetooth device has been chosen yet, auto-detect from paired devices
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (carBtAddress == null) {
+            val paired = BluetoothClassicTransport.pairedAdapters(context)
+            val civic = paired.firstOrNull { AutoStartReceiver.isCivicBluetoothName(it.name) }
+            if (civic != null) {
+                carBtAddress = civic.address
+                carBtName = civic.name
+                saveCarBluetooth(context, civic.address, civic.name)
+            }
+        }
+    }
 
     var permissionEpoch by remember { mutableStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { permissionEpoch++ }
@@ -339,6 +356,12 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
                     overlayEnabled -> "On"
                     else -> "Off"
                 }
+                val autoConnectSubtitle = when {
+                    !autoConnect -> "Off"
+                    carBtName != null -> "Starts with $carBtName"
+                    carBtAddress != null -> "Starts with $carBtAddress"
+                    else -> "Starts with Civic Bluetooth"
+                }
                 FeatureGrid(
                     listOf(
                         Feature(
@@ -409,11 +432,32 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
                         },
                         Feature(
                             "Auto-connect",
-                            if (autoConnect) "Starts with the Civic" else "Off",
+                            autoConnectSubtitle,
                             Icons.Outlined.Bluetooth,
                         ) {
-                            autoConnect = !autoConnect
-                            saveAutoConnect(context, autoConnect)
+                            if (!autoConnect) {
+                                autoConnect = true
+                                saveAutoConnect(context, true)
+                                val paired = BluetoothClassicTransport.pairedAdapters(context)
+                                if (adapters.isEmpty()) adapters = paired
+                                val civic = paired.firstOrNull { AutoStartReceiver.isCivicBluetoothName(it.name) }
+                                if (civic != null && carBtAddress == null) {
+                                    carBtAddress = civic.address
+                                    carBtName = civic.name
+                                    saveCarBluetooth(context, civic.address, civic.name)
+                                }
+                                Toast.makeText(
+                                    context,
+                                    if (carBtName != null) "Auto-connect enabled (starts with $carBtName)"
+                                    else "Auto-connect enabled (starts with Civic Bluetooth)",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            } else {
+                                if (adapters.isEmpty()) {
+                                    adapters = BluetoothClassicTransport.pairedAdapters(context)
+                                }
+                                showAutoConnectDialog = true
+                            }
                         },
                     )
                 )
@@ -472,6 +516,32 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
             }
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    if (showAutoConnectDialog) {
+        AutoConnectDialog(
+            currentAddress = carBtAddress,
+            pairedDevices = if (adapters.isNotEmpty()) adapters else BluetoothClassicTransport.pairedAdapters(context),
+            onSelectDevice = { address, name ->
+                carBtAddress = address
+                carBtName = name
+                saveCarBluetooth(context, address, name)
+                showAutoConnectDialog = false
+                Toast.makeText(
+                    context,
+                    if (name != null) "Auto-connect will start with $name"
+                    else "Auto-connect will auto-detect Civic Bluetooth",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            },
+            onTurnOff = {
+                autoConnect = false
+                saveAutoConnect(context, false)
+                showAutoConnectDialog = false
+                Toast.makeText(context, "Auto-connect turned off", Toast.LENGTH_SHORT).show()
+            },
+            onDismiss = { showAutoConnectDialog = false },
+        )
     }
 }
 
@@ -760,4 +830,139 @@ private fun PanelCard(content: @Composable () -> Unit) {
     ) {
         Column { content() }
     }
+}
+
+@Composable
+private fun AutoConnectDialog(
+    currentAddress: String?,
+    pairedDevices: List<PairedDevice>,
+    onSelectDevice: (address: String?, name: String?) -> Unit,
+    onTurnOff: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color(0xFF15181C),
+        title = {
+            Text(
+                "Auto-Connect Trigger",
+                color = CivicColors.Ink,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.Bold,
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    "Your Civic connects to your phone when you turn on the engine. Pick your car's Bluetooth to start logging automatically:",
+                    color = CivicColors.Ink2,
+                    fontSize = 13.sp,
+                )
+                Spacer(Modifier.height(4.dp))
+
+                Text(
+                    "CHOOSE TRIGGER DEVICE",
+                    color = CivicColors.Ink3,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 1.sp,
+                )
+
+                val isAutoSelected = currentAddress == null
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(if (isAutoSelected) Color(0x223B82F6) else Color(0xFF1C2025))
+                        .border(
+                            1.dp,
+                            if (isAutoSelected) CivicColors.Accent else CivicColors.HairlineStrong,
+                            RoundedCornerShape(10.dp),
+                        )
+                        .clickable { onSelectDevice(null, null) }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                ) {
+                    Column {
+                        Text(
+                            "Auto-detect Civic (HandsFreeLink)",
+                            color = if (isAutoSelected) CivicColors.Accent else CivicColors.Ink,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            "Starts with any Honda or car audio device",
+                            color = CivicColors.Ink3,
+                            fontSize = 12.sp,
+                        )
+                    }
+                }
+
+                pairedDevices.forEach { device ->
+                    val isSelected = device.address.equals(currentAddress, ignoreCase = true)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(if (isSelected) Color(0x223B82F6) else Color(0xFF1C2025))
+                            .border(
+                                1.dp,
+                                if (isSelected) CivicColors.Accent else CivicColors.HairlineStrong,
+                                RoundedCornerShape(10.dp),
+                            )
+                            .clickable { onSelectDevice(device.address, device.name) }
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                    ) {
+                        Column {
+                            Text(
+                                device.name,
+                                color = if (isSelected) CivicColors.Accent else CivicColors.Ink,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Text(
+                                device.address,
+                                color = CivicColors.Ink3,
+                                fontSize = 11.sp,
+                            )
+                        }
+                    }
+                }
+
+                Spacer(Modifier.height(4.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(Color(0x18EF4444))
+                        .border(1.dp, Color(0x44EF4444), RoundedCornerShape(10.dp))
+                        .clickable { onTurnOff() }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                ) {
+                    Text(
+                        "Turn off auto-connect",
+                        color = Color(0xFFEF4444),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Text(
+                "Done",
+                color = CivicColors.Accent,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Medium,
+                modifier = Modifier
+                    .clickable(onClick = onDismiss)
+                    .padding(8.dp),
+            )
+        },
+    )
 }

@@ -57,6 +57,8 @@ private const val KEY_LAST_ADAPTER = "last_adapter_address"
 private const val KEY_TANK = "civic_2013_tank_v1"
 private const val KEY_WIDGET_SNAPSHOT = "widget_snapshot_v1"
 private const val KEY_AUTO_CONNECT = "auto_connect"
+private const val KEY_CAR_BLUETOOTH_ADDRESS = "car_bluetooth_address"
+private const val KEY_CAR_BLUETOOTH_NAME = "car_bluetooth_name"
 private const val KEY_BACKUP_TREE_URI = "backup_tree_uri"
 private const val KEY_BACKUP_DOC_URI = "backup_doc_uri"
 private const val KEY_LAST_BACKUP_AT = "last_backup_at"
@@ -635,6 +637,26 @@ fun loadAutoConnect(context: Context): Boolean =
 
 fun saveAutoConnect(context: Context, enabled: Boolean) {
     telemetryPrefs(context).edit().putBoolean(KEY_AUTO_CONNECT, enabled).apply()
+}
+
+/**
+ * The Bluetooth device that triggers auto-connect when the Civic turns on (typically HandsFreeLink).
+ */
+fun loadCarBluetoothAddress(context: Context): String? =
+    telemetryPrefs(context).getString(KEY_CAR_BLUETOOTH_ADDRESS, null)
+
+fun loadCarBluetoothName(context: Context): String? =
+    telemetryPrefs(context).getString(KEY_CAR_BLUETOOTH_NAME, null)
+
+fun saveCarBluetooth(context: Context, address: String?, name: String?) {
+    val editor = telemetryPrefs(context).edit()
+    if (address != null) editor.putString(KEY_CAR_BLUETOOTH_ADDRESS, address)
+    else editor.remove(KEY_CAR_BLUETOOTH_ADDRESS)
+
+    if (name != null) editor.putString(KEY_CAR_BLUETOOTH_NAME, name)
+    else editor.remove(KEY_CAR_BLUETOOTH_NAME)
+
+    editor.apply()
 }
 
 // ── Backup location ──────────────────────────────────────────────────────────────
