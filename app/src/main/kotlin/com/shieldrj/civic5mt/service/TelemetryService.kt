@@ -562,49 +562,70 @@ class TelemetryService : Service() {
             TelemetryState.setConnection(ConnectionStatus.CONNECTING)
             TelemetryState.reset()
 
-            val transport = BluetoothClassicTransport(applicationContext, address)
-            val elm = Elm327Client(transport)
-            client = elm
-            mirrorClientState(elm)
+            val maxAttempts = 3
+            var lastError: Exception? = null
 
-            try {
-                elm.connect { message ->
-                    TelemetryState.setStatusMessage(message)
-                    updateNotification(message)
-                }
+            for (attempt in 1..maxAttempts) {
+                val transport = BluetoothClassicTransport(applicationContext, address)
+                val elm = Elm327Client(transport)
+                client = elm
+                mirrorClientState(elm)
 
-                TelemetryState.setResolvedPids(
-                    ResolvedPids(
-                        lambda = elm.lambdaPid,
-                        preCat = elm.preCatPid,
-                        outsideAir = elm.outsideAirPid,
+                try {
+                    elm.connect { message ->
+                        TelemetryState.setStatusMessage(message)
+                        updateNotification(message)
+                    }
+
+                    TelemetryState.setResolvedPids(
+                        ResolvedPids(
+                            lambda = elm.lambdaPid,
+                            preCat = elm.preCatPid,
+                            outsideAir = elm.outsideAirPid,
+                        )
                     )
-                )
-                TelemetryState.setConnection(ConnectionStatus.CONNECTED)
-                updateNotification("Logging")
+                    TelemetryState.setConnection(ConnectionStatus.CONNECTED)
+                    updateNotification("Logging")
 
-                manager.resetTrip()
-                recorder.start(System.currentTimeMillis(), simulated = false)
+                    manager.resetTrip()
+                    recorder.start(System.currentTimeMillis(), simulated = false)
 
-                startLoops(elm)
-                return@launch
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: ObdTransportError) {
-                // These messages are written for the driver - they name the ignition, or the
-                // OBDLink app holding the link. Surfacing them verbatim is the point.
-                Log.w(TAG, "Connect failed", e)
-                teardown(e.message ?: "Could not connect to the adapter.")
-                TelemetryState.setConnection(ConnectionStatus.ERROR)
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
-            } catch (e: Exception) {
-                Log.e(TAG, "Unexpected connect failure", e)
-                teardown("Unexpected error: ${e.message}")
-                TelemetryState.setConnection(ConnectionStatus.ERROR)
-                stopForeground(STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                    startLoops(elm)
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: ObdTransportError) {
+                    lastError = e
+                    Log.w(TAG, "Connect attempt $attempt/$maxAttempts failed: ${e.message}")
+                    runCatching { elm.disconnect() }
+                    client = null
+                    if (attempt < maxAttempts) {
+                        val retryMsg = "Connecting to your Civic ($attempt/$maxAttempts)…"
+                        TelemetryState.setStatusMessage(retryMsg)
+                        updateNotification(retryMsg)
+                        delay(2_000L)
+                    }
+                } catch (e: Exception) {
+                    lastError = e
+                    Log.e(TAG, "Connect attempt $attempt/$maxAttempts unexpected error: ${e.message}", e)
+                    runCatching { elm.disconnect() }
+                    client = null
+                    if (attempt < maxAttempts) {
+                        val retryMsg = "Connecting to your Civic ($attempt/$maxAttempts)…"
+                        TelemetryState.setStatusMessage(retryMsg)
+                        updateNotification(retryMsg)
+                        delay(2_000L)
+                    }
+                }
             }
+
+            // All attempts failed
+            val finalMsg = lastError?.message ?: "Could not connect to the adapter."
+            Log.w(TAG, "All $maxAttempts connect attempts failed: $finalMsg")
+            teardown(finalMsg)
+            TelemetryState.setConnection(ConnectionStatus.ERROR)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
         }
     }
 
