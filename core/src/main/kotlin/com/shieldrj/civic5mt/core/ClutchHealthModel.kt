@@ -147,6 +147,9 @@ class ClutchHealthEngine(
     // Shift engagement transition tracking
     private var lastEngagedGear: Int? = null
     private var disengagedDurationSec: Double = 0.0
+    private var disengagedHadLift: Boolean = false
+    private var disengagedHadRpmDecouple: Boolean = false
+    private var stationaryDurationSec: Double = 0.0
     private var pendingGear: Int? = null
     private var pendingGearTicks: Int = 0
     private var currentReportedGear: Int? = null
@@ -387,38 +390,68 @@ class ClutchHealthEngine(
 
         // 1. Drivetrain kinematics
         val stationary = speedKmh < CivicSpecs.CLUTCH_MIN_TRACKING_SPEED_KMH
+        val wheelRpm = if (stationary) 0.0 else (speedKmh / 60.0) / CivicSpecs.TIRE_CIRCUMFERENCE_KM
 
         // Track clutch engagements & gear shifts
         if (stationary) {
-            lastEngagedGear = null
+            stationaryDurationSec += stepDt
             pendingGear = null
             pendingGearTicks = 0
             disengagedDurationSec = 0.0
-        } else if (reportedGear == null) {
-            disengagedDurationSec += stepDt
-            pendingGear = null
-            pendingGearTicks = 0
-        } else {
-            if (reportedGear == pendingGear) {
-                pendingGearTicks++
-            } else {
-                pendingGear = reportedGear
-                pendingGearTicks = 1
+            disengagedHadLift = false
+            disengagedHadRpmDecouple = false
+            // Reset lastEngagedGear only after a sustained standstill (> 1.5s).
+            // This prevents momentary speed dips during stop-and-go creeping from registering new launches.
+            if (stationaryDurationSec >= 1.5) {
+                lastEngagedGear = null
             }
+        } else {
+            stationaryDurationSec = 0.0
+            if (reportedGear == null) {
+                disengagedDurationSec += stepDt
+                pendingGear = null
+                pendingGearTicks = 0
+                if (throttlePercent < LIFT_THROTTLE_PERCENT) {
+                    disengagedHadLift = true
+                }
+                if (lastEngagedGear != null && wheelRpm > 0.0) {
+                    val lockedRpm = expectedRpmFor(lastEngagedGear!!, wheelRpm)
+                    if (abs(rpm - lockedRpm) > 300.0) {
+                        disengagedHadRpmDecouple = true
+                    }
+                }
+            } else {
+                if (reportedGear == pendingGear) {
+                    pendingGearTicks++
+                } else {
+                    pendingGear = reportedGear
+                    pendingGearTicks = 1
+                }
 
-            if (pendingGearTicks >= 2) {
-                if (pendingGear != lastEngagedGear) {
-                    profile = profile.copy(totalEngagementsCount = profile.totalEngagementsCount + 1)
-                    lastEngagedGear = pendingGear
-                    disengagedDurationSec = 0.0
-                } else if (disengagedDurationSec >= 0.35) {
-                    // Re-engagement in the same gear after coasting with clutch depressed
-                    profile = profile.copy(totalEngagementsCount = profile.totalEngagementsCount + 1)
-                    disengagedDurationSec = 0.0
+                if (pendingGearTicks >= 3) {
+                    if (pendingGear != lastEngagedGear) {
+                        // Gear changed or initial launch from standstill into a gear
+                        profile = profile.copy(totalEngagementsCount = profile.totalEngagementsCount + 1)
+                        lastEngagedGear = pendingGear
+                        disengagedDurationSec = 0.0
+                        disengagedHadLift = false
+                        disengagedHadRpmDecouple = false
+                    } else if (disengagedDurationSec >= 0.5 && (disengagedHadLift || disengagedHadRpmDecouple)) {
+                        // Re-engagement in the same gear after true clutch-in coast (verified lift or RPM decouple)
+                        profile = profile.copy(totalEngagementsCount = profile.totalEngagementsCount + 1)
+                        disengagedDurationSec = 0.0
+                        disengagedHadLift = false
+                        disengagedHadRpmDecouple = false
+                    } else {
+                        // Resumed same gear without genuine disengagement (e.g. road bump or OBD timing jitter).
+                        // Clear disengagement state so brief noise does not accumulate over time.
+                        disengagedDurationSec = 0.0
+                        disengagedHadLift = false
+                        disengagedHadRpmDecouple = false
+                    }
                 }
             }
         }
-        val wheelRpm = if (stationary) 0.0 else (speedKmh / 60.0) / CivicSpecs.TIRE_CIRCUMFERENCE_KM
         val attributedGear = attributeGear(reportedGear, throttlePercent, stationary)
         updateCalibration(reportedGear, rpm, wheelRpm, throttlePercent, speedKmh)
 
@@ -719,6 +752,9 @@ class ClutchHealthEngine(
         drivelineDisengagedSinceConfirmed = false
         lastEngagedGear = null
         disengagedDurationSec = 0.0
+        disengagedHadLift = false
+        disengagedHadRpmDecouple = false
+        stationaryDurationSec = 0.0
         pendingGear = null
         pendingGearTicks = 0
         currentReportedGear = null
