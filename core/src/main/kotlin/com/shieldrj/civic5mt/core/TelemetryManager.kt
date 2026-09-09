@@ -582,17 +582,25 @@ class TelemetryManager(
      * it taught. Restarting the tank first would compare a pump receipt against a tank that
      * had already been emptied to zero, and every fill would look like a total sensor failure.
      *
+     * The sender reading is optional, and that is not a nicety: a receipt is typed in at a
+     * pump with the ignition off, which is precisely when there is no reading to have. None
+     * of the calibration needs one. What the pump charged for and what this app measured
+     * across the tank are the whole of the measurement, and both are already in hand. The
+     * level is wanted only to open the new tank at the right place, and [TankTracker.markFilled]
+     * closes the tank either way and takes the level from the sender when it next speaks.
+     *
      * @param pumpGallons what the pump charged for
      * @param filledToShutoff whether the nozzle clicked off by itself. A partial fill cannot be
      *   measured - the tank did not end where it started - but it is still logged, and it
      *   becomes the start point the next fill is measured against.
-     * @param levelPercent the sender reading now, for the new tank
+     * @param levelPercent the sender reading now, for the new tank, or null when the car is
+     *   not reporting one. See above.
      * @param odometerMiles the odometer now, if it was read
      */
     fun recordFill(
         pumpGallons: Double,
         filledToShutoff: Boolean,
-        levelPercent: Double,
+        levelPercent: Double? = null,
         odometerMiles: Double? = null,
     ): FillOutcome {
         val closing = tank.get()

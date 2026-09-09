@@ -64,8 +64,9 @@ import kotlinx.coroutines.launch
  * What the engine is actually burning, and what it is burning.
  *
  * The live half is only drawn while something is connected - a mixture reading from a link
- * that dropped ten minutes ago is worse than none. The blend picker is the other half and is
- * always available, because it is set standing at a pump with the engine off.
+ * that dropped ten minutes ago is worse than none. The blend picker and the fill log are the
+ * other half and are always available, because both are used standing at a pump with the
+ * engine off.
  */
 @Composable
 fun FuelScreen(
@@ -143,10 +144,13 @@ fun FuelScreen(
             },
         )
 
-        if (live && metrics.fuelLevelPercent != null) {
-            Spacer(Modifier.height(24.dp))
-            FillLogSection(context)
-        }
+        // Drawn whether or not anything is connected, which is the point of it. A receipt is
+        // typed in standing at a pump with the ignition off, and this used to be hidden in
+        // exactly that situation: it wanted a live sender reading, because logging a fill
+        // wanted one. It no longer does - see TelemetryManager.recordFill - and the fill
+        // history is the one record on this screen that is read with the car asleep.
+        Spacer(Modifier.height(24.dp))
+        FillLogSection(context)
 
         if (live) {
             Spacer(Modifier.height(24.dp))
@@ -890,7 +894,10 @@ private fun FillLogSection(context: android.content.Context) {
     val feedback by TelemetryState.actionFeedback.collectAsStateWithLifecycle()
     feedback?.let { result ->
         LaunchedEffect(result.sequence) {
-            delay(6_000)
+            // Long enough to read standing at a pump, and a fill's answer is three sentences:
+            // the gallons read back, what they taught, and what became of the tank. Six
+            // seconds was sized for "Started a new tank at 93%" and is not enough for that.
+            delay(14_000)
             TelemetryState.clearActionFeedback(result.sequence)
         }
         Text(

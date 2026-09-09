@@ -383,6 +383,48 @@ class TankTrackerTest {
         }
 
         @Test
+        fun `Saying so with no sender reading still closes the tank`() {
+            // The pump case, and the ordinary one: a receipt is typed in with the ignition
+            // off, so there is no reading to open the new tank at. The tank still has to be
+            // closed - its miles and its gallons belong to the tank just emptied, and
+            // carrying them into the next one would measure the next receipt against a span
+            // that has already been spent.
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+            driveDown(t, clock, 90.0, 30.0, 0.142, mpg = 33.0)
+            assertTrue(t.get().milesSinceFill > 100)
+
+            t.markFilled(null)
+
+            assertEquals(0.0, t.get().milesSinceFill)
+            assertEquals(0.0, t.get().gallonsUsedSinceFill)
+            // The sender measurement is taken on the way past rather than lost. This is the
+            // moment the whole span is known, and it is the only moment it ever is.
+            assertTrue(t.get().calibrated)
+            // And nothing has been invented in place of the missing reading: the level is
+            // still where the driving left it.
+            assertTrue(t.get().smoothedLevelPercent < 40.0, "got ${t.get().smoothedLevelPercent}")
+        }
+
+        @Test
+        fun `A tank closed with no reading takes its level from the next one`() {
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+            driveDown(t, clock, 90.0, 30.0, 0.142, mpg = 33.0)
+            t.markFilled(null)
+
+            // The car is next heard from with a brimmed tank. That rise is what the tracker
+            // already watches for, and it is where the level comes from.
+            clock.advanceMillis(20 * 60_000)
+            t.record(93.0, 0.0, 0.0, 1.0)
+
+            assertTrue(abs(t.get().smoothedLevelPercent - 93.0) < 0.001)
+            assertTrue(abs(t.get().fullMarkPercent - 93.0) < 0.001)
+            // Still the new tank's own count. The reading arriving is not driving.
+            assertEquals(0.0, t.get().milesSinceFill)
+        }
+
+        @Test
         fun `Mid-tank fuel sloshing does not trigger a false fill reset`() {
             val clock = MutableClock(1_700_000_000_000)
             val t = TankTracker(InMemoryTankStore(), clock)

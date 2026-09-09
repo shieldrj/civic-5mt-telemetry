@@ -22,9 +22,7 @@ import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.DtcScanner
 import com.shieldrj.civic5mt.core.Elm327Client
 import com.shieldrj.civic5mt.core.FillOutcome
-import com.shieldrj.civic5mt.core.FillRejection
 import com.shieldrj.civic5mt.core.FuelCalibrationEngine
-import com.shieldrj.civic5mt.core.FuelCalibrationRules
 import com.shieldrj.civic5mt.core.ObdTransportError
 import com.shieldrj.civic5mt.core.ReconnectPolicy
 import com.shieldrj.civic5mt.core.OilLifeEngine
@@ -507,6 +505,9 @@ class TelemetryService : Service() {
                     odometerMiles = intent.getDoubleExtra(EXTRA_ODOMETER_MILES, -1.0)
                         .takeIf { it > 0.0 },
                 )
+                // Same as the fill beside it: a receipt typed in at a pump starts this service
+                // with nothing connected, and it has no reason to stay running afterwards.
+                stopIfIdle()
             }
 
             ACTION_RESET_FUEL_CALIBRATION -> {
@@ -823,27 +824,25 @@ class TelemetryService : Service() {
     }
 
     /**
-     * Records a fill the app did not see.
-     *
-     * A fill is normally spotted on its own, from the level rising. This is for the one that
-     * is too small to look like a fill, or that happened while something else was using the
-     * adapter. It uses the level the car is reporting now, so it is worth doing with the
-     * ignition on rather than from the driveway.
-     */
-    /**
      * Logs a fill with the pump's own figure attached.
      *
-     * The status message is the whole user interface for this: someone standing at a pump has
-     * typed a number in and wants to know whether it counted. Saying "logged" either way would
-     * be the worst of both - the fills that teach nothing look identical to the ones that do,
-     * and the correction never appears to improve.
+     * The reply is the whole user interface for this: someone standing at a pump has typed a
+     * number in and wants to know whether it counted. What it says is [fillFeedback]'s; where
+     * it goes is this method's, and that is what was wrong. It went to the status line only -
+     * which is drawn on the dashboard and nowhere else, so on the Fuel tab, the one place the
+     * button exists, typing a receipt in did nothing a driver could see. That line is also the
+     * connection's running commentary, so even there the next handshake message overwrote it.
      */
     private fun recordFill(pumpGallons: Double, filledToShutoff: Boolean, odometerMiles: Double?) {
+        // Absent nearly every time, and that is not a failure worth reporting as one. Nobody
+        // fills a tank with the ignition on, so a receipt is typed in with the car asleep and
+        // the adapter saying nothing - which is exactly when this used to refuse the fill and
+        // throw the number away. The calibration never needed the sender: the pump's gallons
+        // and the span this app measured across the tank are the whole measurement, and both
+        // are already in hand. Only the new tank's starting level wants a reading, and
+        // TankTracker closes the tank either way and takes the level from the rise it sees at
+        // the next connection.
         val level = TelemetryState.metrics.value.fuelLevelPercent
-        if (level == null) {
-            TelemetryState.setStatusMessage("No tank level from the car, so there is nothing to reset.")
-            return
-        }
 
         val outcome = manager.recordFill(
             pumpGallons = pumpGallons,
@@ -853,46 +852,22 @@ class TelemetryService : Service() {
         )
         TelemetryState.setCalibration(manager.getCalibration())
 
-        TelemetryState.setStatusMessage(
-            when (outcome) {
-                is FillOutcome.Accepted -> {
-                    val state = outcome.state
-                    val off = (state.fuelCorrectionFactor - 1.0) * 100
-                    val direction = if (off >= 0) "under" else "over"
-                    "Fill logged. The tank sensors read %.1f%% %s the pump, over %d fill%s."
-                        .format(kotlin.math.abs(off), direction, state.samples.size, if (state.samples.size == 1) "" else "s")
-                }
-
-                is FillOutcome.Rejected -> when (outcome.reason) {
-                    FillRejection.NOT_FILLED_TO_SHUTOFF ->
-                        "New tank started. A part fill cannot be measured, but the next fill to " +
-                            "the click will be measured from it."
-
-                    FillRejection.NO_FULL_FILL_BASELINE ->
-                        "New tank started. Fill to the click again next time and that one gets " +
-                            "measured - it takes two to make a span."
-
-                    FillRejection.SPAN_TOO_SHORT ->
-                        "New tank started. Too small to measure from: it takes about " +
-                            "${FuelCalibrationRules.MIN_PUMP_GALLONS.toInt()} gallons and " +
-                            "${FuelCalibrationRules.MIN_MILES.toInt()} miles."
-
-                    FillRejection.IMPLAUSIBLE_PUMP_GALLONS ->
-                        "New tank started. That is more than the tank holds, so it was not used " +
-                            "for the calibration."
-
-                    FillRejection.NO_MEASUREMENT ->
-                        "New tank started. The app tracked nothing across that tank, so there " +
-                            "was nothing to compare the receipt against."
-
-                    FillRejection.IMPLAUSIBLE_RATIO ->
-                        "New tank started. The receipt and the sensors are too far apart to be " +
-                            "a sensor error - a missed fill, most likely - so it was not used."
-                }
-            },
-        )
+        val message = fillFeedback(outcome, pumpGallons, level)
+        TelemetryState.setStatusMessage(message)
+        // Posted as well as set, because the screen with the button on it draws this one and
+        // not the status line. False for everything the calibration refused, which colours it
+        // differently: a refusal is the more important of the two to be able to see.
+        TelemetryState.postActionFeedback(message, worked = outcome is FillOutcome.Accepted)
     }
 
+    /**
+     * Records a fill the app did not see, without a receipt.
+     *
+     * A fill is normally spotted on its own, from the level rising. This is for the one that
+     * is too small to look like a fill, or that happened while something else was using the
+     * adapter. It uses the level the car is reporting now, so unlike [recordFill] - which
+     * measures a span the app already has in hand - this one does need the ignition on.
+     */
     private fun markFilled() {
         val level = TelemetryState.metrics.value.fuelLevelPercent
         if (level == null) {

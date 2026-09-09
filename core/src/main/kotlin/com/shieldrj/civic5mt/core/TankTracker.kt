@@ -668,10 +668,28 @@ class TankTracker(
      *
      * For a fill too small to be detected - a few gallons rather than a tankful - or one the
      * app missed. Snaps the level, because the driver is standing at the pump saying so.
+     *
+     * [levelPercent] is null when the car is not reporting one, which is the ordinary case for
+     * a pump receipt: it is typed in with the ignition off. The tank is still closed off, and
+     * that part matters more than the level does - its miles and its gallons belong to the
+     * tank that has just been emptied and must not carry on into the next one, or the next
+     * receipt gets measured against a span that has already been spent. The level is simply
+     * left for the sender to supply.
+     *
+     * Which the sender then does, through the path that already exists for it. [started] is
+     * cleared rather than set, so the next reading arrives at the seam branch in [record] -
+     * the one written for a fill that finished while nothing was watching - and is snapped to.
+     * The rise it needs to see is still there, because the smoothed level is carried through
+     * this untouched: it is still sitting where the tank was before the pump.
      */
-    fun markFilled(levelPercent: Double) {
-        started = true
-        startNewTank(levelPercent, snapLevel = levelPercent)
+    fun markFilled(levelPercent: Double? = null) {
+        if (levelPercent != null) {
+            started = true
+            startNewTank(levelPercent, snapLevel = levelPercent)
+            return
+        }
+        started = false
+        startNewTank(state.smoothedLevelPercent, snapLevel = null)
     }
 
     fun flush() {
