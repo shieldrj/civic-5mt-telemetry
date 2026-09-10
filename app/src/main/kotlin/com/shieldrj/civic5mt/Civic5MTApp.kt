@@ -2,12 +2,13 @@ package com.shieldrj.civic5mt
 
 import android.app.Application
 import android.util.Log
-import com.shieldrj.civic5mt.core.OilLifeEngine
+import com.shieldrj.civic5mt.service.PrefsClutchProfileStore
+import com.shieldrj.civic5mt.service.PrefsFuelCalibrationStore
 import com.shieldrj.civic5mt.service.PrefsLifetimeStore
 import com.shieldrj.civic5mt.service.PrefsOilProfileStore
-import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.service.importRescuedRecordsOnce
 import com.shieldrj.civic5mt.service.loadFuelBlend
+import com.shieldrj.civic5mt.service.publishPersistedRecords
 
 /**
  * Runs before any Activity or Service, which is the only place the migration belongs.
@@ -17,6 +18,10 @@ import com.shieldrj.civic5mt.service.loadFuelBlend
  * connection the rescued lifetime record was sitting in res/raw un-imported, and the screen
  * had nothing to show. Storage-level work that must happen before anything reads storage
  * happens here, once per process.
+ *
+ * What to publish, and how each record has to be read, lives in [publishPersistedRecords]
+ * rather than here - it takes stores rather than a Context so that a JVM test can hold it to
+ * the rule this class exists to enforce. All that is left here is opening the files.
  */
 class Civic5MTApp : Application() {
 
@@ -25,18 +30,13 @@ class Civic5MTApp : Application() {
 
         importRescuedRecordsOnce(this)?.let { Log.i(TAG, it) }
 
-        // Publish what is on disk immediately. The lifetime figure and the oil profile are
-        // persisted facts rather than live readings - they should be legible with the car
-        // parked, the adapter unplugged and Bluetooth off.
-        PrefsLifetimeStore(this).load()?.let { TelemetryState.setLifetime(it) }
-        // Through the engine rather than straight off the file, so what the Oil screen
-        // shows is the recomputed view of the stored measurements. Reading the file
-        // directly published the derived figures exactly as they were last written, which
-        // is how a corrected interval estimate stayed invisible behind the old one.
-        if (PrefsOilProfileStore(this).load() != null) {
-            TelemetryState.setOil(OilLifeEngine(PrefsOilProfileStore(this)).getProfile())
-        }
-        TelemetryState.setFuelBlend(loadFuelBlend(this))
+        publishPersistedRecords(
+            lifetime = PrefsLifetimeStore(this),
+            oil = PrefsOilProfileStore(this),
+            clutch = PrefsClutchProfileStore(this),
+            calibration = PrefsFuelCalibrationStore(this),
+            blend = loadFuelBlend(this),
+        )
     }
 
     private companion object {

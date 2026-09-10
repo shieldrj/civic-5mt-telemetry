@@ -247,7 +247,8 @@ private fun TripRow(trip: TripEntity) {
 private fun formatWhen(millis: Long): String =
     SimpleDateFormat("d MMM, HH:mm", Locale.getDefault()).format(Date(millis))
 
-private fun formatDuration(seconds: Double): String {
+/** Shared with the home screen's last-drive card, which formats the same figure. */
+internal fun formatDuration(seconds: Double): String {
     val total = seconds.roundToInt()
     val minutes = total / 60
     return if (minutes >= 60) {
