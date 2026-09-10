@@ -625,6 +625,162 @@ class ClutchHealthModelTest {
             repeat(15) { tick(lockedRpm(3, 47.0), 47.0, 30.0) }
             assertEquals(2, engine.getProfile().totalEngagementsCount, "Re-engaging 3rd after 0.56s must increment count to 2")
         }
+
+        @Test
+        fun `Cruising in 4th gear with multi-tick road bumps and OBD jitter does not increment shift count`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double) {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 30.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 24.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+
+            // 1. Cruising in 4th gear at 70 km/h
+            repeat(20) { tick(lockedRpm(4, 70.0), 70.0, 35.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount)
+
+            // 2. Multi-sample (5 ticks, 400ms) road bump / OBD latency where gear reports Clutch
+            //    Throttle is NOT lifted (35%) and RPM is still at locked cruise speed (2500 RPM)
+            repeat(5) {
+                clock.advanceSec(0.08)
+                engine.recordTelemetryStep(
+                    rpm = lockedRpm(4, 70.0),
+                    speedKmh = 70.0,
+                    throttlePercent = 35.0,
+                    mafGramsPerSec = 30.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 24.0,
+                    gearSelection = GearSelection.Clutch, // Ratio jitter
+                    ambientTempC = 20.0,
+                    speedMph = 70.0 * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+
+            // 3. Resumes 4th gear cruise
+            repeat(20) { tick(lockedRpm(4, 70.0), 70.0, 35.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount, "400ms cruise jitter must NOT increment shift count")
+        }
+
+        @Test
+        fun `Stop-and-go crawling in 1st gear does not increment shift count on momentary speed dips`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double) {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 15.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 18.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+
+            // 1. Stopped at light for 2 seconds (1.6s+) -> launches in 1st
+            repeat(20) { tick(750.0, 0.0, 0.0) }
+            repeat(10) { tick(lockedRpm(1, 10.0), 10.0, 20.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount, "Initial launch in 1st counted")
+
+            // 2. Traffic crawls: speed drops to 0.6 km/h for 4 ticks (0.32s < 1.5s threshold)
+            repeat(4) { tick(750.0, 0.6, 5.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount)
+
+            // 3. Traffic moves forward again at 10 km/h in 1st gear
+            repeat(10) { tick(lockedRpm(1, 10.0), 10.0, 20.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount, "Crawling in 1st gear must not add fake shifts")
+        }
+
+        @Test
+        fun `Highway cruising with repeated minor ratio fluctuations does not falsely accumulate coast time`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double) {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 30.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 24.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+
+            // 1. Cruising in 5th gear at 100 km/h
+            repeat(20) { tick(lockedRpm(5, 100.0), 100.0, 30.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount)
+
+            // 2. First bump: 3 ticks of jitter
+            repeat(3) {
+                clock.advanceSec(0.08)
+                engine.recordTelemetryStep(
+                    rpm = lockedRpm(5, 100.0),
+                    speedKmh = 100.0,
+                    throttlePercent = 30.0,
+                    mafGramsPerSec = 30.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 24.0,
+                    gearSelection = GearSelection.Clutch,
+                    ambientTempC = 20.0,
+                    speedMph = 100.0 * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+            repeat(10) { tick(lockedRpm(5, 100.0), 100.0, 30.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount)
+
+            // 3. Second bump: 3 ticks of jitter
+            repeat(3) {
+                clock.advanceSec(0.08)
+                engine.recordTelemetryStep(
+                    rpm = lockedRpm(5, 100.0),
+                    speedKmh = 100.0,
+                    throttlePercent = 30.0,
+                    mafGramsPerSec = 30.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 24.0,
+                    gearSelection = GearSelection.Clutch,
+                    ambientTempC = 20.0,
+                    speedMph = 100.0 * 0.621371,
+                    dtSec = 0.08,
+                )
+            }
+            repeat(10) { tick(lockedRpm(5, 100.0), 100.0, 30.0) }
+            assertEquals(1, engine.getProfile().totalEngagementsCount, "Repeated bumps must NOT accumulate into a false shift")
+        }
     }
 
     @Nested
