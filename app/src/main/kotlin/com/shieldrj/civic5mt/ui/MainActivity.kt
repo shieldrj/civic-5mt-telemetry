@@ -84,6 +84,7 @@ import com.shieldrj.civic5mt.core.OutsideAirSource
 import com.shieldrj.civic5mt.core.ShiftMode
 import com.shieldrj.civic5mt.core.TripAnalytics
 import com.shieldrj.civic5mt.data.TripDatabase
+import com.shieldrj.civic5mt.data.TripEntity
 import com.shieldrj.civic5mt.service.ResolvedPids
 import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
@@ -187,6 +188,12 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
     // know it changed is to look again when the app comes back to the front.
     val tripCount by remember { TripDatabase.get(context).tripDao().observeRealTripCount() }
         .collectAsStateWithLifecycle(0)
+
+    // The drive that just ended, for when nothing is connected. Beside the count above so
+    // both questions go through the one database handle, and collected here rather than
+    // inside the card so the card stays a pure drawing of a row it is handed.
+    val lastTrip by remember { TripDatabase.get(context).tripDao().observeLastFinishedTrip() }
+        .collectAsStateWithLifecycle(null)
 
     var autoConnect by remember { mutableStateOf(loadAutoConnect(context)) }
     var carBtAddress by remember { mutableStateOf(loadCarBluetoothAddress(context)) }
@@ -321,6 +328,14 @@ private fun ConnectionScreen(deepLink: androidx.compose.runtime.State<DetailScre
 
         Text(status, color = CivicColors.Ink2, fontSize = 14.sp)
         Spacer(Modifier.height(24.dp))
+
+        // Above the Connect button, because after a drive this is the thing being looked
+        // for and the button is the thing being looked for before one. Absent on a phone
+        // that has never finished a drive - an empty card teaches nothing.
+        lastTrip?.let {
+            LastDriveCard(it) { detail = DetailScreen.Trips }
+            Spacer(Modifier.height(24.dp))
+        }
 
         when (connection) {
             ConnectionStatus.CONNECTED, ConnectionStatus.CONNECTING,
@@ -644,6 +659,86 @@ private fun ReadingRow(label: String, value: String?) {
             text = value ?: "—",
             color = if (value == null) CivicColors.Ink4 else CivicColors.Ink,
             fontSize = 14.sp,
+        )
+    }
+}
+
+/**
+ * What the drive that just ended came to, drawn with nothing connected.
+ *
+ * The Drive screen and every figure on it goes when the link does, which made the moment
+ * someone actually wants a number - standing beside a car they have just parked - the one
+ * moment the app had nothing to say. This reads the finished row back out of the trip log
+ * rather than holding the live analytics open, so it survives the service stopping and the
+ * process dying with it, which is exactly what the ignition going off causes.
+ *
+ * Stamped with when it ended, and titled as the last drive rather than drawn like a gauge,
+ * because a figure with no time against it reads as a current one. This is a record of
+ * something finished, and the stamp is what keeps it honest.
+ */
+@Composable
+private fun LastDriveCard(trip: TripEntity, onOpen: () -> Unit) {
+    PanelCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = "LAST DRIVE",
+                color = CivicColors.Ink3,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 2.sp,
+            )
+            trip.endedAt?.let {
+                Text(
+                    text = DateUtils.getRelativeTimeSpanString(it).toString(),
+                    color = CivicColors.Ink3,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(12.dp))
+
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                text = "%.1f".format(trip.avgMpg),
+                color = CivicColors.Ink,
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Light,
+                modifier = Modifier.alignByBaseline(),
+            )
+            Text(
+                text = " MPG",
+                color = CivicColors.Ink3,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 1.4.sp,
+                modifier = Modifier.alignByBaseline(),
+            )
+        }
+
+        Spacer(Modifier.height(6.dp))
+
+        Text(
+            text = "%.1f mi · %s · %d eco".format(
+                trip.distanceMiles,
+                formatDuration(trip.durationSec),
+                trip.ecoScore,
+            ),
+            color = CivicColors.Ink2,
+            fontSize = 13.sp,
+        )
+
+        Spacer(Modifier.height(14.dp))
+
+        Text(
+            text = "See all drives",
+            color = CivicColors.Accent,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.clickable(onClick = onOpen),
         )
     }
 }

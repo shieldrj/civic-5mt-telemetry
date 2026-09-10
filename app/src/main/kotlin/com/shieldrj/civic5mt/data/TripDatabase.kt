@@ -114,6 +114,24 @@ interface TripDao {
     @Query("SELECT COUNT(*) FROM trips WHERE simulated = 0")
     fun observeRealTripCount(): Flow<Int>
 
+    /**
+     * The drive that just ended, for the home screen to show with the car switched off.
+     *
+     * Finished and real only. A row with no `ended_at` is the drive still in progress, which
+     * the Drive screen is already showing live; the bench is excluded for the same reason it
+     * is excluded from the count above - being told what a simulated drive achieved, after
+     * parking a real car, is worse than being told nothing.
+     *
+     * Ordered by `started_at` to match [observeRecentTrips], so "the last drive" means the
+     * same drive in both places. Ordering by `ended_at` would disagree with that list whenever
+     * a drive was left open and closed late.
+     */
+    @Query(
+        "SELECT * FROM trips WHERE ended_at IS NOT NULL AND simulated = 0 " +
+            "ORDER BY started_at DESC LIMIT 1"
+    )
+    fun observeLastFinishedTrip(): Flow<TripEntity?>
+
     /** Drops a drive and, by the foreign key, everything sampled during it. */
     @Query("DELETE FROM trips WHERE id = :id")
     suspend fun deleteTrip(id: Long)
