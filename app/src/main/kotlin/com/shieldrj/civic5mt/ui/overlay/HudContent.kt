@@ -202,11 +202,11 @@ fun HudContent() {
                 // Abbreviated here and spelled out above, for width: the row is a label and a
                 // reading inside a 128dp card, and "under 30 mi" is wider than the two of them
                 // have between them. The word is on the figure that carries the card.
-                // Miles to the sender's zero, not the total. This card has room for one
-                // figure, and of the two the one that matches the dashboard is the one that
-                // does not talk someone past a petrol station. The reserve is on the Drive
-                // and Fuel screens, where there is room to name it.
-                value = (metrics.fuelRangeToSenderZeroMiles ?: metrics.fuelRangeMiles)
+                // Everything in the tank, matching the Drive screen. This card has room for
+                // one figure and it is the same question that screen answers - when does the
+                // car stop - so showing the dashboard's more cautious number here would put
+                // two different answers on two surfaces a glance apart.
+                value = metrics.fuelRangeMiles
                     ?.let { if (bounded) "< $it mi" else "$it mi" }
                     ?: "—",
             )

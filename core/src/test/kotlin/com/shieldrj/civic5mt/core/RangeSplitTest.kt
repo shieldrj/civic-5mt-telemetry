@@ -79,11 +79,12 @@ class RangeSplitTest {
             // out at 93.3, and the nominal slope, because no fill has been logged yet and the
             // tank is still uncalibrated.
             //
-            // This is the case that has to stay separated. With the sender sitting on zero the
-            // dashboard-comparable answer is zero miles, and the total is over sixty - so a
-            // screen printing the total alone reports a comfortable range at the exact moment
-            // the gauge has run out of things to say. That is project rule 6, and it is what
-            // the Drive screen, the HUD and the widget were all doing.
+            // This is the case that has to stay separable. The screens lead with the total,
+            // because what is wanted is the distance until the car stops - but with the sender
+            // sitting on zero that total is entirely reserve, and reserve is the one fuel no
+            // sensor watches going down. The second figure is what lets a screen say so
+            // instead of presenting sixty-six miles of arithmetic as a reading. Rule 6 is not
+            // "show the cautious number", it is "never one number where there are two".
             val t = tank(
                 senderPercent = 0.0,
                 gallonsPerPercent = CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT,
