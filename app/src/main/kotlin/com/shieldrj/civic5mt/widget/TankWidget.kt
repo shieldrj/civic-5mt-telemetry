@@ -27,7 +27,9 @@ object TankWidget {
     fun update(context: Context, metrics: LiveMetrics) {
         val snapshot = WidgetSnapshot(
             tankMpg = metrics.tankMpg,
-            rangeMiles = metrics.fuelRangeMiles,
+            // To the sender's zero, matching the dashboard. One number on a home-screen
+            // widget has to be the conservative one.
+            rangeMiles = metrics.fuelRangeToSenderZeroMiles ?: metrics.fuelRangeMiles,
             rangeIsCeiling = metrics.tankBelowSenderZero,
         )
         saveWidgetSnapshot(context, snapshot)
