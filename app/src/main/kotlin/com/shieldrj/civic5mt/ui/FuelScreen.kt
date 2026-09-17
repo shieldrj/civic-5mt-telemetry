@@ -200,7 +200,7 @@ private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Doubl
         }
 
         Column(Modifier.weight(1f)) {
-            Label("TO EMPTY")
+            Label("UNTIL DRY")
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 // "under" rather than a bare numeral once the sender has bottomed out. It is
@@ -384,9 +384,9 @@ private fun TankSection(
         val reserveMiles = metrics.fuelRangeReserveMiles
         if (reserveMiles != null && reserveMiles > 0) {
             ValueRow(
-                label = "Before the gauge reads E",
+                label = "Gauge reads E at",
                 value = "${metrics.fuelRangeToSenderZeroMiles} mi",
-                note = "then $reserveMiles mi of reserve the sender cannot see",
+                note = "the last $reserveMiles mi are reserve, which nothing measures",
             )
         }
         if (metrics.rangeMpgUsed != null) {

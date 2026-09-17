@@ -322,18 +322,24 @@ fun DriveScreen(
 }
 
 /**
- * Distance to empty, as the two numbers it actually is.
+ * Distance to dry, and where the gauge gives up on the way there.
  *
- * The headline is miles to the sender's zero, which is the figure the dashboard shows and the
- * one to plan a fuel stop around. The reserve underneath it is real, is measured, and is the
- * least certain fuel in the tank - nothing watches it going down - so it is stated on its own
- * line rather than added in.
+ * The headline counts every gallon in the tank, reserve included, because that is the question
+ * this app was asked: not "when does the needle hit the peg" - the dashboard answers that
+ * already - but "when does the car stop". Honda's figure deliberately reaches zero with about
+ * 1.9 gallons still in the tank, so it is the more cautious of the two and the less useful one
+ * to a driver who wants to know what is really left.
  *
- * This screen used to print the total on its own, labelled "miles to empty". On the day the
- * low fuel light came on that read 142 against a dashboard reading about 35, and roughly
- * sixty-seven of those miles were reserve the dashboard excludes by design. Adding the two
- * together produces a number that is arithmetically defensible and, on the one occasion it
- * matters, reads as an invitation to drive past a petrol station. See project rule 6.
+ * Both are still drawn, which is the part that matters and the part that was missing. Printed
+ * alone, the total is what made the app read 142 on the day the low fuel light came on against
+ * a dashboard reading about 35 - not because it was wrong, but because there was nothing on
+ * screen to say the two numbers were answering different questions. The second line is that
+ * explanation, and it is what project rule 6 is really asking for: never one number where
+ * there are two.
+ *
+ * Worth knowing about the headline: the reserve is the least certain fuel in the tank. It is
+ * the only part no sensor watches going down, so the last stretch of this figure is arithmetic
+ * rather than measurement.
  */
 @Composable
 private fun RangeToEmpty(
@@ -341,9 +347,8 @@ private fun RangeToEmpty(
     valueSize: androidx.compose.ui.unit.TextUnit,
     captionSize: androidx.compose.ui.unit.TextUnit,
 ) {
-    // Fall back to the total only when the split is unavailable - an uncalibrated tank with no
-    // full mark yet has no reserve to separate out, and there the two are the same number.
-    val headline = metrics.fuelRangeToSenderZeroMiles ?: metrics.fuelRangeMiles
+    val headline = metrics.fuelRangeMiles
+    val toSenderZero = metrics.fuelRangeToSenderZeroMiles
     val reserve = metrics.fuelRangeReserveMiles
 
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -364,16 +369,18 @@ private fun RangeToEmpty(
                 modifier = Modifier.alignByBaseline(),
             )
             Text(
-                text = " miles to empty",
+                text = " miles until dry",
                 color = CivicColors.Ink3,
                 fontSize = captionSize,
                 modifier = Modifier.alignByBaseline(),
             )
         }
-        if (reserve != null && reserve > 0) {
+        // Only when there is a reserve to separate out. On a tank with no measured full mark
+        // the two figures are the same number, and saying so twice is noise.
+        if (toSenderZero != null && reserve != null && reserve > 0) {
             Spacer(Modifier.height(2.dp))
             Text(
-                text = "then $reserve mi of reserve the gauge cannot see",
+                text = "gauge reads empty at $toSenderZero mi",
                 color = CivicColors.Ink4,
                 fontSize = captionSize,
             )
