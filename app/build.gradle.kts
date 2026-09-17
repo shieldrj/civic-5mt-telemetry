@@ -132,6 +132,10 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-graphics")
     implementation("androidx.compose.material3:material3")
+    // The bottom bar / side rail pair, picked by window size rather than by an orientation
+    // branch of our own. The car mount is landscape, where a bottom bar would eat the
+    // height the gauge needs; this hands that case a rail without a second layout to keep.
+    implementation("androidx.compose.material3:material3-adaptive-navigation-suite")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

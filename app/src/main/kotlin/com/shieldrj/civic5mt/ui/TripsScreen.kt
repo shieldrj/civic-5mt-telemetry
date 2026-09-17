@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Text
@@ -53,12 +52,7 @@ import kotlin.math.roundToInt
  * that than a filter someone can forget to apply.
  */
 @Composable
-fun TripsScreen(
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    androidx.activity.compose.BackHandler(onBack = onBack)
-
+fun TripsScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val dao = remember { TripDatabase.get(context).tripDao() }
@@ -107,7 +101,6 @@ fun TripsScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .safeDrawingPadding()
             .padding(horizontal = 20.dp, vertical = 24.dp),
     ) {
         Text(
@@ -155,8 +148,6 @@ fun TripsScreen(
                 exportSamples.launch(fileName("trace"))
             }
         }
-
-        TripAction("Back", CivicColors.Accent, onBack)
     }
 }
 

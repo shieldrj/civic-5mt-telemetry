@@ -26,6 +26,12 @@ Android telemetry, diagnostics, and prognostics application for the **2013 Honda
   - 100% deterministic test coverage with `MutableClock`.
 - **`app/`**: Android application module.
   - Jetpack Compose UI, Material 3, dynamic Canvas rendering for gauges.
+  - **Four destinations, not six screens.** `CivicShell.kt` owns the whole chrome: the
+    connection bar across the top of every screen, and a `NavigationSuiteScaffold` that is a
+    bottom bar in portrait and a side rail on the car mount. Oil, clutch and codes are
+    sections of the Health tab (`HealthScreen.kt`), not destinations of their own. Two rules
+    hold it together: the connection state is drawn in exactly one place, never implied by
+    which layout is on screen, and the accent colour is never spent on navigation.
   - Background `TelemetryService` running as `FOREGROUND_SERVICE_CONNECTED_DEVICE`.
   - Bluetooth SPP (Classic RFCOMM) link to OBDLink MX+.
   - Room database for trip analytics and SharedPreferences for profile persistence.

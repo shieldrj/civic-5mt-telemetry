@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -53,12 +52,7 @@ import kotlin.math.roundToInt
  * Archard physical wear law tracking, and remaining useful life projections.
  */
 @Composable
-fun ClutchScreen(
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    androidx.activity.compose.BackHandler(onBack = onBack)
-
+fun ClutchSection(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val profile by TelemetryState.clutch.collectAsStateWithLifecycle()
     val metrics by TelemetryState.metrics.collectAsStateWithLifecycle()
@@ -67,19 +61,9 @@ fun ClutchScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 24.dp),
     ) {
-        Text(
-            text = "CLUTCH HEALTH & PROGNOSTICS",
-            color = CivicColors.Ink3,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            letterSpacing = 2.sp,
-        )
-        Spacer(Modifier.height(18.dp))
-
         val p = profile
         if (p == null) {
             Text(
@@ -113,8 +97,6 @@ fun ClutchScreen(
                 ClutchAction("Cancel", CivicColors.Ink3) { confirmingReset = false }
             }
         }
-
-        ClutchAction("Back", CivicColors.Accent, onBack)
     }
 }
 

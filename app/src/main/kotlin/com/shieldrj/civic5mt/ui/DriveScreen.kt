@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,14 +47,12 @@ fun DriveScreen(
     connection: ConnectionStatus,
     shiftMode: ShiftMode,
     onToggleShiftMode: () -> Unit,
-    onOpen: (DetailScreen) -> Unit,
-    onStop: () -> Unit,
+    onOpenHealth: (HealthSection) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     androidx.compose.foundation.layout.BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            .safeDrawingPadding()
     ) {
         val isLandscape = maxWidth > maxHeight
 
@@ -88,9 +85,9 @@ fun DriveScreen(
                         status = metrics.healthStatus,
                         onClick = {
                             if (metrics.healthStatus.summary.startsWith("CLUTCH")) {
-                                onOpen(DetailScreen.Clutch)
+                                onOpenHealth(HealthSection.Clutch)
                             } else {
-                                onOpen(DetailScreen.Codes)
+                                onOpenHealth(HealthSection.Codes)
                             }
                         },
                     )
@@ -208,36 +205,13 @@ fun DriveScreen(
                         )
                     }
 
-                    if (connection == ConnectionStatus.SIMULATING) {
-                        Text(
-                            text = "SIMULATED — NOT RECORDED",
-                            color = CivicColors.Warn,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            letterSpacing = 1.4.sp,
-                        )
-                    }
-
                     if (connection == ConnectionStatus.RECONNECTING) {
                         Text(
-                            text = "ADAPTER LOST — RECONNECTING",
-                            color = CivicColors.Warn,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Medium,
-                            letterSpacing = 1.4.sp,
+                            text = "These readings are the last ones received. " +
+                                "The drive is still open.",
+                            color = CivicColors.Ink3,
+                            fontSize = 12.sp,
                         )
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        NavLink("Fuel") { onOpen(DetailScreen.Fuel) }
-                        NavLink("Clutch") { onOpen(DetailScreen.Clutch) }
-                        NavLink("Oil") { onOpen(DetailScreen.Oil) }
-                        NavLink("Codes") { onOpen(DetailScreen.Codes) }
-                        NavLink("Trips") { onOpen(DetailScreen.Trips) }
-                        NavLink("Stop", CivicColors.Accent, onStop)
                     }
                 }
             }
@@ -264,9 +238,9 @@ fun DriveScreen(
                     status = metrics.healthStatus,
                     onClick = {
                         if (metrics.healthStatus.summary.startsWith("CLUTCH")) {
-                            onOpen(DetailScreen.Clutch)
+                            onOpenHealth(HealthSection.Clutch)
                         } else {
-                            onOpen(DetailScreen.Codes)
+                            onOpenHealth(HealthSection.Codes)
                         }
                     },
                 )
@@ -378,44 +352,13 @@ fun DriveScreen(
 
                 Spacer(Modifier.height(8.dp))
 
-                if (connection == ConnectionStatus.SIMULATING) {
-                    Text(
-                        text = "SIMULATED — NOT RECORDED",
-                        color = CivicColors.Warn,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        letterSpacing = 1.6.sp,
-                    )
-                }
-
                 if (connection == ConnectionStatus.RECONNECTING) {
                     Text(
-                        text = "ADAPTER LOST — RECONNECTING",
-                        color = CivicColors.Warn,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        letterSpacing = 1.6.sp,
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        text = "Readings below are the last ones received. The drive is still open.",
+                        text = "These readings are the last ones received. " +
+                            "The drive is still open.",
                         color = CivicColors.Ink3,
                         fontSize = 12.sp,
                     )
-                }
-
-                Spacer(Modifier.height(14.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    NavLink("Fuel") { onOpen(DetailScreen.Fuel) }
-                    NavLink("Clutch") { onOpen(DetailScreen.Clutch) }
-                    NavLink("Oil") { onOpen(DetailScreen.Oil) }
-                    NavLink("Codes") { onOpen(DetailScreen.Codes) }
-                    NavLink("Trips") { onOpen(DetailScreen.Trips) }
-                    NavLink("Stop", CivicColors.Accent, onStop)
                 }
             }
         }
@@ -457,20 +400,6 @@ private fun HealthStatusBanner(
             )
         }
     }
-}
-
-@Composable
-private fun NavLink(
-    label: String,
-    color: androidx.compose.ui.graphics.Color = CivicColors.Ink2,
-    onClick: () -> Unit,
-) {
-    Text(
-        text = label,
-        color = color,
-        fontSize = 15.sp,
-        modifier = Modifier.clickable(onClick = onClick).padding(horizontal = 4.dp, vertical = 4.dp),
-    )
 }
 
 @Composable

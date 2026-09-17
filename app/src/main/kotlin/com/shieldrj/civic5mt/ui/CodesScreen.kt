@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
@@ -41,12 +40,7 @@ import com.shieldrj.civic5mt.service.TelemetryState
  * the only one on this screen you can still get ahead of.
  */
 @Composable
-fun CodesScreen(
-    onBack: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    androidx.activity.compose.BackHandler(onBack = onBack)
-
+fun CodesSection(modifier: Modifier = Modifier) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val report by TelemetryState.dtcReport.collectAsStateWithLifecycle()
     val scanning by TelemetryState.scanning.collectAsStateWithLifecycle()
@@ -58,19 +52,9 @@ fun CodesScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .safeDrawingPadding()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 24.dp),
     ) {
-        Text(
-            text = "DIAGNOSTICS",
-            color = CivicColors.Ink3,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            letterSpacing = 2.sp,
-        )
-        Spacer(Modifier.height(18.dp))
-
         when {
             scanning -> Text("Scanning…", color = CivicColors.Ink2, fontSize = 14.sp)
 
@@ -176,8 +160,6 @@ fun CodesScreen(
                 }
             }
         }
-
-        ActionText("Back", CivicColors.Accent, onBack)
     }
 }
 
