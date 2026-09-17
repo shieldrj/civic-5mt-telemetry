@@ -74,6 +74,34 @@ class RangeSplitTest {
         }
 
         @Test
+        fun `on this car, a sender reading zero still has sixty miles of reserve under it`() {
+            // The full mark and the span read off the phone on 2026-09-17: a sender that tops
+            // out at 93.3, and the nominal slope, because no fill has been logged yet and the
+            // tank is still uncalibrated.
+            //
+            // This is the case that has to stay separated. With the sender sitting on zero the
+            // dashboard-comparable answer is zero miles, and the total is over sixty - so a
+            // screen printing the total alone reports a comfortable range at the exact moment
+            // the gauge has run out of things to say. That is project rule 6, and it is what
+            // the Drive screen, the HUD and the widget were all doing.
+            val t = tank(
+                senderPercent = 0.0,
+                gallonsPerPercent = CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT,
+                fullMark = 93.3,
+            )
+            val total = rangeMiles(t, lifetimeMpg = 35.8, lifetimeMiles = 1600.0)
+            val split = splitRange(t, total, mpgUsed = 35.8)
+
+            assertEquals(0, split.toSenderZeroMiles)
+            assertTrue(
+                split.reserveMiles >= 60,
+                "reserve was ${split.reserveMiles} mi, expected the published 1.9 gal to be " +
+                    "worth at least 60 at this car's economy",
+            )
+            assertEquals(total, split.toSenderZeroMiles + split.reserveMiles)
+        }
+
+        @Test
         fun `an empty tank does not divide by zero`() {
             val t = TankState(fillTimestamp = 1L, smoothedLevelPercent = 0.0, fullMarkPercent = 0.0)
             val split = splitRange(t, dampedTotalMiles = 0, mpgUsed = 31.0)

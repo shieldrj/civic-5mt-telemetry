@@ -105,29 +105,7 @@ fun DriveScreen(
                         isHero = true,
                     )
 
-                    Row(verticalAlignment = Alignment.Bottom) {
-                        if (metrics.tankBelowSenderZero && metrics.fuelRangeMiles != null) {
-                            Text(
-                                text = "under ",
-                                color = CivicColors.Ink3,
-                                fontSize = 12.sp,
-                                modifier = Modifier.alignByBaseline(),
-                            )
-                        }
-                        Text(
-                            text = metrics.fuelRangeMiles?.toString() ?: "—",
-                            color = CivicColors.Ink,
-                            fontSize = 24.sp,
-                            fontWeight = FontWeight.Light,
-                            modifier = Modifier.alignByBaseline(),
-                        )
-                        Text(
-                            text = " miles to empty",
-                            color = CivicColors.Ink3,
-                            fontSize = 12.sp,
-                            modifier = Modifier.alignByBaseline(),
-                        )
-                    }
+                    RangeToEmpty(metrics, valueSize = 24.sp, captionSize = 11.sp)
                 }
 
                 // Right Column: Vitals, Trip, and Navigation
@@ -262,29 +240,7 @@ fun DriveScreen(
 
                 Spacer(Modifier.height(12.dp))
 
-                Row(verticalAlignment = Alignment.Bottom) {
-                    if (metrics.tankBelowSenderZero && metrics.fuelRangeMiles != null) {
-                        Text(
-                            text = "under ",
-                            color = CivicColors.Ink3,
-                            fontSize = 13.sp,
-                            modifier = Modifier.alignByBaseline(),
-                        )
-                    }
-                    Text(
-                        text = metrics.fuelRangeMiles?.toString() ?: "—",
-                        color = CivicColors.Ink,
-                        fontSize = 30.sp,
-                        fontWeight = FontWeight.Light,
-                        modifier = Modifier.alignByBaseline(),
-                    )
-                    Text(
-                        text = " miles to empty",
-                        color = CivicColors.Ink3,
-                        fontSize = 13.sp,
-                        modifier = Modifier.alignByBaseline(),
-                    )
-                }
+                RangeToEmpty(metrics, valueSize = 30.sp, captionSize = 12.sp)
 
                 Spacer(Modifier.weight(1f))
 
@@ -361,6 +317,66 @@ fun DriveScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Distance to empty, as the two numbers it actually is.
+ *
+ * The headline is miles to the sender's zero, which is the figure the dashboard shows and the
+ * one to plan a fuel stop around. The reserve underneath it is real, is measured, and is the
+ * least certain fuel in the tank - nothing watches it going down - so it is stated on its own
+ * line rather than added in.
+ *
+ * This screen used to print the total on its own, labelled "miles to empty". On the day the
+ * low fuel light came on that read 142 against a dashboard reading about 35, and roughly
+ * sixty-seven of those miles were reserve the dashboard excludes by design. Adding the two
+ * together produces a number that is arithmetically defensible and, on the one occasion it
+ * matters, reads as an invitation to drive past a petrol station. See project rule 6.
+ */
+@Composable
+private fun RangeToEmpty(
+    metrics: LiveMetrics,
+    valueSize: androidx.compose.ui.unit.TextUnit,
+    captionSize: androidx.compose.ui.unit.TextUnit,
+) {
+    // Fall back to the total only when the split is unavailable - an uncalibrated tank with no
+    // full mark yet has no reserve to separate out, and there the two are the same number.
+    val headline = metrics.fuelRangeToSenderZeroMiles ?: metrics.fuelRangeMiles
+    val reserve = metrics.fuelRangeReserveMiles
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            if (metrics.tankBelowSenderZero && headline != null) {
+                Text(
+                    text = "under ",
+                    color = CivicColors.Ink3,
+                    fontSize = captionSize,
+                    modifier = Modifier.alignByBaseline(),
+                )
+            }
+            Text(
+                text = headline?.toString() ?: "—",
+                color = CivicColors.Ink,
+                fontSize = valueSize,
+                fontWeight = FontWeight.Light,
+                modifier = Modifier.alignByBaseline(),
+            )
+            Text(
+                text = " miles to empty",
+                color = CivicColors.Ink3,
+                fontSize = captionSize,
+                modifier = Modifier.alignByBaseline(),
+            )
+        }
+        if (reserve != null && reserve > 0) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = "then $reserve mi of reserve the gauge cannot see",
+                color = CivicColors.Ink4,
+                fontSize = captionSize,
+            )
         }
     }
 }
