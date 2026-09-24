@@ -22,6 +22,7 @@ import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.DtcScanner
 import com.shieldrj.civic5mt.core.Elm327Client
 import com.shieldrj.civic5mt.core.FuelCalibrationEngine
+import com.shieldrj.civic5mt.core.ReceiptOutcome
 import com.shieldrj.civic5mt.core.ObdTransportError
 import com.shieldrj.civic5mt.core.ReconnectPolicy
 import com.shieldrj.civic5mt.core.OilLifeEngine
@@ -291,6 +292,62 @@ class TelemetryService : Service() {
         }
     }
 
+    /**
+     * Publishes the fill record when a tick changed it, and asks for the receipt of a new fill.
+     *
+     * The record changes rarely - a fill, and the minute after it while the gauge settles - so
+     * comparing by identity costs nothing on the other ten thousand ticks of a drive.
+     */
+    private fun publishFillRecord() {
+        val current = manager.getCalibration()
+        if (current === TelemetryState.calibration.value) return
+        val previousCount = TelemetryState.calibration.value.fills.size
+        val previousLast = TelemetryState.calibration.value.fills.lastOrNull()?.detectedAtMillis
+        TelemetryState.setCalibration(current)
+        val last = current.fills.lastOrNull() ?: return
+        val isNew = last.detectedAtMillis != previousLast || current.fills.size != previousCount
+        if (isNew && last.awaitingReceipt) postReceiptReminder()
+    }
+
+    /**
+     * The one prompt this app gives about a fill: add the gallons when there is time.
+     *
+     * Posted when the car notices the fill, which is at the pump as the engine starts, and left
+     * in the shade until it is dealt with - so it is still there after the drive home, which is
+     * when the receipt is actually to hand. Saving the gallons or tapping "No receipt" clears it.
+     */
+    private fun postReceiptReminder() {
+        val open = PendingIntent.getActivity(
+            this,
+            RECEIPT_NOTIFICATION_ID,
+            Intent(this, MainActivity::class.java).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                putExtra(EXTRA_OPEN_SCREEN, SCREEN_FUEL)
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val skip = PendingIntent.getService(
+            this,
+            RECEIPT_NOTIFICATION_ID,
+            Intent(this, TelemetryService::class.java).apply { action = ACTION_SKIP_RECEIPT },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        runCatching {
+            getSystemService(NotificationManager::class.java).notify(
+                RECEIPT_NOTIFICATION_ID,
+                Notification.Builder(this, ALERT_CHANNEL_ID)
+                    .setContentTitle("Filled up")
+                    .setContentText("Add the gallons from your receipt whenever you have them.")
+                    .setSmallIcon(R.drawable.ic_stat_telemetry)
+                    .setContentIntent(open)
+                    .addAction(Notification.Action.Builder(null, "No receipt", skip).build())
+                    .setAutoCancel(false)
+                    .setOnlyAlertOnce(true)
+                    .build(),
+            )
+        }.onFailure { Log.w(TAG, "Receipt reminder not posted", it) }
+    }
+
     /** Tapping the HUD opens the app on the Fuel screen - the fastest path to logging a fill. */
     private fun openFuelScreen() {
         val intent = Intent(this, MainActivity::class.java).apply {
@@ -498,11 +555,12 @@ class TelemetryService : Service() {
             ACTION_RECORD_FILL -> {
                 recordFill(
                     pumpGallons = intent.getDoubleExtra(EXTRA_PUMP_GALLONS, 0.0),
-                    filledToShutoff = intent.getBooleanExtra(EXTRA_FILLED_TO_SHUTOFF, false),
+                    filledToShutoff = intent.getBooleanExtra(EXTRA_FILLED_TO_SHUTOFF, true),
                     // -1 stands in for "not entered". An odometer of zero is a real reading on
                     // a car that has none to give, and the two must not collapse together.
                     odometerMiles = intent.getDoubleExtra(EXTRA_ODOMETER_MILES, -1.0)
                         .takeIf { it > 0.0 },
+                    amendLast = intent.getBooleanExtra(EXTRA_AMEND_LAST, false),
                 )
                 // Same as the fill beside it: a receipt typed in at a pump starts this service
                 // with nothing connected, and it has no reason to stay running afterwards.
@@ -511,9 +569,18 @@ class TelemetryService : Service() {
 
             ACTION_RESET_FUEL_CALIBRATION -> {
                 manager.resetFuelCalibration()
+                TelemetryState.setCalibration(manager.getCalibration())
                 TelemetryState.setStatusMessage(
-                    "Fuel calibration cleared. The next two fills to the click will measure it again.",
+                    "Fill-ups cleared. The next receipt measures the gauge again.",
                 )
+                stopIfIdle()
+            }
+
+            ACTION_SKIP_RECEIPT -> {
+                manager.skipReceipt()
+                TelemetryState.setCalibration(manager.getCalibration())
+                getSystemService(NotificationManager::class.java).cancel(RECEIPT_NOTIFICATION_ID)
+                stopIfIdle()
             }
 
             ACTION_MARK_FILLED -> {
@@ -832,31 +899,33 @@ class TelemetryService : Service() {
      * button exists, typing a receipt in did nothing a driver could see. That line is also the
      * connection's running commentary, so even there the next handshake message overwrote it.
      */
-    private fun recordFill(pumpGallons: Double, filledToShutoff: Boolean, odometerMiles: Double?) {
-        // Absent nearly every time, and that is not a failure worth reporting as one. Nobody
-        // fills a tank with the ignition on, so a receipt is typed in with the car asleep and
-        // the adapter saying nothing - which is exactly when this used to refuse the fill and
-        // throw the number away. The calibration never needed the sender: the pump's gallons
-        // and the span this app measured across the tank are the whole measurement, and both
-        // are already in hand. Only the new tank's starting level wants a reading, and
-        // TankTracker closes the tank either way and takes the level from the rise it sees at
-        // the next connection.
+    private fun recordFill(
+        pumpGallons: Double,
+        filledToShutoff: Boolean,
+        odometerMiles: Double?,
+        amendLast: Boolean,
+    ) {
+        // The car is usually asleep when this runs - the receipt is typed in at home - and that
+        // is fine. The receipt goes on the fill the car already noticed; see
+        // TelemetryManager.recordReceipt.
         val level = TelemetryState.metrics.value.fuelLevelPercent
+        val before = manager.getCalibration()
 
-        val outcome = manager.recordFill(
+        val outcome = manager.recordReceipt(
             pumpGallons = pumpGallons,
             filledToShutoff = filledToShutoff,
+            odometerNow = odometerMiles,
             levelPercent = level,
-            odometerMiles = odometerMiles,
+            amendLast = amendLast,
         )
         TelemetryState.setCalibration(manager.getCalibration())
+        if (outcome is ReceiptOutcome.Saved) {
+            getSystemService(NotificationManager::class.java).cancel(RECEIPT_NOTIFICATION_ID)
+        }
 
-        val message = fillFeedback(outcome, pumpGallons, level, odometerGiven = odometerMiles != null)
+        val message = receiptFeedback(outcome, pumpGallons, before, odometerGiven = odometerMiles != null)
         TelemetryState.setStatusMessage(message)
-        // Posted as well as set, because the screen with the button on it draws this one and
-        // not the status line. Coloured by whether the fill was kept, not by whether it taught
-        // the calibration anything - see fillWasTaken.
-        TelemetryState.postActionFeedback(message, worked = fillWasTaken(outcome))
+        TelemetryState.postActionFeedback(message, worked = outcome is ReceiptOutcome.Saved)
     }
 
     /**
@@ -876,7 +945,8 @@ class TelemetryService : Service() {
             TelemetryState.postActionFeedback(refusal, worked = false)
             return
         }
-        manager.tank.markFilled(level)
+        manager.markFilled(level)
+        TelemetryState.setCalibration(manager.getCalibration())
         val done = "Started a new tank at " + level.toInt() + "%"
         TelemetryState.setStatusMessage(done)
         TelemetryState.postActionFeedback(done, worked = true)
@@ -977,6 +1047,7 @@ class TelemetryService : Service() {
 
             val snapshot = manager.also { it.shiftMode = TelemetryState.shiftMode.value }.tick(elm.data.value, dtSec, TelemetryState.connection.value)
             TelemetryState.setMetrics(snapshot.metrics)
+            publishFillRecord()
             TelemetryState.setTrip(snapshot.trip)
             TelemetryState.setOil(snapshot.oil)
             TelemetryState.setClutch(snapshot.clutch)
@@ -1120,6 +1191,8 @@ class TelemetryService : Service() {
         const val EXTRA_PUMP_GALLONS = "pump_gallons"
         const val EXTRA_FILLED_TO_SHUTOFF = "filled_to_shutoff"
         const val EXTRA_ODOMETER_MILES = "odometer_miles"
+        const val EXTRA_AMEND_LAST = "amend_last"
+        const val ACTION_SKIP_RECEIPT = "com.shieldrj.civic5mt.SKIP_RECEIPT"
         const val ACTION_DISCONNECT = "com.shieldrj.civic5mt.DISCONNECT"
         const val EXTRA_DEVICE_ADDRESS = "deviceAddress"
 
@@ -1132,6 +1205,7 @@ class TelemetryService : Service() {
         private const val VOLTAGE_NOTIFICATION_ID = 2
         private const val CLUTCH_SLIP_NOTIFICATION_ID = 3
         private const val CLUTCH_WEAR_NOTIFICATION_ID = 4
+        private const val RECEIPT_NOTIFICATION_ID = 5
         private const val SLIP_ALERT_DEBOUNCE_MS = 15_000L
 
         /** Above a walking pace counts as driving, for HUD visibility. */
@@ -1184,14 +1258,18 @@ class TelemetryService : Service() {
         }
 
         /**
-         * Logs a fill with the receipt attached, which is the only way anything here gets
+         * Attaches a pump receipt to the last fill, which is the only way anything here gets
          * checked against a measurement this app did not make.
+         *
+         * @param odometerMiles the odometer as read now, not necessarily at the pump
+         * @param amendLast correct the receipt already on the last fill
          */
         fun recordFill(
             context: Context,
             pumpGallons: Double,
             filledToShutoff: Boolean,
             odometerMiles: Double?,
+            amendLast: Boolean = false,
         ) {
             context.startService(
                 Intent(context, TelemetryService::class.java).apply {
@@ -1199,7 +1277,15 @@ class TelemetryService : Service() {
                     putExtra(EXTRA_PUMP_GALLONS, pumpGallons)
                     putExtra(EXTRA_FILLED_TO_SHUTOFF, filledToShutoff)
                     putExtra(EXTRA_ODOMETER_MILES, odometerMiles ?: -1.0)
+                    putExtra(EXTRA_AMEND_LAST, amendLast)
                 }
+            )
+        }
+
+        /** There is no receipt for the last fill. Stops the app asking for one. */
+        fun skipReceipt(context: Context) {
+            context.startService(
+                Intent(context, TelemetryService::class.java).apply { action = ACTION_SKIP_RECEIPT }
             )
         }
 

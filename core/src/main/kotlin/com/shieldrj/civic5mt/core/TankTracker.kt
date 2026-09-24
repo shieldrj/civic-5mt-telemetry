@@ -96,6 +96,23 @@ data class TankState(
     val observedDropPercent: Double = 0.0,
     /** Fuel burned on the steps counted in [observedDropPercent], and only those. */
     val observedGallons: Double = 0.0,
+    /**
+     * The same three figures with the corrections of the day divided back out.
+     *
+     * A receipt entered on the way home changes the corrections part way into a tank, so a
+     * corrected total is a mix of two factors. These are what the sensors said, and they are
+     * what the next receipt is compared with. See [FillRecord].
+     */
+    val rawMilesSinceFill: Double = 0.0,
+    val rawGallonsSinceFill: Double = 0.0,
+    val observedRawGallons: Double = 0.0,
+    /**
+     * Fuel burned since the gauge reached E, counted from the MAF.
+     *
+     * Below E the gauge has nothing more to say, so the reserve is counted down from fuel
+     * burned instead. See [gallonsRemaining].
+     */
+    val gallonsBelowFloor: Double = 0.0,
 ) {
     /**
      * Miles per gallon for this tank, or null before there is enough to divide.
@@ -139,9 +156,17 @@ data class TankState(
                 .coerceIn(0.0, TankRules.MAX_RESERVE_GALLONS)
         }
 
-    /** Gallons in the tank now: the sender's span, measured, plus what sits below its zero. */
+    /**
+     * Gallons in the tank now: the sender's span, measured, plus what sits below its zero,
+     * less whatever has been burned since the gauge reached E.
+     *
+     * That last term is what lets the figure reach zero. It used to stop at the reserve and
+     * sit there for thirty miles, because the gauge stops moving at E. The fuel burned since
+     * then is counted by the MAF, which the receipts have corrected, so the reserve counts
+     * down with it instead of freezing.
+     */
     val gallonsRemaining: Double
-        get() = (gallonsPerPercent * smoothedLevelPercent + reserveGallons)
+        get() = (gallonsPerPercent * smoothedLevelPercent + reserveGallons - gallonsBelowFloor)
             .coerceIn(0.0, CivicSpecs.FUEL_TANK_CAPACITY_GALLONS)
 
     /**
@@ -162,19 +187,12 @@ data class TankState(
         get() = 100.0 * gallonsRemaining / CivicSpecs.FUEL_TANK_CAPACITY_GALLONS
 
     /**
-     * True once the sender has bottomed out and every figure above has stopped moving.
+     * True once the gauge has reached E and the reserve is being counted down.
      *
-     * All of this is a reading of the sender, so when the sender runs out of things to say,
-     * so does this. Below its zero there is still fuel - that is what [reserveGallons] is -
-     * but nothing measures it going down. [gallonsRemaining] sits at the reserve,
-     * [fuelPercentRemaining] sits at the reserve's share of the tank, and distance to empty
-     * sits at that many gallons times the economy. Someone watching the number can drive for
-     * half an hour and see it say the same thing the whole way.
-     *
-     * The arithmetic cannot be fixed, because there is no measurement down there to fix it
-     * with. So the display is told instead, and prints these as bounds rather than readings:
-     * under seven percent, under thirty miles. Both are true, and neither invites anyone to
-     * plan the next thirty miles around it.
+     * Below E the gauge says nothing, so [gallonsRemaining] counts down from fuel burned
+     * instead ([gallonsBelowFloor]). That count only sees driving the app watched, so the
+     * screens mark these figures as estimates ("about") rather than presenting them as
+     * readings.
      *
      * False on a car whose sender really does reach zero. There, zero percent is a
      * measurement like any other and there is no reserve hiding underneath it.
@@ -494,6 +512,41 @@ class TankTracker(
     /** How long since the sender was last being pushed up. See [TankRules.SETTLE_AFTER_FILL_SEC]. */
     private var settledForSec: Double = 0.0
 
+    /** The tank the last fill closed, waiting to be collected. See [takeClosedTank]. */
+    private var closed: ClosedTank? = null
+
+    /**
+     * Gallons per percent measured by pump receipts, when there are any.
+     *
+     * Outranks the tracker's own measurement, which divides MAF gallons by gauge fall and so
+     * is only as good as the MAF. The pump is the reference the MAF is corrected against.
+     */
+    private var pumpGallonsPerPercent: Double? = null
+
+    /**
+     * The tank the last fill closed, once. Null when no fill has happened since the last call.
+     *
+     * Handed over rather than acted on here, because what it is compared with - the receipt -
+     * belongs to [FuelCalibrationEngine], and may not arrive for hours.
+     */
+    fun takeClosedTank(): ClosedTank? = closed.also { closed = null }
+
+    /**
+     * Uses a pump-measured gallons-per-percent from now on.
+     *
+     * Reconciled against the full mark like any other figure: one that would put a negative
+     * reserve under E, or more than two gallons, is refused rather than applied.
+     */
+    fun applyPumpCalibration(gallonsPerPercent: Double?) {
+        pumpGallonsPerPercent = gallonsPerPercent
+        val usable = gallonsPerPercent?.let {
+            TankRules.reconcileGallonsPerPercent(it, state.fullMarkPercent)
+        } ?: return
+        if (usable == state.gallonsPerPercent && state.calibrated) return
+        state = state.copy(gallonsPerPercent = usable, calibrated = true)
+        store.save(state)
+    }
+
     fun get(): TankState = state
 
     /**
@@ -504,7 +557,14 @@ class TankTracker(
      * @param gallonsStep fuel burned in this step
      * @param dtSec length of the step
      */
-    fun record(levelPercent: Double?, milesStep: Double, gallonsStep: Double, dtSec: Double) {
+    fun record(
+        levelPercent: Double?,
+        milesStep: Double,
+        gallonsStep: Double,
+        dtSec: Double,
+        fuelFactor: Double = 1.0,
+        distanceFactor: Double = 1.0,
+    ) {
         if (levelPercent == null) return
         if (dtSec <= 0) return
 
@@ -560,6 +620,8 @@ class TankTracker(
             dtSec <= TankRules.MAX_CONTIGUOUS_STEP_SEC &&
             settledForSec >= TankRules.SETTLE_AFTER_FILL_SEC
         val droppedThisStep = if (measurable) previousRaw!! - levelPercent else 0.0
+        val rawGallonsStep = if (fuelFactor > 0) gallonsStep / fuelFactor else gallonsStep
+        val rawMilesStep = if (distanceFactor > 0) milesStep / distanceFactor else milesStep
 
         state = state.copy(
             smoothedLevelPercent = smoothed,
@@ -570,6 +632,13 @@ class TankTracker(
             // the one being fixed, pointing the other way.
             observedDropPercent = state.observedDropPercent + droppedThisStep,
             observedGallons = state.observedGallons + if (measurable) gallonsStep else 0.0,
+            rawMilesSinceFill = state.rawMilesSinceFill + rawMilesStep,
+            rawGallonsSinceFill = state.rawGallonsSinceFill + rawGallonsStep,
+            observedRawGallons = state.observedRawGallons + if (measurable) rawGallonsStep else 0.0,
+            // Only once the gauge is on E, and only fuel actually burned: the reserve is what
+            // is left when the gauge stops moving, so the count starts there.
+            gallonsBelowFloor = state.gallonsBelowFloor +
+                if (smoothed <= TankRules.SENDER_FLOOR_PERCENT) gallonsStep else 0.0,
             levelPercentAtFill = max(state.levelPercentAtFill, smoothed),
             lowestLevelPercent = min(state.lowestLevelPercent, smoothed),
             // The full mark is the highest this sender has ever gone, over the life of the
@@ -632,14 +701,27 @@ class TankTracker(
         } else {
             null
         }
+        val pump = pumpGallonsPerPercent?.let { TankRules.reconcileGallonsPerPercent(it, newFullMark) }
+
+        // What the receipt will be compared with, taken before the counters are reset. The
+        // "before" level is the lowest the gauge reached on this tank, which is where it stood
+        // when the car pulled in - on a fill nobody watched, the reading the car was left at.
+        closed = ClosedTank(
+            closedAtMillis = clock.nowMillis(),
+            levelBefore = state.lowestLevelPercent.takeIf { state.fillTimestamp != 0L && it < 100.0 },
+            rawMiles = state.rawMilesSinceFill,
+            rawGallons = state.rawGallonsSinceFill,
+            observedDropPercent = state.observedDropPercent,
+            observedRawGallons = state.observedRawGallons,
+        )
 
         state = TankState(
             fillTimestamp = clock.nowMillis(),
             levelPercentAtFill = levelNow,
             milesSinceFill = 0.0,
             gallonsUsedSinceFill = 0.0,
-            gallonsPerPercent = measured ?: carried ?: CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT,
-            calibrated = measured != null || (carried != null && state.calibrated),
+            gallonsPerPercent = pump ?: measured ?: carried ?: CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT,
+            calibrated = pump != null || measured != null || (carried != null && state.calibrated),
             // The smoothed level is carried over rather than snapped to the reading at this
             // instant, because the pump is still running: this is part way up the rise and
             // the level has to go on climbing. Snapping here reported 12.0 gallons in a tank

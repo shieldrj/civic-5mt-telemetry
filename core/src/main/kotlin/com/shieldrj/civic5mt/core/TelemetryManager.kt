@@ -70,6 +70,22 @@ class TelemetryManager(
      */
     private fun applyCalibration() {
         fuelModel.setFuelCorrectionFactor(fuelCalibration.fuelFactor())
+        tank.applyPumpCalibration(fuelCalibration.get().pumpGallonsPerPercent)
+    }
+
+    /**
+     * Passes a fill the tank tracker just closed to the fill record, and the level it settled
+     * at. Called after every step that can close a tank.
+     */
+    private fun collectFill() {
+        tank.takeClosedTank()?.let { fuelCalibration.onFillDetected(it) }
+        val t = tank.get()
+        val last = fuelCalibration.get().fills.lastOrNull() ?: return
+        // Only for the tank the last record opened. A record from an earlier tank must not be
+        // handed this tank's level as its "after".
+        if (t.fillTimestamp >= last.detectedAtMillis && t.fillTimestamp != 0L) {
+            fuelCalibration.updateLevelAfter(t.levelPercentAtFill)
+        }
     }
 
     /**
@@ -158,7 +174,10 @@ class TelemetryManager(
                 milesStep = (speedMphForDistance / 3600) * integrationDtSec,
                 gallonsStep = (flow.fuelFlowGalPerHour / 3600) * integrationDtSec,
                 dtSec = integrationDtSec,
+                fuelFactor = fuelModel.getFuelCorrectionFactor(),
+                distanceFactor = fuelCalibration.distanceFactor(),
             )
+            collectFill()
         }
         val tankState = tank.get()
 
@@ -170,7 +189,7 @@ class TelemetryManager(
         // real drive - and "0 miles to empty" there is an alarm about nothing.
         val tankKnown = raw.fuelLevelPercent != null && tankState.fillTimestamp != 0L
         val calibration = fuelCalibration.get()
-        val verifiedMpg = calibration.verifiedMpg.takeIf { calibration.verifiedMpgUsable }
+        val verifiedMpg = calibration.economyMpg
         val mpgForRange = TankRules.mpgForRange(
             tankMpg = tankState.tankMpg,
             tankGallonsUsed = tankState.gallonsUsedSinceFill,
@@ -298,11 +317,11 @@ class TelemetryManager(
             fuelRangeToSenderZeroMiles = range?.toSenderZeroMiles,
             fuelRangeReserveMiles = range?.reserveMiles,
             rangeMpgUsed = if (tankKnown) roundTo(mpgForRange, 1) else null,
-            verifiedMpg = calibration.verifiedMpg?.let { roundTo(it, 1) },
-            verifiedGallons = roundTo(calibration.verifiedGallons, 2),
+            verifiedMpg = calibration.economyMpg?.let { roundTo(it, 1) },
+            verifiedGallons = roundTo(calibration.receiptGallons, 2),
             fuelCorrectionFactor = calibration.fuelCorrectionFactor,
             distanceCorrectionFactor = calibration.distanceCorrectionFactor,
-            calibrationFillCount = calibration.samples.size,
+            calibrationFillCount = calibration.gaugeReceiptCount,
             calibrationSpreadPercent = calibration.spreadPercent?.let { roundTo(it, 1) },
             currentGear = gear.currentGear,
             gearRatio = roundTo(gear.calculatedRatio, 2),
@@ -572,48 +591,54 @@ class TelemetryManager(
     fun getFuelBlend(): FuelBlendProperties = fuelModel.getFuelBlend()
 
     /**
-     * Logs a fill-up, learns what it can from it, and starts the new tank.
+     * Attaches a pump receipt to the fill it belongs to.
      *
-     * The order is the whole point and it is easy to get backwards. What this tank measured -
-     * its miles and its gallons - is read out first, because [TankTracker.markFilled] resets
-     * both to zero. Then the receipt is compared against them, which is where the corrections
-     * come from. Then the corrections are handed to the fuel model, so the tank that starts
-     * next is measured with what this fill just taught rather than with what the fill before
-     * it taught. Restarting the tank first would compare a pump receipt against a tank that
-     * had already been emptied to zero, and every fill would look like a total sensor failure.
+     * Normally the car noticed the fill already - the gauge rose when the engine next started -
+     * and there is a record waiting for its receipt, however long ago that was. The receipt goes
+     * on that record and nothing about the tank changes: it has been running since the fill and
+     * is exactly right.
      *
-     * The sender reading is optional, and that is not a nicety: a receipt is typed in at a
-     * pump with the ignition off, which is precisely when there is no reading to have. None
-     * of the calibration needs one. What the pump charged for and what this app measured
-     * across the tank are the whole of the measurement, and both are already in hand. The
-     * level is wanted only to open the new tank at the right place, and [TankTracker.markFilled]
-     * closes the tank either way and takes the level from the sender when it next speaks.
+     * When there is no record waiting, the fill has not been noticed yet: the driver is typing
+     * the receipt in at the pump with the engine off. Then the tank is closed here, which opens
+     * the record, and when the car wakes and sees the rise it recognises the same fill rather
+     * than recording a second one. See [FuelCalibrationEngine.onFillDetected].
      *
-     * @param pumpGallons what the pump charged for
-     * @param filledToShutoff whether the nozzle clicked off by itself. A partial fill cannot be
-     *   measured - the tank did not end where it started - but it is still logged, and it
-     *   becomes the start point the next fill is measured against.
-     * @param levelPercent the sender reading now, for the new tank, or null when the car is
-     *   not reporting one. See above.
-     * @param odometerMiles the odometer now, if it was read
+     * @param odometerNow the odometer as the driver reads it now - usually at home. The reading
+     *   at the pump is worked back from it using the miles the app has counted since the fill.
+     * @param levelPercent the gauge now, when the car is reporting one
+     * @param amendLast correct the receipt already on the last fill - a typo - rather than
+     *   treating this as a new fill
      */
-    fun recordFill(
+    fun recordReceipt(
         pumpGallons: Double,
-        filledToShutoff: Boolean,
+        filledToShutoff: Boolean = true,
+        odometerNow: Double? = null,
         levelPercent: Double? = null,
-        odometerMiles: Double? = null,
-    ): FillOutcome {
-        val closing = tank.get()
-        val outcome = fuelCalibration.recordFill(
-            pumpGallons = pumpGallons,
-            filledToShutoff = filledToShutoff,
-            measuredGallons = closing.gallonsUsedSinceFill,
-            measuredMiles = closing.milesSinceFill,
-            odometerMiles = odometerMiles,
-        )
+        amendLast: Boolean = false,
+    ): ReceiptOutcome {
+        val hasRecordToFill = amendLast && fuelCalibration.get().fills.isNotEmpty() ||
+            fuelCalibration.get().pendingReceipt(clock.nowMillis()) != null
+        if (!hasRecordToFill && pumpGallons > 0 && pumpGallons <= FuelCalibrationRules.MAX_PUMP_GALLONS) {
+            tank.markFilled(levelPercent)
+            collectFill()
+        }
+        val odometerAtFill = odometerNow?.let { it - tank.get().milesSinceFill }
+        val outcome = fuelCalibration.attachReceipt(pumpGallons, filledToShutoff, odometerAtFill)
         applyCalibration()
-        tank.markFilled(levelPercent)
         return outcome
+    }
+
+    /** The driver has no receipt for the last fill. */
+    fun skipReceipt() {
+        fuelCalibration.skipReceipt()
+    }
+
+    /**
+     * Starts a tank by hand, without a receipt. For a fill the car did not notice.
+     */
+    fun markFilled(levelPercent: Double?) {
+        tank.markFilled(levelPercent)
+        collectFill()
     }
 
     fun getCalibration(): FuelCalibrationState = fuelCalibration.get()

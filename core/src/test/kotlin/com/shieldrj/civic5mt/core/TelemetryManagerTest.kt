@@ -516,17 +516,29 @@ class TelemetryManagerTest {
 
     // ═══════════════════════════════════════════════════════════════════════════════
     @Nested
-    @DisplayName("Logging a pump receipt")
+    @DisplayName("Fills and receipts")
     inner class Fills {
 
-        /**
-         * A cruise at the airflow a 1.8 actually pulls at 3000 rpm.
-         *
-         * [cruising] is deliberately frugal - 12 g/s, which is around 65 MPG - and a tank of
-         * it would take a third of a million ticks to reach the four gallons the calibration
-         * insists on before it will divide anything.
-         */
-        private fun steadyCruise(level: Double? = 68.0) = RawObdData(
+        /** The gauge on this imaginary car: one percent is an eighth of a gallon. */
+        private val trueGpp = 0.125
+
+        /** One car, whose stores outlive any single run of the app - which is what a restart is. */
+        private inner class Car(val clock: MutableClock = MutableClock(T0)) {
+            private val tankStore = InMemoryTankStore()
+            private val calibrationStore = InMemoryFuelCalibrationStore()
+            private val lifetimeStore = InMemoryLifetimeStore()
+
+            fun start() = TelemetryManager(
+                clock = clock,
+                lifetimeStore = lifetimeStore,
+                oilLife = OilLifeEngine(InMemoryOilProfileStore(), clock),
+                tank = TankTracker(tankStore, clock),
+                fuelCalibration = FuelCalibrationEngine(calibrationStore, clock),
+            )
+        }
+
+        /** A steady cruise, stamped fresh so the freshness guard lets it integrate. */
+        private fun cruise(level: Double, at: Long) = RawObdData(
             rpm = 3000.0,
             speedKmh = 114.93,
             maf = 22.0,
@@ -535,95 +547,170 @@ class TelemetryManagerTest {
             throttlePos = 25.0,
             lambda = 1.0,
             fuelLevelPercent = level,
-            motionSampledAtMillis = T0,
+            motionSampledAtMillis = at,
         )
 
-        /** Drives far enough that a receipt logged afterwards clears the calibration's floors. */
-        private fun TelemetryManager.driveATank(level: Double? = 68.0) {
+        /**
+         * Drives until the gauge has fallen from [from] to [to], falling exactly as a tank of
+         * [trueGpp] would. The MAF reads [mafReads] of the fuel really burned.
+         */
+        private fun TelemetryManager.driveGaugeDown(
+            clock: MutableClock,
+            from: Double,
+            to: Double,
+            mafReads: Double = 1.0,
+        ) {
+            val rawAtStart = tank.get().rawGallonsSinceFill
+            var level = from
             var ticks = 0
-            while (
-                ticks < 60_000 &&
-                (tank.get().gallonsUsedSinceFill < 4.5 || tank.get().milesSinceFill < 60.0)
-            ) {
-                tick(steadyCruise(level), 0.5, ConnectionStatus.CONNECTED)
-                ticks++
+            while (level > to && ticks++ < 100_000) {
+                clock.advanceMillis(1_000)
+                tick(cruise(level, clock.nowMillis()), 1.0, ConnectionStatus.CONNECTED)
+                val burned = (tank.get().rawGallonsSinceFill - rawAtStart) / mafReads
+                level = from - burned / trueGpp
             }
-            assertTrue(tank.get().gallonsUsedSinceFill >= 4.5, "got ${tank.get()}")
+        }
+
+        /**
+         * Drives [miles] with the gauge held at [level] - a short hop, too short to move it.
+         *
+         * Counted on the lifetime record, not the tank: the first tick of a run can close the
+         * tank and reset its miles, which would make a tank-based count drive a whole tank.
+         */
+        private fun TelemetryManager.driveMiles(clock: MutableClock, level: Double, miles: Double) {
+            val start = getLifetimeStats().totalMiles
+            var ticks = 0
+            while (getLifetimeStats().totalMiles - start < miles && ticks++ < 100_000) {
+                clock.advanceMillis(1_000)
+                tick(cruise(level, clock.nowMillis()), 1.0, ConnectionStatus.CONNECTED)
+            }
+        }
+
+        /**
+         * A tank run down from 90 to 20, a fill, and the engine started again at 93 - driven a
+         * mile out of the station, which is when the car notices the rise.
+         */
+        private fun Car.fillUpAndRestart(mafReads: Double = 1.0): TelemetryManager {
+            val first = start()
+            first.driveGaugeDown(clock, from = 90.0, to = 20.0, mafReads = mafReads)
+            first.flush()
+            clock.advanceMillis(30 * 60_000L)
+            return start().also { it.driveMiles(clock, level = 93.0, miles = 1.0) }
         }
 
         @Test
-        fun `A receipt typed in with the car asleep is still measured`() {
-            // The one that did nothing at all. Nobody fills a tank with the ignition on, so
-            // the sender has nothing to say when the number is typed in - and this used to
-            // refuse the fill on those grounds and throw the receipt away. The calibration
-            // never needed the sender: the span is already in hand and the pump supplies the
-            // rest of the measurement.
-            val m = manager()
+        fun `A receipt typed in at home lands on the fill the car noticed`() {
+            // The reported problem. The car notices the fill when the engine starts at the
+            // pump, the drive home is 35 miles, and the receipt goes in after that.
+            val car = Car()
+            val m = car.fillUpAndRestart()
+            m.driveMiles(car.clock, level = 93.0, miles = 34.0)
 
-            // It takes two fills to the click to make a span, so the first is only a baseline.
-            m.driveATank()
-            m.recordFill(pumpGallons = 11.0, filledToShutoff = true, levelPercent = null)
+            val pending = assertNotNull(m.getCalibration().pendingReceipt(car.clock.nowMillis()))
+            assertEquals(20.0, pending.levelBefore!!, 0.5)
+            assertEquals(93.0, pending.levelAfter!!, 0.01)
 
-            m.driveATank()
-            val pump = m.tank.get().gallonsUsedSinceFill * 1.05
+            val milesSinceFill = m.tank.get().milesSinceFill
+            val outcome = m.recordReceipt(pumpGallons = 73.0 * trueGpp, odometerNow = 100_035.0)
 
-            val outcome = m.recordFill(pumpGallons = pump, filledToShutoff = true, levelPercent = null)
-
-            val accepted = assertIs<FillOutcome.Accepted>(outcome)
-            assertEquals(1, accepted.state.samples.size)
-            // The pump charged for five percent more than the MAF chain accounted for, which
-            // is the whole of what the correction is allowed to conclude.
-            assertEquals(1.05, accepted.state.fuelCorrectionFactor, 0.005)
+            assertIs<ReceiptOutcome.Saved>(outcome)
+            // The tank that has been running since the fill is exactly right, and is left alone.
+            assertEquals(milesSinceFill, m.tank.get().milesSinceFill)
+            assertEquals(1, m.getCalibration().fills.size)
+            // The odometer at the pump, worked back from the reading at home.
+            assertEquals(100_000.0, m.getCalibration().fills.single().odometerAtFill!!, 1.0)
         }
 
         @Test
-        fun `A second receipt with nothing driven in between is refused, not counted twice`() {
-            val m = manager()
-            m.driveATank()
-            m.recordFill(pumpGallons = 11.0, filledToShutoff = true, levelPercent = null)
+        fun `From then on the tank is measured by the pump`() {
+            val car = Car()
+            val m = car.fillUpAndRestart()
+            m.recordReceipt(pumpGallons = 73.0 * trueGpp)
 
-            m.driveATank()
-            val pump = m.tank.get().gallonsUsedSinceFill * 1.05
-            assertIs<FillOutcome.Accepted>(
-                m.recordFill(pumpGallons = pump, filledToShutoff = true, levelPercent = null),
-            )
-
-            // Tapped again with the car not having moved. The only span on offer belongs to
-            // the tank before it and has already been spent, so there is nothing to measure.
-            val again = m.recordFill(pumpGallons = pump, filledToShutoff = true, levelPercent = null)
-
-            assertEquals(FillRejection.NO_MEASUREMENT, assertIs<FillOutcome.Rejected>(again).reason)
-            assertEquals(1, m.getCalibration().samples.size)
+            assertEquals(trueGpp, m.getCalibration().pumpGallonsPerPercent!!, 0.002)
+            assertEquals(trueGpp, m.tank.get().gallonsPerPercent, 0.002)
+            assertTrue(m.tank.get().calibrated)
+            // And the reserve under E follows: a full tank less what the gauge accounts for.
+            val expectedReserve = CivicSpecs.FUEL_TANK_CAPACITY_GALLONS - trueGpp * 93.0
+            assertEquals(expectedReserve, m.tank.get().reserveGallons, 0.2)
         }
 
         @Test
-        fun `A receipt logged with no reading leaves the level for the sender`() {
-            val m = manager()
-            m.driveATank(level = 40.0)
+        fun `The measured gauge finds a MAF reading five percent low`() {
+            val car = Car()
+            val m = car.fillUpAndRestart(mafReads = 0.95)
+            m.recordReceipt(pumpGallons = 73.0 * trueGpp)
 
-            m.recordFill(pumpGallons = 11.0, filledToShutoff = true, levelPercent = null)
-
-            // The tank is closed, and nothing is invented in place of the missing reading.
-            assertEquals(0.0, m.tank.get().milesSinceFill)
-            assertTrue(m.tank.get().smoothedLevelPercent < 50.0, "got ${m.tank.get()}")
-
-            // The car comes back brimmed, and that rise is where the level comes from.
-            m.tick(steadyCruise(level = 92.0), 0.5, ConnectionStatus.CONNECTED)
-
-            assertEquals(92.0, m.tank.get().smoothedLevelPercent, 0.001)
-            assertEquals(92.0, m.tank.get().fullMarkPercent, 0.001)
+            assertEquals(1 / 0.95, m.getCalibration().fuelCorrectionFactor, 0.01)
         }
 
         @Test
-        fun `A receipt logged with a live reading opens the tank there`() {
-            // Unchanged behaviour, kept honest: with the ignition on the sender is believed.
-            val m = manager()
-            m.driveATank(level = 40.0)
+        fun `The measured gauge survives a restart of the app`() {
+            // Nothing about the calibration lives only in memory: a new run reads the fills
+            // back and hands the tank the same figure before the first tick.
+            val car = Car()
+            car.fillUpAndRestart().recordReceipt(pumpGallons = 73.0 * trueGpp)
 
-            m.recordFill(pumpGallons = 11.0, filledToShutoff = true, levelPercent = 93.0)
+            val later = car.start()
+            assertEquals(trueGpp, later.tank.get().gallonsPerPercent, 0.002)
+        }
+
+        @Test
+        fun `A receipt logged at the pump, before the engine starts, is the same fill`() {
+            val car = Car()
+            val first = car.start()
+            first.driveGaugeDown(car.clock, from = 90.0, to = 20.0)
+            car.clock.advanceMillis(10 * 60_000L)
+
+            val outcome = first.recordReceipt(pumpGallons = 73.0 * trueGpp, levelPercent = null)
+            assertIs<ReceiptOutcome.Saved>(outcome)
+            assertNull(first.getCalibration().fills.single().levelAfter, "no rise seen yet")
+            first.flush()
+
+            // The engine starts and the car sees the rise. One fill, now measured.
+            val m = car.start()
+            m.driveMiles(car.clock, level = 93.0, miles = 1.0)
+
+            assertEquals(1, m.getCalibration().fills.size)
+            assertEquals(trueGpp, m.getCalibration().pumpGallonsPerPercent!!, 0.002)
+        }
+
+        @Test
+        fun `A receipt logged with the engine running opens the tank there`() {
+            val car = Car()
+            val m = car.start()
+            m.driveGaugeDown(car.clock, from = 90.0, to = 20.0)
+
+            m.recordReceipt(pumpGallons = 73.0 * trueGpp, levelPercent = 93.0)
 
             assertEquals(0.0, m.tank.get().milesSinceFill)
             assertEquals(93.0, m.tank.get().smoothedLevelPercent, 0.001)
+            assertEquals(trueGpp, m.getCalibration().pumpGallonsPerPercent!!, 0.002)
+        }
+
+        @Test
+        fun `A refused receipt changes nothing`() {
+            val car = Car()
+            val m = car.start()
+            m.driveGaugeDown(car.clock, from = 90.0, to = 60.0)
+            val milesBefore = m.tank.get().milesSinceFill
+
+            val outcome = m.recordReceipt(pumpGallons = 114.2)
+
+            assertIs<ReceiptOutcome.Refused>(outcome)
+            assertEquals(milesBefore, m.tank.get().milesSinceFill, "the tank was not closed")
+            assertTrue(m.getCalibration().fills.isEmpty())
+        }
+
+        @Test
+        fun `Correcting a receipt does not count the fill twice`() {
+            val car = Car()
+            val m = car.fillUpAndRestart()
+            m.recordReceipt(pumpGallons = 11.0)
+            m.recordReceipt(pumpGallons = 73.0 * trueGpp, amendLast = true)
+
+            assertEquals(1, m.getCalibration().fills.size)
+            assertEquals(73.0 * trueGpp, m.getCalibration().fills.single().pumpGallons!!, 1e-9)
         }
     }
 

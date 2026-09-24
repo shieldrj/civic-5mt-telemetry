@@ -51,11 +51,11 @@ object TankWidget {
                 R.id.widget_detail,
                 when {
                     tankMpg == null -> "MPG · waiting for the car"
-                    // "under" once the sender is on its stop. The widget carries the same
+                    // "about" once the gauge is on E. The widget carries the same
                     // figure as the HUD and has to carry the same caveat with it, or the one
                     // screen nobody is looking at closely becomes the confident one.
                     rangeMiles == null -> "MPG · ? mi to empty"
-                    snapshot.rangeIsCeiling -> "MPG · under $rangeMiles mi to empty"
+                    snapshot.rangeIsCeiling -> "MPG · about $rangeMiles mi to empty"
                     else -> "MPG · $rangeMiles mi to empty"
                 },
             )

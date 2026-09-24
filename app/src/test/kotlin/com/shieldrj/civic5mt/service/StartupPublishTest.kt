@@ -3,6 +3,7 @@ package com.shieldrj.civic5mt.service
 import com.shieldrj.civic5mt.core.ClutchHealthEngine
 import com.shieldrj.civic5mt.core.ClutchProfileStore
 import com.shieldrj.civic5mt.core.FuelBlendId
+import com.shieldrj.civic5mt.core.FillRecord
 import com.shieldrj.civic5mt.core.FuelCalibrationState
 import com.shieldrj.civic5mt.core.FuelCalibrationStore
 import com.shieldrj.civic5mt.core.InMemoryClutchProfileStore
@@ -96,7 +97,7 @@ class StartupPublishTest {
         @Test
         @DisplayName("publishes the fill calibration, so corrections survive the ignition")
         fun publishesCalibration() {
-            val stored = FuelCalibrationState(lastFillWasFull = true, lastOdometerMiles = 91_234.5)
+            val stored = FuelCalibrationState(fills = listOf(FillRecord(detectedAtMillis = 1_700_000_000_000L, pumpGallons = 10.9)))
 
             publish(calibration = InMemoryFuelCalibrationStore(stored))
 

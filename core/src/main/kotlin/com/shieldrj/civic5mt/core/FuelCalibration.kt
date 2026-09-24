@@ -7,275 +7,398 @@ import kotlin.math.max
  * The pump receipt, which is the only fuel figure in this app that is not an inference.
  *
  * Everything else here is derived. Fuel burned is the MAF reading divided by an air-fuel
- * ratio and a density; distance is the car's road-speed PID integrated over time. Both are
- * good, and neither is checked against anything. That was the gap: a MAF that reads a few
- * percent low reports less fuel burned, which raises MPG, which lengthens the range - and the
- * same understated fuel figure is what calibrates gallons-per-percent, which inflates the
- * reserve, which lengthens the range again. One sensor bias, arriving twice, both times in the
- * optimistic direction. Nothing in the app could notice, because nothing in the app had a
- * second opinion.
+ * ratio and a density; distance is the road-speed PID integrated over time; the tank level is
+ * a float on a wire. All three are good and none of them is checked against anything unless a
+ * receipt is.
  *
- * A fill-to-shutoff is that second opinion. Fill to the click, and the gallons the pump
- * charged for are the gallons burned since the last time it was filled to the click - the tank
- * started at the same place and ended at the same place, so whatever went in is what came out.
- * That identity is what makes the receipt a measurement of the engine rather than of the tank,
- * and it is the whole basis of this file.
+ * ## What changed, and why
  *
- * The odometer is the same trick for distance. Two odometer readings a tank apart are the
- * miles the car says it went, against the miles this app integrated from a speed PID that
- * reads in whole km/h and, on most cars, slightly fast. Together the two give a miles-per-
- * gallon figure - odometer delta over pump gallons - that touches none of this app's sensors
- * and is the figure everything else is measured against.
+ * The first version of this file compared the pump against the fuel the app had counted since
+ * the previous fill. That identity is exact only if the app watched every mile of the tank, and
+ * it does not: one drive with the phone elsewhere and the pump reads high against the count,
+ * which looks like a MAF reading low. Worse, it had to be typed in at the pump, because the
+ * receipt was matched against whatever tank was open when the button was pressed - and the car
+ * opens a new tank itself the moment it sees the level rise. Typed in at home, 35 miles later,
+ * a receipt was compared against 35 miles of the new tank.
+ *
+ * So the receipt is now matched against something that cannot move and does not depend on the
+ * app being there for every drive: **how far the fuel gauge rose.** Every fill is recorded as a
+ * [FillRecord] when the car notices it - the level before, the level after - and the receipt is
+ * attached to that record whenever it arrives, hours or days later. Pump gallons over the rise
+ * is gallons per percent of gauge, measured by the pump. That one figure calibrates the tank
+ * (see [TankState.gallonsPerPercent]) and, through it, the reserve under E.
+ *
+ * With the gauge measured, the gauge becomes the reference for the MAF. Over the parts of a
+ * tank the app did watch, it has both the gauge's fall and the MAF's gallons, step for step
+ * ([TankState.observedDropPercent]); gauge fall times gallons-per-percent is the fuel that
+ * really went, and its ratio to the MAF's figure is the correction. A missed drive removes
+ * both halves of that pair together, so it no longer biases anything.
+ *
+ * The odometer stays optional and does one job only it can do: odometer miles over pump
+ * gallons between two fills to the click is miles per gallon that touches none of this app's
+ * sensors, missed drives included.
  */
-data class FillSample(
-    val timestampMillis: Long,
-    /** Gallons the pump charged for. */
-    val pumpGallons: Double,
-    /** Gallons the MAF chain reported burning since the previous fill, as it reported them. */
-    val measuredGallons: Double,
-    /** Miles this app integrated since the previous fill, as it integrated them. */
-    val measuredMiles: Double,
+data class FillRecord(
+    /** When the car noticed the fill, or when it was logged by hand. Identifies the record. */
+    val detectedAtMillis: Long,
+    /** Gauge reading just before the fuel went in. Null when the car never saw it. */
+    val levelBefore: Double? = null,
+    /** Settled gauge reading after the fill. Null until the car reports one. */
+    val levelAfter: Double? = null,
+    /** Gallons on the receipt. Null until entered. */
+    val pumpGallons: Double? = null,
+    /** Whether the nozzle was left to click off. Only matters for the odometer check. */
+    val filledToShutoff: Boolean = true,
+    /** Odometer at the pump, worked back from a reading taken later if need be. */
+    val odometerAtFill: Double? = null,
+    /** The driver said there is no receipt for this one, so stop asking. */
+    val receiptSkipped: Boolean = false,
     /**
-     * The fuel correction that was already in effect while [measuredGallons] accumulated.
-     *
-     * Stored so the correction can be divided back out. Without it the estimator would be
-     * learning from its own previous answer: a factor of 0.95 makes the next tank's measured
-     * gallons 5% smaller, which looks like fresh evidence for another 5% and compounds every
-     * fill. [rawGallons] undoes it, so every sample speaks about the sensor rather than about
-     * the last correction.
+     * The tank this fill brought to an end, as the app watched it. See [ClosedTank].
+     * Raw figures - with the corrections of the day divided back out - so the calibration never
+     * learns from its own previous answer.
      */
-    val fuelFactorInEffect: Double,
-    /** The distance correction in effect while [measuredMiles] accumulated. Same reason. */
-    val distanceFactorInEffect: Double,
-    /** Odometer delta over this tank, when the odometer was read at both ends. */
-    val odometerMiles: Double? = null,
+    val spanRawMiles: Double = 0.0,
+    val spanRawGallons: Double = 0.0,
+    val spanObservedDropPercent: Double = 0.0,
+    val spanObservedRawGallons: Double = 0.0,
 ) {
-    /** [measuredGallons] with the correction of the day removed - what the sensor chain said. */
-    val rawGallons: Double
-        get() = if (fuelFactorInEffect > 0) measuredGallons / fuelFactorInEffect else measuredGallons
+    /** How far the gauge rose, when both ends were seen. */
+    val risePercent: Double?
+        get() {
+            val before = levelBefore ?: return null
+            val after = levelAfter ?: return null
+            return after - before
+        }
 
-    /** [measuredMiles] with the correction of the day removed. */
-    val rawMiles: Double
-        get() = if (distanceFactorInEffect > 0) measuredMiles / distanceFactorInEffect else measuredMiles
+    /** What this receipt, on its own, says one percent of gauge is worth. */
+    val gallonsPerPercent: Double?
+        get() {
+            val pump = pumpGallons ?: return null
+            val rise = risePercent ?: return null
+            if (pump < FuelCalibrationRules.MIN_PUMP_GALLONS) return null
+            if (rise < FuelCalibrationRules.MIN_RISE_PERCENT) return null
+            val g = pump / rise
+            return g.takeIf { it in TankRules.MIN_GALLONS_PER_PERCENT..TankRules.MAX_GALLONS_PER_PERCENT }
+        }
 
-    /** What this one fill, on its own, says the fuel correction should be. */
-    val impliedFuelFactor: Double
-        get() = if (rawGallons > 0) pumpGallons / rawGallons else 1.0
-
-    /** What this one fill says the distance correction should be, when the odometer was read. */
-    val impliedDistanceFactor: Double?
-        get() = odometerMiles?.let { if (rawMiles > 0) it / rawMiles else null }
-
-    /**
-     * Miles per gallon for this tank, measured by nothing this app controls.
-     *
-     * The odometer when there is one, because then neither number is the app's; the app's own
-     * distance otherwise, which still has a real pump volume underneath it.
-     */
-    val verifiedMpg: Double
-        get() = if (pumpGallons > 0) (odometerMiles ?: measuredMiles) / pumpGallons else 0.0
+    val awaitingReceipt: Boolean
+        get() = pumpGallons == null && !receiptSkipped
 }
 
-/** Why a fill did not become a calibration sample. Shown to the driver, so each is specific. */
-enum class FillRejection {
-    /** The previous fill was not to shutoff, so there is no matching start point to measure from. */
-    NO_FULL_FILL_BASELINE,
+/**
+ * What [TankTracker] hands over when a fill closes a tank.
+ *
+ * The level before and the watched span - everything about the old tank that the receipt will
+ * later be compared with. Taken at the moment of closing because it is gone the instant after.
+ */
+data class ClosedTank(
+    val closedAtMillis: Long,
+    val levelBefore: Double?,
+    val rawMiles: Double,
+    val rawGallons: Double,
+    val observedDropPercent: Double,
+    val observedRawGallons: Double,
+)
 
-    /** This fill was not to shutoff. It becomes the baseline for the next one. */
-    NOT_FILLED_TO_SHUTOFF,
-
-    /** Too little fuel or too few miles for the division to mean anything. */
-    SPAN_TOO_SHORT,
-
-    /** More gallons than the tank holds, or fewer than nothing. A typo, not a measurement. */
+/** Why a receipt was not stored. Only one thing can do that now. */
+enum class ReceiptRefusal {
+    /** More gallons than the tank holds, or none. A typo, not a measurement. */
     IMPLAUSIBLE_PUMP_GALLONS,
-
-    /** The app tracked nothing across this tank - it was shut, or the adapter was elsewhere. */
-    NO_MEASUREMENT,
-
-    /**
-     * Pump and sensor disagree by more than a sensor can plausibly be wrong.
-     *
-     * Rejected rather than adopted. A factor this far out is not a MAF reading low, it is a
-     * missed fill or a partial one entered as a full one, and applying it would put a large
-     * error into every range figure until the next fill argued it back.
-     */
-    IMPLAUSIBLE_RATIO,
 }
 
-sealed interface FillOutcome {
-    /** The fill was measured, and [state] carries the corrections it produced. */
-    data class Accepted(val sample: FillSample, val state: FuelCalibrationState) : FillOutcome
-
-    /** The fill was logged but taught nothing. The tank still restarts; only the maths is skipped. */
-    data class Rejected(val reason: FillRejection, val state: FuelCalibrationState) : FillOutcome
+sealed interface ReceiptOutcome {
+    data class Saved(val record: FillRecord, val state: FuelCalibrationState) : ReceiptOutcome
+    data class Refused(val reason: ReceiptRefusal, val state: FuelCalibrationState) : ReceiptOutcome
 }
 
 object FuelCalibrationRules {
 
-    /**
-     * How many fills the corrections are averaged over.
-     *
-     * Six is roughly two thousand miles on this car, which is long enough to average out the
-     * one thing the method cannot control - where exactly the pump's auto-shutoff trips, which
-     * moves by a tenth of a gallon or so with nozzle angle and how hard the tank is breathing.
-     * A tenth of a gallon on an eleven-gallon fill is under one percent, and six of them
-     * averaged is a quarter of that.
-     *
-     * It is a window rather than a running total because a MAF drifts as it ages. Old fills
-     * describe a sensor that no longer exists.
-     */
+    /** How many recent fills the corrections are drawn from. About two thousand miles. */
     const val WINDOW = 6
 
+    /** How many fill records are kept at all. The rest describe a car that has moved on. */
+    const val KEEP = 12
+
     /**
-     * A fill has to be at least this large to calibrate from.
+     * A receipt has to be at least this large to measure the gauge from.
      *
-     * Splash-and-dash fills are where the shutoff scatter lives: the same tenth of a gallon of
-     * nozzle luck is one percent of eleven gallons and eight percent of one and a half.
+     * The gauge's own resolution is a fixed fraction of a percent, so a small fill divides a
+     * small figure by a small figure and the noise lands in the answer.
      */
     const val MIN_PUMP_GALLONS = 4.0
 
-    /** And this many miles, so the distance side has something to divide into. */
-    const val MIN_MILES = 40.0
+    /** And the gauge has to have risen this far. Thirty percent is about four gallons. */
+    const val MIN_RISE_PERCENT = 30.0
 
     /** Beyond the tank's own capacity, plus a little for a hard-brimmed filler neck. */
     const val MAX_PUMP_GALLONS = CivicSpecs.FUEL_TANK_CAPACITY_GALLONS + 1.5
 
     /**
-     * How far a correction is allowed to move the sensors.
+     * The gauge has to fall this far while watched before it can check the MAF.
      *
-     * A MAF that has drifted, a slightly wrong assumed fuel density and injectors that are not
-     * quite what the model thinks together account for a few percent, not twenty. A figure
-     * outside this is evidence of a bookkeeping problem - a fill the app never saw, a tank
-     * driven with the phone at home - and the honest response to bad bookkeeping is to keep the
-     * previous answer rather than to adopt a new wrong one.
+     * Twenty percent is about two and a half gallons, far more than the gauge's resolution.
      */
+    const val MIN_WATCHED_DROP_PERCENT = 20.0
+
+    /** How far a correction is allowed to move the MAF. A few percent is real; twenty is not. */
     const val MIN_FACTOR = 0.80
     const val MAX_FACTOR = 1.25
 
-    /**
-     * How far a single fill may sit from the running correction before it is discarded.
-     *
-     * Wider than [MIN_FACTOR]..[MAX_FACTOR] is applied to the pooled answer, because one fill
-     * carries the shutoff scatter that six averaged do not.
-     */
-    const val MAX_SINGLE_FILL_FACTOR = 1.40
+    /** One tank's figure outside this is a bookkeeping problem, not a sensor. */
     const val MIN_SINGLE_FILL_FACTOR = 0.70
+    const val MAX_SINGLE_FILL_FACTOR = 1.40
 
-    /** Fills needed before the corrections are used at all. */
-    const val MIN_SAMPLES_TO_APPLY = 1
+    /** A span needs this many miles before its odometer or economy figure means anything. */
+    const val MIN_SPAN_MILES = 40.0
 
-    /** Fills needed before the verified MPG is trusted as the baseline for range. */
-    const val MIN_SAMPLES_FOR_MPG_BASELINE = 2
+    /** And this many watched miles before its economy stands in for the odometer's. */
+    const val MIN_WATCHED_MILES_FOR_MPG = 100.0
+
+    /**
+     * How far odometer miles may sit from the app's miles before the gap is missed driving.
+     *
+     * The road-speed PID reads a couple of percent fast on most cars and never by ten. A tank
+     * whose odometer says six percent more than the app counted had a drive the app missed, and
+     * learning a distance correction from it would stretch every mile after it.
+     */
+    const val MIN_DISTANCE_RATIO = 0.96
+    const val MAX_DISTANCE_RATIO = 1.06
+
+    /** Economy outside this for a whole tank is a typo in the odometer, not driving. */
+    const val MIN_PLAUSIBLE_MPG = 15.0
+    const val MAX_PLAUSIBLE_MPG = 60.0
+
+    /**
+     * A second detection this soon, with this little driving since, is the same fill.
+     *
+     * The level crosses the detection threshold more than once while a pump is running, and a
+     * receipt logged at the pump opens a record the car then re-detects when it wakes.
+     */
+    const val SAME_FILL_WINDOW_MILLIS = 6 * 60 * 60 * 1000L
+    const val SAME_FILL_MAX_MILES = 2.0
+
+    /**
+     * How long a fill waits for its receipt before the app stops asking.
+     *
+     * Three days is the drive home, the evening and a forgotten day. Longer, and the next fill
+     * could arrive while the card still names this one.
+     */
+    const val RECEIPT_WINDOW_MILLIS = 3 * 24 * 60 * 60 * 1000L
+
+    /**
+     * A fill reads as not to the click when the gauge stopped this far short of full.
+     *
+     * Five percent is over half a gallon - far more than the scatter in where a nozzle clicks
+     * off - so a real brim is never mistaken for a part fill.
+     */
+    const val FULL_TOLERANCE_PERCENT = 5.0
 }
 
 /**
- * What the fills have taught, and the two corrections that come out of them.
+ * Every fill the car noticed, with whatever receipts have been attached, and what they teach.
  *
- * Both corrections are pooled ratios - all the pump gallons over all the sensor gallons - and
- * not the average of the per-fill ratios. The difference matters at the sizes involved here: a
- * pooled ratio weights each fill by how much fuel it actually measured, so an eleven-gallon
- * fill counts for what it is worth against a five-gallon one, and the shutoff scatter, which is
- * a fixed fraction of a gallon rather than a fixed percentage, gets divided by the larger
- * total rather than by each fill separately.
+ * Everything below [fills] is derived. Nothing is stored that can be recomputed, which is what
+ * lets a receipt arrive late, be corrected, or be skipped without leaving a stale figure behind.
  */
 data class FuelCalibrationState(
-    /** Newest last, capped at [FuelCalibrationRules.WINDOW]. */
-    val samples: List<FillSample> = emptyList(),
-    /**
-     * Whether the last fill logged went to the pump's automatic shutoff.
-     *
-     * The identity this whole file rests on needs both ends of the tank at the same level, so
-     * a fill can only be measured when the one before it was also to the click. A partial fill
-     * is not wasted - it becomes the baseline for the next one.
-     */
-    val lastFillWasFull: Boolean = false,
-    /** Odometer at the last fill, when it was given. The start point for the next tank's miles. */
-    val lastOdometerMiles: Double? = null,
+    /** Oldest first, capped at [FuelCalibrationRules.KEEP]. */
+    val fills: List<FillRecord> = emptyList(),
 ) {
+    private val recent: List<FillRecord>
+        get() = fills.takeLast(FuelCalibrationRules.WINDOW)
+
+    /** The receipts that measured the gauge, newest last. */
+    private val gaugeMeasurements: List<Double>
+        get() = fills.mapNotNull { it.gallonsPerPercent }.takeLast(FuelCalibrationRules.WINDOW)
+
     /**
-     * What the MAF chain's gallons must be multiplied by.
+     * Gallons per percent of gauge, measured by the pump. Null until a receipt has done it.
      *
-     * One until a fill says otherwise, which is the old behaviour exactly: an uncalibrated app
-     * behaves as it did before this file existed.
+     * The median, not the mean. One fill whose "before" reading was stale - a drive to the
+     * station the app missed - is a real outlier, and a median of three shrugs it off where an
+     * average would carry a third of it into every figure.
      */
-    val fuelCorrectionFactor: Double
-        get() {
-            if (samples.size < FuelCalibrationRules.MIN_SAMPLES_TO_APPLY) return 1.0
-            val pump = samples.sumOf { it.pumpGallons }
-            val raw = samples.sumOf { it.rawGallons }
-            if (raw <= 0) return 1.0
-            return (pump / raw).coerceIn(FuelCalibrationRules.MIN_FACTOR, FuelCalibrationRules.MAX_FACTOR)
-        }
+    val pumpGallonsPerPercent: Double?
+        get() = median(gaugeMeasurements)
+
+    /** Receipts that measured the gauge. */
+    val gaugeReceiptCount: Int
+        get() = gaugeMeasurements.size
 
     /**
-     * What the integrated road-speed miles must be multiplied by.
+     * How far the receipts disagree about the gauge, as a percentage.
      *
-     * Only the fills that carried an odometer reading count, so this stays at one for a driver
-     * who logs gallons and skips the odometer - the fuel side still calibrates on its own.
-     */
-    val distanceCorrectionFactor: Double
-        get() {
-            val withOdo = samples.filter { it.odometerMiles != null }
-            if (withOdo.isEmpty()) return 1.0
-            val odo = withOdo.sumOf { it.odometerMiles ?: 0.0 }
-            val raw = withOdo.sumOf { it.rawMiles }
-            if (raw <= 0) return 1.0
-            return (odo / raw).coerceIn(FuelCalibrationRules.MIN_FACTOR, FuelCalibrationRules.MAX_FACTOR)
-        }
-
-    val calibrated: Boolean
-        get() = samples.size >= FuelCalibrationRules.MIN_SAMPLES_TO_APPLY
-
-    val distanceCalibrated: Boolean
-        get() = samples.any { it.odometerMiles != null }
-
-    /**
-     * Miles per gallon measured entirely outside this app, or null before there are fills.
-     *
-     * Pooled the same way and for the same reason: total miles over total pump gallons, so a
-     * long tank counts for more than a short one.
-     */
-    val verifiedMpg: Double?
-        get() {
-            if (samples.isEmpty()) return null
-            val gallons = samples.sumOf { it.pumpGallons }
-            if (gallons <= 0) return null
-            return samples.sumOf { it.odometerMiles ?: it.measuredMiles } / gallons
-        }
-
-    /** Whether [verifiedMpg] has enough fills behind it to be the baseline range is built on. */
-    val verifiedMpgUsable: Boolean
-        get() = samples.size >= FuelCalibrationRules.MIN_SAMPLES_FOR_MPG_BASELINE &&
-            (verifiedMpg ?: 0.0) > 10.0
-
-    /** Pump gallons behind [verifiedMpg], so a screen can say how much is behind the figure. */
-    val verifiedGallons: Double
-        get() = samples.sumOf { it.pumpGallons }
-
-    val verifiedMiles: Double
-        get() = samples.sumOf { it.odometerMiles ?: it.measuredMiles }
-
-    /**
-     * How much the individual fills disagree with the pooled correction, as a percentage.
-     *
-     * This is the honest width of every figure downstream. Range is gallons times MPG and both
-     * come from here, so a set of fills scattered by three percent cannot produce a distance to
-     * empty better than about three percent - six miles in two hundred. Worth showing rather
-     * than burying: a driver who wants the last mile should be told which mile is the last one
-     * the measurement can actually see.
-     *
-     * Null with fewer than two fills, because one fill agrees with itself perfectly and saying
-     * so would be a claim of precision rather than a measurement of it.
+     * The honest width of the tank figure. Null with one receipt, which agrees with itself.
      */
     val spreadPercent: Double?
         get() {
-            if (samples.size < 2) return null
-            val pooled = fuelCorrectionFactor
-            if (pooled <= 0) return null
-            val worst = samples.maxOf { abs(it.impliedFuelFactor - pooled) }
-            return 100.0 * worst / pooled
+            val all = gaugeMeasurements
+            val mid = median(all) ?: return null
+            if (all.size < 2 || mid <= 0) return null
+            return 100.0 * all.maxOf { abs(it - mid) } / mid
         }
+
+    /**
+     * What the MAF's gallons must be multiplied by.
+     *
+     * The gauge, measured by the pump, is the reference: over each watched stretch, gauge fall
+     * times gallons-per-percent is what was burned, and the MAF said [FillRecord.spanObservedRawGallons].
+     * Pooled over tanks so a long one counts for more than a short one. One until the gauge has
+     * been measured - an uncalibrated app behaves exactly as it did before.
+     */
+    val fuelCorrectionFactor: Double
+        get() {
+            val g = pumpGallonsPerPercent ?: return 1.0
+            var truth = 0.0
+            var maf = 0.0
+            for (f in recent) {
+                if (f.spanObservedDropPercent < FuelCalibrationRules.MIN_WATCHED_DROP_PERCENT) continue
+                if (f.spanObservedRawGallons <= 0) continue
+                val burned = g * f.spanObservedDropPercent
+                val implied = burned / f.spanObservedRawGallons
+                if (implied < FuelCalibrationRules.MIN_SINGLE_FILL_FACTOR ||
+                    implied > FuelCalibrationRules.MAX_SINGLE_FILL_FACTOR
+                ) {
+                    continue
+                }
+                truth += burned
+                maf += f.spanObservedRawGallons
+            }
+            if (maf <= 0) return 1.0
+            return (truth / maf).coerceIn(FuelCalibrationRules.MIN_FACTOR, FuelCalibrationRules.MAX_FACTOR)
+        }
+
+    /** Whether [fuelCorrectionFactor] rests on a measurement rather than being the default one. */
+    val fuelCalibrated: Boolean
+        get() = pumpGallonsPerPercent != null && recent.any {
+            it.spanObservedDropPercent >= FuelCalibrationRules.MIN_WATCHED_DROP_PERCENT &&
+                it.spanObservedRawGallons > 0
+        }
+
+    /** The highest gauge reading any fill reached. Stands in for "full" when judging a brim. */
+    private val fullestLevel: Double?
+        get() = fills.mapNotNull { it.levelAfter }.maxOrNull()
+
+    /**
+     * Whether a fill really went to the click.
+     *
+     * The driver's word, checked against the gauge: a fill that left it well short of full was
+     * not a brim, whatever the box said, and pairing it as one would measure a tank that did
+     * not end where it started.
+     */
+    private fun wasFull(f: FillRecord): Boolean {
+        if (!f.filledToShutoff) return false
+        val after = f.levelAfter ?: return true
+        val full = fullestLevel ?: return true
+        if (full < TankRules.FULL_MARK_MIN_PERCENT) return true
+        return after >= full - FuelCalibrationRules.FULL_TOLERANCE_PERCENT
+    }
+
+    /**
+     * Consecutive pairs of fills to the click with an odometer at both ends.
+     *
+     * Consecutive in the record, so no fill can hide between them: the car notices every fill
+     * large enough to matter, and one it noticed without a receipt breaks the pair.
+     */
+    private val odometerSpans: List<Pair<FillRecord, FillRecord>>
+        get() = fills.zipWithNext().filter { (prev, cur) ->
+            val pump = cur.pumpGallons ?: return@filter false
+            val a = prev.odometerAtFill ?: return@filter false
+            val b = cur.odometerAtFill ?: return@filter false
+            val miles = b - a
+            wasFull(prev) && wasFull(cur) &&
+                pump >= FuelCalibrationRules.MIN_PUMP_GALLONS &&
+                miles >= FuelCalibrationRules.MIN_SPAN_MILES &&
+                miles / pump in FuelCalibrationRules.MIN_PLAUSIBLE_MPG..FuelCalibrationRules.MAX_PLAUSIBLE_MPG
+        }.takeLast(FuelCalibrationRules.WINDOW)
+
+    /**
+     * Miles per gallon measured entirely outside this app: odometer over pump.
+     *
+     * Untouched by missed drives - the odometer counted them and the pump paid for them.
+     */
+    val verifiedMpg: Double?
+        get() {
+            val spans = odometerSpans
+            if (spans.isEmpty()) return null
+            val miles = spans.sumOf { (a, b) -> b.odometerAtFill!! - a.odometerAtFill!! }
+            val gallons = spans.sumOf { (_, b) -> b.pumpGallons!! }
+            return miles / gallons
+        }
+
+    /**
+     * What the road-speed miles must be multiplied by.
+     *
+     * Only from tanks where the app plainly saw the whole thing - odometer and app within a few
+     * percent. A bigger gap is a missed drive, and missed driving is not a fast speed sensor.
+     */
+    val distanceCorrectionFactor: Double
+        get() {
+            var odo = 0.0
+            var app = 0.0
+            for ((a, b) in odometerSpans) {
+                val miles = b.odometerAtFill!! - a.odometerAtFill!!
+                if (b.spanRawMiles <= 0) continue
+                val ratio = miles / b.spanRawMiles
+                if (ratio !in FuelCalibrationRules.MIN_DISTANCE_RATIO..FuelCalibrationRules.MAX_DISTANCE_RATIO) continue
+                odo += miles
+                app += b.spanRawMiles
+            }
+            return if (app > 0) odo / app else 1.0
+        }
+
+    val distanceCalibrated: Boolean
+        get() = distanceCorrectionFactor != 1.0
+
+    /**
+     * Economy over the driving the app watched, with both corrections applied.
+     *
+     * The fallback for a driver who skips the odometer. Both halves come from the same watched
+     * miles, so a missed drive shortens the sample without biasing it.
+     */
+    val watchedMpg: Double?
+        get() {
+            if (!fuelCalibrated) return null
+            val spans = recent.filter { it.spanRawMiles > 0 && it.spanRawGallons > 0 }
+            val miles = spans.sumOf { it.spanRawMiles }
+            if (miles < FuelCalibrationRules.MIN_WATCHED_MILES_FOR_MPG) return null
+            val gallons = spans.sumOf { it.spanRawGallons }
+            return (miles * distanceCorrectionFactor) / (gallons * fuelCorrectionFactor)
+        }
+
+    /** The best economy figure the receipts can give: the odometer's, else the watched one. */
+    val economyMpg: Double?
+        get() = verifiedMpg ?: watchedMpg
+
+    /** Receipts entered at all, measured or not. */
+    val receiptCount: Int
+        get() = fills.count { it.pumpGallons != null }
+
+    /** Gallons across the receipts, for saying how much stands behind a figure. */
+    val receiptGallons: Double
+        get() = fills.sumOf { it.pumpGallons ?: 0.0 }
+
+    /** Whether the gauge has been measured by the pump. */
+    val calibrated: Boolean
+        get() = pumpGallonsPerPercent != null
+
+    /** The last fill, when it is still waiting for its receipt. See [FuelCalibrationRules.RECEIPT_WINDOW_MILLIS]. */
+    fun pendingReceipt(nowMillis: Long): FillRecord? {
+        val last = fills.lastOrNull() ?: return null
+        if (!last.awaitingReceipt) return null
+        if (nowMillis - last.detectedAtMillis > FuelCalibrationRules.RECEIPT_WINDOW_MILLIS) return null
+        return last
+    }
+
+    companion object {
+        private fun median(values: List<Double>): Double? {
+            if (values.isEmpty()) return null
+            val s = values.sorted()
+            val mid = s.size / 2
+            return if (s.size % 2 == 1) s[mid] else (s[mid - 1] + s[mid]) / 2
+        }
+    }
 }
 
 /** Where the fill history is kept between runs. */
@@ -294,13 +417,11 @@ class InMemoryFuelCalibrationStore(
 }
 
 /**
- * Turns fill-ups into corrections.
+ * Keeps the fill record and attaches receipts to it.
  *
- * Deliberately knows nothing about tanks, senders or driving. It is handed what the app
- * measured across a tank and what the pump said, and it answers with two multipliers. That
- * separation is what keeps the feedback loop honest: [TankTracker] measures the sender against
- * corrected fuel, this measures corrected fuel against the pump, and neither is in a position
- * to confirm its own answer.
+ * Knows nothing about sensors or driving. [TankTracker] tells it when a fill closed a tank and
+ * where the gauge settled; the driver tells it what the pump said. Everything else is derived
+ * in [FuelCalibrationState].
  */
 class FuelCalibrationEngine(
     private val store: FuelCalibrationStore = InMemoryFuelCalibrationStore(),
@@ -310,108 +431,102 @@ class FuelCalibrationEngine(
 
     fun get(): FuelCalibrationState = state
 
-    /** The multiplier to apply to sensor-derived gallons right now. */
     fun fuelFactor(): Double = state.fuelCorrectionFactor
 
-    /** The multiplier to apply to integrated miles right now. */
     fun distanceFactor(): Double = state.distanceCorrectionFactor
 
     /**
-     * Logs a fill and, when it can, learns from it.
+     * Records a fill the car just noticed.
      *
-     * @param pumpGallons what the pump charged for
-     * @param filledToShutoff whether the nozzle was left to click off by itself
-     * @param measuredGallons what the app thinks was burned since the previous fill
-     * @param measuredMiles what the app thinks was driven since the previous fill
-     * @param odometerMiles the odometer now, if it was read. Only useful when the previous
-     *   fill's odometer was read too, which is what makes a delta.
+     * Returns false when it was the same fill noticed again - a level still climbing at the
+     * pump, or a car waking up after the receipt was already logged by hand - in which case the
+     * existing record is kept, because it holds the true "before" reading.
      */
-    fun recordFill(
-        pumpGallons: Double,
-        filledToShutoff: Boolean,
-        measuredGallons: Double,
-        measuredMiles: Double,
-        odometerMiles: Double? = null,
-    ): FillOutcome {
-        val previousOdometer = state.lastOdometerMiles
-        val hadFullBaseline = state.lastFillWasFull
-
-        // Whatever happens to the calibration, this fill is the start point for the next tank.
-        // Recorded before any rejection returns, because a fill that taught nothing this time
-        // is exactly the one that lets the next fill be measured.
-        fun settleBaseline(): FuelCalibrationState = state.copy(
-            lastFillWasFull = filledToShutoff,
-            // Only kept when it can be a start point. A reading that arrives without its
-            // partner is not half a measurement, it is a number with nothing to subtract.
-            lastOdometerMiles = odometerMiles ?: state.lastOdometerMiles,
-        )
-
-        fun reject(reason: FillRejection): FillOutcome {
-            state = settleBaseline()
-            store.save(state)
-            return FillOutcome.Rejected(reason, state)
-        }
-
-        if (pumpGallons <= 0 || pumpGallons > FuelCalibrationRules.MAX_PUMP_GALLONS) {
-            return reject(FillRejection.IMPLAUSIBLE_PUMP_GALLONS)
-        }
-        if (!filledToShutoff) return reject(FillRejection.NOT_FILLED_TO_SHUTOFF)
-        if (!hadFullBaseline) return reject(FillRejection.NO_FULL_FILL_BASELINE)
-        if (measuredGallons <= 0.0 || measuredMiles <= 0.0) return reject(FillRejection.NO_MEASUREMENT)
-        if (pumpGallons < FuelCalibrationRules.MIN_PUMP_GALLONS ||
-            measuredMiles < FuelCalibrationRules.MIN_MILES
+    fun onFillDetected(closed: ClosedTank): Boolean {
+        val last = state.fills.lastOrNull()
+        if (last != null &&
+            closed.rawMiles < FuelCalibrationRules.SAME_FILL_MAX_MILES &&
+            closed.closedAtMillis - last.detectedAtMillis in 0..FuelCalibrationRules.SAME_FILL_WINDOW_MILLIS
         ) {
-            return reject(FillRejection.SPAN_TOO_SHORT)
+            return false
         }
-
-        // The odometer delta, but only when both ends of it exist. A single reading cannot
-        // become a distance, and pairing this fill's odometer with a previous fill that had
-        // none would silently measure the wrong span.
-        val odometerDelta = if (odometerMiles != null && previousOdometer != null) {
-            (odometerMiles - previousOdometer).takeIf { it > FuelCalibrationRules.MIN_MILES }
-        } else {
-            null
-        }
-
-        val sample = FillSample(
-            timestampMillis = clock.nowMillis(),
-            pumpGallons = pumpGallons,
-            measuredGallons = measuredGallons,
-            measuredMiles = measuredMiles,
-            fuelFactorInEffect = state.fuelCorrectionFactor,
-            distanceFactorInEffect = state.distanceCorrectionFactor,
-            odometerMiles = odometerDelta,
+        val record = FillRecord(
+            detectedAtMillis = closed.closedAtMillis,
+            levelBefore = closed.levelBefore,
+            spanRawMiles = closed.rawMiles,
+            spanRawGallons = closed.rawGallons,
+            spanObservedDropPercent = closed.observedDropPercent,
+            spanObservedRawGallons = closed.observedRawGallons,
         )
-
-        val implied = sample.impliedFuelFactor
-        if (implied < FuelCalibrationRules.MIN_SINGLE_FILL_FACTOR ||
-            implied > FuelCalibrationRules.MAX_SINGLE_FILL_FACTOR
-        ) {
-            return reject(FillRejection.IMPLAUSIBLE_RATIO)
-        }
-
-        val kept = (state.samples + sample).takeLast(FuelCalibrationRules.WINDOW)
-        state = state.copy(
-            samples = kept,
-            lastFillWasFull = true,
-            lastOdometerMiles = odometerMiles ?: state.lastOdometerMiles,
-        )
-        store.save(state)
-        return FillOutcome.Accepted(sample, state)
+        commit(state.copy(fills = (state.fills + record).takeLast(FuelCalibrationRules.KEEP)))
+        return true
     }
 
     /**
-     * Forgets everything and starts again.
+     * Where the gauge has settled since the last fill.
      *
-     * For a MAF replacement or a tyre size change, either of which makes every stored fill a
-     * measurement of a car that no longer exists.
+     * Only ever raised, and only by a meaningful amount so the file is not rewritten every tick:
+     * the level after a fill is the highest it reaches, and it climbs for a minute or so as the
+     * float settles.
      */
+    fun updateLevelAfter(levelPercent: Double) {
+        val last = state.fills.lastOrNull() ?: return
+        // Not until the gauge has actually risen. A receipt logged at the pump opens the record
+        // before the engine is started, when the only level to hand is the one from before.
+        last.levelBefore?.let { if (levelPercent <= it + 1.0) return }
+        val current = last.levelAfter
+        if (current != null && levelPercent < current + 0.1) return
+        replaceLast(last.copy(levelAfter = levelPercent))
+    }
+
+    /**
+     * Attaches a receipt to the last fill.
+     *
+     * @param odometerAtFill the odometer at the pump. The caller works it back from a reading
+     *   taken later, since the driver is usually home by the time they type it.
+     */
+    fun attachReceipt(
+        pumpGallons: Double,
+        filledToShutoff: Boolean,
+        odometerAtFill: Double? = null,
+    ): ReceiptOutcome {
+        if (pumpGallons <= 0 || pumpGallons > FuelCalibrationRules.MAX_PUMP_GALLONS) {
+            return ReceiptOutcome.Refused(ReceiptRefusal.IMPLAUSIBLE_PUMP_GALLONS, state)
+        }
+        val last = state.fills.lastOrNull()
+            ?: return ReceiptOutcome.Refused(ReceiptRefusal.IMPLAUSIBLE_PUMP_GALLONS, state)
+        val updated = last.copy(
+            pumpGallons = pumpGallons,
+            filledToShutoff = filledToShutoff,
+            odometerAtFill = odometerAtFill ?: last.odometerAtFill,
+            receiptSkipped = false,
+        )
+        replaceLast(updated)
+        return ReceiptOutcome.Saved(updated, state)
+    }
+
+    /** The driver has no receipt for the last fill. Stop asking for it. */
+    fun skipReceipt() {
+        val last = state.fills.lastOrNull() ?: return
+        if (last.pumpGallons != null) return
+        replaceLast(last.copy(receiptSkipped = true))
+    }
+
+    /** Forgets everything. For a MAF replacement or a tyre size change. */
     fun reset() {
-        state = FuelCalibrationState()
-        store.save(state)
+        commit(FuelCalibrationState())
     }
 
     fun flush() {
+        store.save(state)
+    }
+
+    private fun replaceLast(record: FillRecord) {
+        commit(state.copy(fills = state.fills.dropLast(1) + record))
+    }
+
+    private fun commit(next: FuelCalibrationState) {
+        state = next
         store.save(state)
     }
 }

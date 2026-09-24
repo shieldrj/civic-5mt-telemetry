@@ -90,11 +90,9 @@ private data class MapsTokens(
  * dashboard has given up. See TankState.fuelPercentRemaining for how the difference is
  * measured.
  *
- * It does not go on to zero, and saying it did was wrong. The reserve is the last thing the
- * sender can tell anyone about, so the figure stops there - at the reserve's share of the
- * tank, some seven percent - and holds while the fuel goes on down. That last stretch is
- * shown as "under 7" rather than "7", which is the whole of what is honestly known about it.
- * See TankState.belowSenderZero.
+ * Below E the gauge stops moving, so the reserve - some seven percent of the tank - is counted
+ * down from fuel burned instead. That last stretch is an estimate rather than a reading, and
+ * is shown as "about 7". See TankState.belowSenderZero.
  *
  * Absent readings render as a dash. Both figures are null until the car has reported a fuel
  * level and a fill has been seen, and a fabricated number here is one someone drives past a
@@ -153,7 +151,7 @@ fun HudContent() {
             }
             Spacer(Modifier.height(1.dp))
             // Once the sender is on its stop, the percentage stops counting down - there is
-            // fuel below there but nothing measuring it - so the card says "under 7" rather
+            // fuel below there, counted down from fuel burned - so the card says "about 7" rather
             // than "7". A card read at 60 mph is the last place to print a number that has
             // quietly stopped meaning what it says. See TankState.belowSenderZero.
             val bounded = metrics.tankBelowSenderZero
@@ -164,7 +162,7 @@ fun HudContent() {
             ) {
                 if (bounded && fuelPercent != null) {
                     Text(
-                        text = "under",
+                        text = "about",
                         color = tokens.OnSurfaceVariant,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Medium,
