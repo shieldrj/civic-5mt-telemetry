@@ -766,7 +766,8 @@ private fun ReceiptSection(context: android.content.Context) {
     } else if (handLog) {
         ReceiptCard(
             title = "Log a fill-up",
-            subtitle = "For a fill the car didn't notice. Save it before you drive off.",
+            subtitle = "Only for a fill you just made. This starts a new tank now, so don't use " +
+                "it for an older receipt.",
             context = context,
             amendLast = false,
             onDone = { handLog = false },
@@ -801,7 +802,17 @@ private fun ReceiptSection(context: android.content.Context) {
             )
         }
     } else {
-        SectionHeading("Last fill-up", null)
+        // Said in so many words, because the card appearing on its own is the whole design and
+        // an empty section looked like a missing feature. Reported 2026-09-23: "I don't see where
+        // to enter the receipt".
+        SectionHeading("Fill-up receipt", null)
+        Text(
+            text = "Nothing to enter right now. After your next fill-up, a card appears here " +
+                "when you start the car. Enter the gallons then, or any time in the next 3 days.",
+            color = CivicColors.Ink2,
+            fontSize = 14.sp,
+        )
+        Spacer(Modifier.height(12.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -809,13 +820,13 @@ private fun ReceiptSection(context: android.content.Context) {
         ) {
             Text(
                 text = when {
-                    last == null -> "None yet. The car notices a fill by itself."
+                    last == null -> "No fill-ups recorded yet"
                     last.pumpGallons != null ->
-                        fillTime(last.detectedAtMillis) + " · " + "%.2f gal".format(last.pumpGallons)
-                    else -> fillTime(last.detectedAtMillis) + " · no receipt"
+                        "Last: " + fillTime(last.detectedAtMillis) + " · " + "%.2f gal".format(last.pumpGallons)
+                    else -> "Last: " + fillTime(last.detectedAtMillis) + " · no receipt"
                 },
-                color = CivicColors.Ink2,
-                fontSize = 14.sp,
+                color = CivicColors.Ink3,
+                fontSize = 13.sp,
                 modifier = Modifier.weight(1f),
             )
             if (last?.pumpGallons != null) {
@@ -829,8 +840,10 @@ private fun ReceiptSection(context: android.content.Context) {
                 )
             }
         }
+        // Worded as the rare case it is. It closes the tank now, so using it for an old receipt
+        // would start a new tank at whatever the gauge reads today.
         Text(
-            text = "Log a fill-up by hand",
+            text = "Just filled up and no card appeared? Log it by hand",
             color = CivicColors.Ink3,
             fontSize = 13.sp,
             modifier = Modifier
