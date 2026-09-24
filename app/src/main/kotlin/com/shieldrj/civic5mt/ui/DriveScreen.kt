@@ -355,7 +355,7 @@ private fun RangeToEmpty(
         Row(verticalAlignment = Alignment.Bottom) {
             if (metrics.tankBelowSenderZero && headline != null) {
                 Text(
-                    text = "under ",
+                    text = "about ",
                     color = CivicColors.Ink3,
                     fontSize = captionSize,
                     modifier = Modifier.alignByBaseline(),

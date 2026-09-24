@@ -102,6 +102,11 @@ fun FuelScreen(modifier: Modifier = Modifier) {
         )
         Spacer(Modifier.height(18.dp))
 
+        // First, because it is the one thing on this screen that asks something of the driver,
+        // and the reminder notification lands here.
+        ReceiptSection(context)
+        Spacer(Modifier.height(24.dp))
+
         CostcoSection(
             snapshot = gasPrices,
             refreshing = gasRefreshing,
@@ -137,13 +142,6 @@ fun FuelScreen(modifier: Modifier = Modifier) {
             },
         )
 
-        // Drawn whether or not anything is connected, which is the point of it. A receipt is
-        // typed in standing at a pump with the ignition off, and this used to be hidden in
-        // exactly that situation: it wanted a live sender reading, because logging a fill
-        // wanted one. It no longer does - see TelemetryManager.recordFill - and the fill
-        // history is the one record on this screen that is read with the car asleep.
-        Spacer(Modifier.height(24.dp))
-        FillLogSection(context)
 
         if (live) {
             Spacer(Modifier.height(24.dp))
@@ -203,12 +201,11 @@ private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Doubl
             Label("UNTIL DRY")
             Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.Bottom) {
-                // "under" rather than a bare numeral once the sender has bottomed out. It is
-                // the loudest number on the screen and it stops counting down there, so a
-                // reader has to be told it is a ceiling. See TankState.belowSenderZero.
+                // "about" once the gauge is on E. Below it the reserve is counted down from fuel
+                // burned, which is an estimate rather than a reading. See TankState.belowSenderZero.
                 if (metrics.tankBelowSenderZero && metrics.fuelRangeMiles != null) {
                     Text(
-                        text = "under",
+                        text = "about",
                         color = CivicColors.Ink3,
                         fontSize = 13.sp,
                         modifier = Modifier.alignByBaseline(),
@@ -235,7 +232,7 @@ private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Doubl
                 text = metrics.tankGallonsRemaining
                     ?.let {
                         if (metrics.tankBelowSenderZero) {
-                            "under %.1f gal left".format(it)
+                            "about %.1f gal left".format(it)
                         } else {
                             "%.1f gal left".format(it)
                         }
@@ -350,15 +347,14 @@ private fun TankSection(
         // numbers and both are worth showing here: the first is the honest one and is what
         // the overlay carries, the second is what the dashboard gauge is doing - which is
         // the thing being corrected, so hiding it would make the correction unreadable.
-        // Under the sender's zero, neither figure is a reading any more - both sit still at
-        // the reserve while the fuel goes on down - so both are printed as bounds. See
-        // TankState.belowSenderZero for why nothing better is available down there.
+        // Under E both figures are counted down from fuel burned rather than read off the
+        // gauge, so both are marked as estimates. See TankState.belowSenderZero.
         val bounded = metrics.tankBelowSenderZero
 
         ValueRow(
             label = "Fuel left",
             value = metrics.fuelPercentRemaining
-                ?.let { if (bounded) "under %.0f%%".format(it) else "%.0f%%".format(it) }
+                ?.let { if (bounded) "about %.0f%%".format(it) else "%.0f%%".format(it) }
                 ?: "—",
             note = metrics.fuelLevelPercent
                 ?.let { "the sender reads %.0f%%".format(it) }
@@ -367,11 +363,11 @@ private fun TankSection(
         ValueRow(
             label = "Range",
             value = metrics.fuelRangeMiles
-                ?.let { if (bounded) "under $it mi" else "$it mi" }
+                ?.let { if (bounded) "about $it mi" else "$it mi" }
                 ?: "—",
             note = when {
                 metrics.fuelRangeMiles == null -> null
-                bounded -> "the gauge is on E"
+                bounded -> "gauge on E, counting down the reserve"
                 else -> "at this tank's economy"
             },
         )
@@ -386,7 +382,7 @@ private fun TankSection(
             ValueRow(
                 label = "Gauge reads E at",
                 value = "${metrics.fuelRangeToSenderZeroMiles} mi",
-                note = "the last $reserveMiles mi are reserve, which nothing measures",
+                note = "then $reserveMiles mi of reserve below E",
             )
         }
         if (metrics.rangeMpgUsed != null) {
@@ -394,52 +390,41 @@ private fun TankSection(
                 label = "Range is built on",
                 value = "%.1f mpg".format(metrics.rangeMpgUsed),
                 note = when {
-                    metrics.verifiedMpg != null -> "measured against %.1f gal of receipts"
+                    metrics.verifiedMpg != null -> "checked against %.1f gal of receipts"
                         .format(metrics.verifiedGallons)
                     metrics.lifetimeMiles >= 20 -> "this car's lifetime average"
                     else -> "the EPA rating, until this car has measured its own"
                 },
             )
         }
-        // What the pump receipts have taught, and how far apart they are. The spread is the
-        // honest width of every figure above it: a range of two hundred miles from fills
-        // scattered by three percent is two hundred give or take six, and a driver asking for
-        // the last mile deserves to be told which mile the measurement can actually see.
+        // What the receipts have done. The spread is the honest width of every figure above:
+        // receipts that disagree by two percent cannot give a range better than two percent.
+        val receipts = metrics.calibrationFillCount
         ValueRow(
-            label = "Sensors checked",
-            value = when {
-                metrics.calibrationFillCount == 0 -> "not yet"
-                else -> "%d fill%s".format(
-                    metrics.calibrationFillCount,
-                    if (metrics.calibrationFillCount == 1) "" else "s",
-                )
+            label = "Gauge measured",
+            value = when (receipts) {
+                0 -> "not yet"
+                1 -> "by 1 receipt"
+                else -> "by $receipts receipts"
             },
             note = when {
-                metrics.calibrationFillCount == 0 ->
-                    "log a fill-up below and the pump becomes the reference"
-                else -> buildString {
-                    val off = (metrics.fuelCorrectionFactor - 1.0) * 100
-                    append("fuel %+.1f%%".format(off))
+                receipts == 0 -> "add a receipt after your next fill"
+                metrics.calibrationSpreadPercent != null ->
+                    "they agree within %.1f%%".format(metrics.calibrationSpreadPercent)
+                else -> "gallons pumped against the gauge's rise"
+            },
+        )
+        if (metrics.fuelCorrectionFactor != 1.0 || metrics.distanceCorrectionFactor != 1.0) {
+            ValueRow(
+                label = "Sensor correction",
+                value = buildString {
+                    append("fuel %+.1f%%".format((metrics.fuelCorrectionFactor - 1.0) * 100))
                     if (metrics.distanceCorrectionFactor != 1.0) {
-                        append(", distance %+.1f%%".format((metrics.distanceCorrectionFactor - 1.0) * 100))
+                        append(", miles %+.1f%%".format((metrics.distanceCorrectionFactor - 1.0) * 100))
                     }
-                    metrics.calibrationSpreadPercent?.let { append(", spread ±%.1f%%".format(it)) }
-                }
-            },
-        )
-        // Whether the gallons-per-percent figure behind all of this was measured on this car
-        // or is still Honda's tank capacity divided by a hundred. It is the difference
-        // between a percentage that describes this sender and one that is the dashboard
-        // gauge plus a constant, and until now it was known only inside the app.
-        ValueRow(
-            label = "Tank measured",
-            value = if (metrics.tankCalibrated) "yes" else "not yet",
-            note = if (metrics.tankCalibrated) {
-                "from fuel this car burned"
-            } else {
-                "using the factory %.1f gal".format(CivicSpecs.FUEL_TANK_CAPACITY_GALLONS)
-            },
-        )
+                },
+            )
+        }
         Spacer(Modifier.height(8.dp))
     }
 
@@ -738,189 +723,260 @@ private fun priceAge(ageMillis: Long): String {
 }
 
 /**
- * Logging a fill-up, which is the only measurement in this app that comes from outside it.
+ * The receipt for the last fill-up, which can be added whenever it is to hand.
  *
- * Everything else on this screen is the car talking to itself: a mass airflow reading divided
- * by an assumed density, a road speed integrated over time, a float in a tank. All of it is
- * good and none of it was ever checked. The two numbers asked for here - what the pump charged
- * for, and the odometer - are the check, and they are the reason the range figure can be
- * trusted to a few miles rather than to a few tens of miles.
+ * The car notices a fill by itself - the gauge rises when the engine next starts - and records
+ * it with the gauge reading from before and after. This section only asks for the one number
+ * the car cannot know: the gallons on the receipt. It asks for it here, at the top of the
+ * screen, from the moment the fill is noticed until it is answered, so it can be typed in at
+ * home from the Costco app rather than at the pump.
  *
- * The "to the click" question is not a detail and is deliberately the one thing that cannot be
- * skipped. The whole method rests on the tank starting and finishing at the same level: fill
- * to the automatic shutoff twice and the gallons between them are the gallons burned, exactly.
- * Stop early and the receipt measures nothing except where the nozzle happened to stop, so a
- * part fill is logged and honestly refused rather than quietly averaged in.
+ * When no fill is waiting, it shows the last one and keeps the hand-logging path for a fill the
+ * car missed, folded away because it is rarely needed.
  */
 @Composable
-private fun FillLogSection(context: android.content.Context) {
-    var gallons by remember { mutableStateOf("") }
-    var odometer by remember { mutableStateOf("") }
-    var toShutoff by remember { mutableStateOf(true) }
-
+private fun ReceiptSection(context: android.content.Context) {
     val calibration by TelemetryState.calibration.collectAsStateWithLifecycle()
-    val pumpGallons = gallons.trim().toDoubleOrNull()
-    val odometerMiles = odometer.trim().toDoubleOrNull()
+    val pending = calibration.pendingReceipt(System.currentTimeMillis())
+    val last = calibration.fills.lastOrNull()
+    var handLog by remember { mutableStateOf(false) }
+    var amending by remember { mutableStateOf(false) }
 
-    SectionHeading("Just filled up?", null)
-    Text(
-        text = "The pump receipt is the reference every other fuel figure here is measured " +
-            "against. Two fills to the automatic shutoff are what it takes: whatever the pump " +
-            "put in the second time is what the engine burned in between, which is the one " +
-            "fuel measurement in this app that no sensor guessed at.",
-        color = CivicColors.Ink3,
-        fontSize = 12.5.sp,
-    )
-    Spacer(Modifier.height(14.dp))
-
-    EntryField(
-        label = "GALLONS ON THE PUMP",
-        value = gallons,
-        onChange = { gallons = it },
-        hint = "11.42",
-    )
-    Spacer(Modifier.height(12.dp))
-    EntryField(
-        label = "ODOMETER (OPTIONAL)",
-        value = odometer,
-        onChange = { odometer = it },
-        // Optional and worth explaining, because it corrects a different error from the
-        // gallons. The road-speed PID arrives in whole km/h and usually reads a little fast,
-        // so the miles this app counts are not quite the miles the car counts. Two odometer
-        // readings a tank apart measure that, and nothing else here can.
-        hint = "142380",
-    )
-    Spacer(Modifier.height(12.dp))
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { toShutoff = !toShutoff }
-            .padding(vertical = 10.dp),
-    ) {
-        Box(
-            Modifier
-                .width(18.dp)
-                .height(18.dp)
-                .background(
-                    if (toShutoff) CivicColors.Accent else Color.Transparent,
-                    RoundedCornerShape(3.dp),
-                )
-                .border(
-                    1.dp,
-                    if (toShutoff) CivicColors.Accent else CivicColors.Ink4,
-                    RoundedCornerShape(3.dp),
-                ),
+    if (pending != null) {
+        ReceiptCard(
+            title = "Add your fill-up receipt",
+            subtitle = buildString {
+                append("Filled up ").append(fillTime(pending.detectedAtMillis))
+                pending.levelAfter?.let { append(" · gauge rose to %.0f%%".format(it)) }
+            },
+            context = context,
+            amendLast = false,
+            onDone = {},
+            onSkip = { TelemetryService.skipReceipt(context) },
         )
-        Spacer(Modifier.width(12.dp))
-        Column {
-            Text("Filled to the automatic shutoff", color = CivicColors.Ink, fontSize = 14.sp)
+    } else if (amending && last != null) {
+        ReceiptCard(
+            title = "Correct the last receipt",
+            subtitle = "Filled up " + fillTime(last.detectedAtMillis),
+            context = context,
+            amendLast = true,
+            onDone = { amending = false },
+            onSkip = null,
+        )
+    } else if (handLog) {
+        ReceiptCard(
+            title = "Log a fill-up",
+            subtitle = "For a fill the car didn't notice. Save it before you drive off.",
+            context = context,
+            amendLast = false,
+            onDone = { handLog = false },
+            onSkip = null,
+        )
+        Text(
+            text = "No receipt? Start a new tank without one",
+            color = CivicColors.Ink3,
+            fontSize = 13.sp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable {
+                    TelemetryService.markFilled(context)
+                    handLog = false
+                }
+                .padding(vertical = 10.dp),
+        )
+        if (calibration.fills.isNotEmpty()) {
+            // Only after a new MAF sensor or different size tyres: either makes every stored
+            // fill a measurement of a car that no longer exists.
             Text(
-                text = if (toShutoff) {
-                    "This one can be measured."
-                } else {
-                    "A part fill. It still starts a new tank, and the next fill to the click " +
-                        "gets measured from it."
-                },
-                color = CivicColors.Ink3,
+                text = "New MAF sensor or tyre size? Clear the saved fill-ups",
+                color = CivicColors.Ink4,
                 fontSize = 12.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        TelemetryService.resetFuelCalibration(context)
+                        handLog = false
+                    }
+                    .padding(vertical = 10.dp),
             )
         }
-    }
-
-    Spacer(Modifier.height(10.dp))
-    val ready = pumpGallons != null && pumpGallons > 0
-    // A filled button, not a line of coloured text. As text it sat between two other lines of
-    // text that were also tappable, and at a pump nothing about it said "press here".
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(52.dp)
-            .background(
-                if (ready) CivicColors.Accent else CivicColors.Hairline,
-                RoundedCornerShape(14.dp),
+    } else {
+        SectionHeading("Last fill-up", null)
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.Bottom,
+        ) {
+            Text(
+                text = when {
+                    last == null -> "None yet. The car notices a fill by itself."
+                    last.pumpGallons != null ->
+                        fillTime(last.detectedAtMillis) + " · " + "%.2f gal".format(last.pumpGallons)
+                    else -> fillTime(last.detectedAtMillis) + " · no receipt"
+                },
+                color = CivicColors.Ink2,
+                fontSize = 14.sp,
+                modifier = Modifier.weight(1f),
             )
-            .then(
-                if (ready) {
-                    Modifier.clickable {
-                        TelemetryService.recordFill(
-                            context = context,
-                            pumpGallons = pumpGallons,
-                            filledToShutoff = toShutoff,
-                            odometerMiles = odometerMiles,
-                        )
-                        gallons = ""
-                        odometer = ""
-                    }
-                } else {
-                    Modifier
-                }
-            ),
-        contentAlignment = Alignment.Center,
-    ) {
+            if (last?.pumpGallons != null) {
+                Text(
+                    text = "Change",
+                    color = CivicColors.Accent,
+                    fontSize = 14.sp,
+                    modifier = Modifier
+                        .clickable { amending = true }
+                        .padding(start = 16.dp, top = 6.dp, bottom = 6.dp),
+                )
+            }
+        }
         Text(
-            text = if (ready) "Log this fill" else "Enter the gallons to log this fill",
-            color = if (ready) CivicColors.Ink else CivicColors.Ink4,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.SemiBold,
+            text = "Log a fill-up by hand",
+            color = CivicColors.Ink3,
+            fontSize = 13.sp,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { handLog = true }
+                .padding(vertical = 12.dp),
         )
     }
-    Spacer(Modifier.height(6.dp))
 
-    // The receipt-free path, kept because it is still the right answer sometimes: a fill
-    // somebody else paid for, or one the app missed while the adapter was elsewhere. It
-    // restarts the tank without claiming to have measured anything.
-    Text(
-        text = "Start a new tank without a receipt",
-        color = CivicColors.Ink2,
-        fontSize = 14.sp,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { TelemetryService.markFilled(context) }
-            .padding(vertical = 10.dp),
-    )
-
-    // What the tap did. The work happens in the service, which reported it to the dashboard's
-    // status line and nowhere else, so from here the button looked dead whether it had started
-    // a tank or refused to. A refusal is the more important of the two to be able to see: it
-    // means the car is not reporting a level, which is a thing to go and fix rather than a
-    // thing to tap again.
+    // What the last tap did. The work happens in the service, so without this the button
+    // would look dead whether it had saved the receipt or refused it.
     val feedback by TelemetryState.actionFeedback.collectAsStateWithLifecycle()
     feedback?.let { result ->
         LaunchedEffect(result.sequence) {
-            // Long enough to read standing at a pump, and a fill's answer is three sentences:
-            // the gallons read back, what they taught, and what became of the tank. Six
-            // seconds was sized for "Started a new tank at 93%" and is not enough for that.
-            delay(14_000)
+            delay(12_000)
             TelemetryState.clearActionFeedback(result.sequence)
         }
         Text(
             text = result.message,
             color = if (result.worked) CivicColors.Good else CivicColors.Warn,
             fontSize = 13.sp,
-            modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp),
-        )
-    }
-
-    if (calibration.samples.isNotEmpty()) {
-        Text(
-            text = "Clear the ${calibration.samples.size} logged fill-ups",
-            color = CivicColors.Ink3,
-            fontSize = 13.sp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { TelemetryService.resetFuelCalibration(context) }
-                .padding(vertical = 10.dp),
-        )
-        Text(
-            text = "Only after a new MAF sensor or a tyre size change - either makes every " +
-                "stored fill a measurement of a car that no longer exists.",
-            color = CivicColors.Ink4,
-            fontSize = 11.5.sp,
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
         )
     }
 }
+
+/** The receipt form: gallons, an optional odometer, and one button. */
+@Composable
+private fun ReceiptCard(
+    title: String,
+    subtitle: String,
+    context: android.content.Context,
+    amendLast: Boolean,
+    onDone: () -> Unit,
+    onSkip: (() -> Unit)?,
+) {
+    var gallons by remember { mutableStateOf("") }
+    var odometer by remember { mutableStateOf("") }
+    var toShutoff by remember { mutableStateOf(true) }
+    val pumpGallons = gallons.trim().toDoubleOrNull()
+    val odometerMiles = odometer.trim().toDoubleOrNull()
+
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .border(1.dp, CivicColors.Accent, RoundedCornerShape(14.dp))
+            .padding(16.dp),
+    ) {
+        Text(title, color = CivicColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(4.dp))
+        Text(subtitle, color = CivicColors.Ink3, fontSize = 13.sp)
+        Spacer(Modifier.height(14.dp))
+
+        Row(Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                EntryField(label = "GALLONS", value = gallons, onChange = { gallons = it }, hint = "10.90")
+            }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                // The odometer now, wherever "now" is. The app works back to the pump from the
+                // miles it has counted since, so it can be read at home with the receipt.
+                EntryField(label = "ODOMETER NOW", value = odometer, onChange = { odometer = it }, hint = "optional")
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { toShutoff = !toShutoff }
+                .padding(vertical = 8.dp),
+        ) {
+            Box(
+                Modifier
+                    .width(18.dp)
+                    .height(18.dp)
+                    .background(
+                        if (toShutoff) CivicColors.Accent else Color.Transparent,
+                        RoundedCornerShape(3.dp),
+                    )
+                    .border(
+                        1.dp,
+                        if (toShutoff) CivicColors.Accent else CivicColors.Ink4,
+                        RoundedCornerShape(3.dp),
+                    ),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text("Filled until the pump clicked off", color = CivicColors.Ink2, fontSize = 13.sp)
+        }
+        Spacer(Modifier.height(8.dp))
+
+        val ready = pumpGallons != null && pumpGallons > 0
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(52.dp)
+                .background(
+                    if (ready) CivicColors.Accent else CivicColors.Hairline,
+                    RoundedCornerShape(14.dp),
+                )
+                .then(
+                    if (ready) {
+                        Modifier.clickable {
+                            TelemetryService.recordFill(
+                                context = context,
+                                pumpGallons = pumpGallons,
+                                filledToShutoff = toShutoff,
+                                odometerMiles = odometerMiles,
+                                amendLast = amendLast,
+                            )
+                            gallons = ""
+                            odometer = ""
+                            onDone()
+                        }
+                    } else {
+                        Modifier
+                    }
+                ),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(
+                text = if (ready) "Save" else "Enter the gallons",
+                color = if (ready) CivicColors.Ink else CivicColors.Ink4,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+
+        onSkip?.let { skip ->
+            Text(
+                text = "No receipt for this one",
+                color = CivicColors.Ink3,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { skip() }
+                    .padding(top = 12.dp, bottom = 2.dp),
+            )
+        }
+    }
+}
+
+/** "Wed 5:02 PM", which is how a driver remembers a fill. */
+private fun fillTime(millis: Long): String =
+    java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.US).format(java.util.Date(millis))
 
 /** A plain number entry, hand-rolled to match the rest of the screen. */
 @Composable

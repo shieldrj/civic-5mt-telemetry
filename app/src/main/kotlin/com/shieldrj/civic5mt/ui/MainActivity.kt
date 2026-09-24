@@ -601,7 +601,7 @@ private fun LiveReadings(
         "Battery / charging" to metrics.batteryVoltage?.takeIf { live }?.let { "%.2f V".format(it) },
         "Fuel level" to metrics.fuelLevelPercent?.let { "%.0f %%".format(it) },
         "Range" to metrics.fuelRangeMiles?.let {
-            if (metrics.tankBelowSenderZero) "under $it mi to empty" else "$it mi to empty"
+            if (metrics.tankBelowSenderZero) "about $it mi to empty" else "$it mi to empty"
         },
         "Tank economy" to metrics.tankMpg?.let { "%.1f mpg".format(it) },
         "Trip" to if (live) "%.1f mi · %.1f mpg".format(trip.distanceMiles, trip.avgMpg) else null,

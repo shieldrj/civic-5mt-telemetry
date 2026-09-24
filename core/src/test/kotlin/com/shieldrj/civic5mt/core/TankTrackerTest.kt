@@ -407,6 +407,52 @@ class TankTrackerTest {
         }
 
         @Test
+        fun `A closed tank is handed over once, with the level it was run down to`() {
+            // What a receipt is later compared with. It has to be taken as the tank closes,
+            // because the counters it comes from are reset in the same step.
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+            driveDown(t, clock, 90.0, 30.0, 0.142, mpg = 33.0)
+            val miles = t.get().rawMilesSinceFill
+
+            t.markFilled(null)
+
+            val closed = assertNotNull(t.takeClosedTank())
+            assertEquals(30.0, closed.levelBefore!!, 1.0)
+            assertEquals(miles, closed.rawMiles, 1e-9)
+            assertTrue(closed.observedDropPercent > 50.0, "got $closed")
+            assertNull(t.takeClosedTank(), "and only once")
+        }
+
+        @Test
+        fun `A pump measurement outranks the tracker's own`() {
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+            driveDown(t, clock, 93.0, 30.0, 0.142, mpg = 33.0)
+
+            t.applyPumpCalibration(0.125)
+
+            assertEquals(0.125, t.get().gallonsPerPercent, 1e-9)
+            assertTrue(t.get().calibrated)
+            // And it is still the figure after the next fill, rather than the MAF's.
+            t.markFilled(93.0)
+            assertEquals(0.125, t.get().gallonsPerPercent, 1e-9)
+        }
+
+        @Test
+        fun `A pump measurement that cannot fit the tank is refused`() {
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+            driveDown(t, clock, 93.0, 30.0, 0.142, mpg = 33.0)
+            val before = t.get().gallonsPerPercent
+
+            // 0.18 per percent across a 93 full mark is 16.7 gallons: more than the tank holds.
+            t.applyPumpCalibration(0.18)
+
+            assertEquals(before, t.get().gallonsPerPercent)
+        }
+
+        @Test
         fun `A tank closed with no reading takes its level from the next one`() {
             val clock = MutableClock(1_700_000_000_000)
             val t = TankTracker(InMemoryTankStore(), clock)
@@ -703,26 +749,46 @@ class TankTrackerTest {
             (CivicSpecs.FUEL_TANK_CAPACITY_GALLONS - reserveGallons) / fullMark
 
         @Test
-        fun `The figures stop moving once the sender is on its stop`() {
-            // Which is the reason the flag exists. Half an hour of driving on the reserve
-            // changes neither the gallons nor the range, because neither is being measured
-            // any more - and a screen printing them plainly would be claiming otherwise.
+        fun `The reserve counts down from fuel burned once the gauge is on E`() {
+            // It used to freeze here: the gauge stops moving at E, so the gallons and the range
+            // sat still for thirty miles. The fuel burned since E is counted instead, so the
+            // figure goes on down - and the flag still tells the screens it is an estimate.
             val onTheStop = TankState(
                 fillTimestamp = 1,
                 smoothedLevelPercent = 0.0,
                 gallonsPerPercent = senderWithReserve(reserveGallons = 1.0),
                 fullMarkPercent = 93.0,
             )
+            val laterOn = onTheStop.copy(gallonsBelowFloor = 0.4)
 
-            val gallonsBefore = onTheStop.gallonsRemaining
-            val rangeBefore = rangeMiles(onTheStop, lifetimeMpg = 32.0)
-            // Twenty more miles of driving. The sender cannot go below zero, so nothing about
-            // the state that feeds these two figures changes.
-            val laterOn = onTheStop.copy(milesSinceFill = onTheStop.milesSinceFill + 20.0)
+            assertEquals(onTheStop.gallonsRemaining - 0.4, laterOn.gallonsRemaining, 1e-9)
+            assertTrue(rangeMiles(laterOn, lifetimeMpg = 32.0) < rangeMiles(onTheStop, lifetimeMpg = 32.0))
+            assertTrue(laterOn.belowSenderZero, "and the screens are told it is an estimate")
+        }
 
-            assertEquals(gallonsBefore, laterOn.gallonsRemaining)
-            assertEquals(rangeBefore, rangeMiles(laterOn, lifetimeMpg = 32.0))
-            assertTrue(laterOn.belowSenderZero, "and the screens are not told")
+        @Test
+        fun `The count stops at empty rather than going negative`() {
+            val dry = TankState(
+                fillTimestamp = 1,
+                smoothedLevelPercent = 0.0,
+                gallonsPerPercent = senderWithReserve(reserveGallons = 1.0),
+                fullMarkPercent = 93.0,
+                gallonsBelowFloor = 3.0,
+            )
+            assertEquals(0.0, dry.gallonsRemaining)
+        }
+
+        @Test
+        fun `Only fuel burned on E is counted against the reserve`() {
+            val t = TankTracker(clock = MutableClock(1_700_000_000_000))
+            t.record(levelPercent = 30.0, milesStep = 0.02, gallonsStep = 0.001, dtSec = 1.0)
+            repeat(100) { t.record(30.0, 0.02, 0.001, 1.0) }
+            assertEquals(0.0, t.get().gallonsBelowFloor)
+
+            // Onto E. The smoothed level takes a few minutes to follow the sender down.
+            repeat(2_000) { t.record(0.0, 0.02, 0.001, 1.0) }
+            assertTrue(t.get().gallonsBelowFloor > 0.0, "got ${t.get()}")
+            assertTrue(t.get().gallonsBelowFloor < 2_000 * 0.001, "counted only once on E")
         }
 
         @Test

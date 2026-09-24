@@ -11,7 +11,7 @@ import com.shieldrj.civic5mt.core.ClutchProfileStore
 import com.shieldrj.civic5mt.core.ClutchSlipIncident
 import com.shieldrj.civic5mt.core.ClutchWearBreakdown
 import com.shieldrj.civic5mt.core.DegradationBreakdown
-import com.shieldrj.civic5mt.core.FillSample
+import com.shieldrj.civic5mt.core.FillRecord
 import com.shieldrj.civic5mt.core.FuelBlendId
 import com.shieldrj.civic5mt.core.FuelCalibrationState
 import com.shieldrj.civic5mt.core.FuelCalibrationStore
@@ -346,6 +346,10 @@ internal fun tankToJson(state: TankState): JSONObject = JSONObject()
     .put("fullMarkPercent", state.fullMarkPercent)
     .put("observedDropPercent", state.observedDropPercent)
     .put("observedGallons", state.observedGallons)
+    .put("rawMilesSinceFill", state.rawMilesSinceFill)
+    .put("rawGallonsSinceFill", state.rawGallonsSinceFill)
+    .put("observedRawGallons", state.observedRawGallons)
+    .put("gallonsBelowFloor", state.gallonsBelowFloor)
 
 internal fun parseTank(j: JSONObject): TankState = TankState(
     fillTimestamp = j.optLong("fillTimestamp", 0L),
@@ -373,6 +377,13 @@ internal fun parseTank(j: JSONObject): TankState = TankState(
     // the measurement properly.
     observedDropPercent = j.optDouble("observedDropPercent", 0.0),
     observedGallons = j.optDouble("observedGallons", 0.0),
+    // A record from before the raw figures existed takes the corrected ones. Exact rather
+    // than approximate: nothing corrected the sensors before receipts were attached to fills,
+    // so every factor in effect across that tank was one.
+    rawMilesSinceFill = j.optDouble("rawMilesSinceFill", j.optDouble("milesSinceFill", 0.0)),
+    rawGallonsSinceFill = j.optDouble("rawGallonsSinceFill", j.optDouble("gallonsUsedSinceFill", 0.0)),
+    observedRawGallons = j.optDouble("observedRawGallons", j.optDouble("observedGallons", 0.0)),
+    gallonsBelowFloor = j.optDouble("gallonsBelowFloor", 0.0),
 )
 
 // ── What the pump receipts taught ────────────────────────────────────────────────
@@ -403,57 +414,67 @@ class PrefsFuelCalibrationStore(context: Context) : FuelCalibrationStore {
 }
 
 internal fun fuelCalibrationToJson(state: FuelCalibrationState): JSONObject {
-    val samples = JSONArray()
-    for (s in state.samples) {
-        samples.put(
+    val fills = JSONArray()
+    for (f in state.fills) {
+        fills.put(
             JSONObject()
-                .put("timestampMillis", s.timestampMillis)
-                .put("pumpGallons", s.pumpGallons)
-                .put("measuredGallons", s.measuredGallons)
-                .put("measuredMiles", s.measuredMiles)
-                .put("fuelFactorInEffect", s.fuelFactorInEffect)
-                .put("distanceFactorInEffect", s.distanceFactorInEffect)
-                // Written as null rather than as zero. Zero odometer miles is a claim that the
-                // car did not move, and the pooled distance correction would then divide by a
-                // total that a skipped reading had quietly dragged down.
-                .put("odometerMiles", s.odometerMiles ?: JSONObject.NULL),
+                .put("detectedAtMillis", f.detectedAtMillis)
+                // Absent figures are written as null rather than zero. A zero "before" level is
+                // a claim the tank was on E, and a zero odometer a claim the car never moved.
+                .put("levelBefore", f.levelBefore ?: JSONObject.NULL)
+                .put("levelAfter", f.levelAfter ?: JSONObject.NULL)
+                .put("pumpGallons", f.pumpGallons ?: JSONObject.NULL)
+                .put("filledToShutoff", f.filledToShutoff)
+                .put("odometerAtFill", f.odometerAtFill ?: JSONObject.NULL)
+                .put("receiptSkipped", f.receiptSkipped)
+                .put("spanRawMiles", f.spanRawMiles)
+                .put("spanRawGallons", f.spanRawGallons)
+                .put("spanObservedDropPercent", f.spanObservedDropPercent)
+                .put("spanObservedRawGallons", f.spanObservedRawGallons),
         )
     }
     return JSONObject()
-        .put("samples", samples)
-        .put("lastFillWasFull", state.lastFillWasFull)
-        .put("lastOdometerMiles", state.lastOdometerMiles ?: JSONObject.NULL)
+        .put("fills", fills)
         // Derived, and written only so a human reading the file can see what it concluded.
-        // Both are recomputed from the samples on load, the same way lifetime MPG is.
+        // Recomputed from the fills on load.
+        .put("gallonsPerPercent", state.pumpGallonsPerPercent ?: JSONObject.NULL)
         .put("fuelCorrectionFactor", state.fuelCorrectionFactor)
         .put("distanceCorrectionFactor", state.distanceCorrectionFactor)
 }
 
+/**
+ * Reads the fill record back.
+ *
+ * A file from the earlier design holds "samples" instead of "fills" and reads as no fills at
+ * all. That loses nothing a receipt could still use: those samples were matched against the
+ * app's own fuel count, which is the comparison this design replaced, and none of them recorded
+ * where the gauge stood before the fill.
+ */
 internal fun parseFuelCalibration(j: JSONObject): FuelCalibrationState {
-    val array = j.optJSONArray("samples") ?: JSONArray()
-    val samples = buildList {
+    val array = j.optJSONArray("fills") ?: JSONArray()
+    fun JSONObject.nullableDouble(key: String): Double? =
+        if (!has(key) || isNull(key)) null else optDouble(key).takeIf { it.isFinite() }
+    val fills = buildList {
         for (i in 0 until array.length()) {
             val o = array.optJSONObject(i) ?: continue
             add(
-                FillSample(
-                    timestampMillis = o.optLong("timestampMillis", 0L),
-                    pumpGallons = o.optDouble("pumpGallons", 0.0),
-                    measuredGallons = o.optDouble("measuredGallons", 0.0),
-                    measuredMiles = o.optDouble("measuredMiles", 0.0),
-                    // One rather than zero on an old or damaged record: a factor of zero would
-                    // make rawGallons infinite and take the whole correction with it.
-                    fuelFactorInEffect = o.optDouble("fuelFactorInEffect", 1.0).takeIf { it > 0 } ?: 1.0,
-                    distanceFactorInEffect = o.optDouble("distanceFactorInEffect", 1.0).takeIf { it > 0 } ?: 1.0,
-                    odometerMiles = if (o.isNull("odometerMiles")) null else o.optDouble("odometerMiles"),
+                FillRecord(
+                    detectedAtMillis = o.optLong("detectedAtMillis", 0L),
+                    levelBefore = o.nullableDouble("levelBefore"),
+                    levelAfter = o.nullableDouble("levelAfter"),
+                    pumpGallons = o.nullableDouble("pumpGallons"),
+                    filledToShutoff = o.optBoolean("filledToShutoff", true),
+                    odometerAtFill = o.nullableDouble("odometerAtFill"),
+                    receiptSkipped = o.optBoolean("receiptSkipped", false),
+                    spanRawMiles = o.optDouble("spanRawMiles", 0.0),
+                    spanRawGallons = o.optDouble("spanRawGallons", 0.0),
+                    spanObservedDropPercent = o.optDouble("spanObservedDropPercent", 0.0),
+                    spanObservedRawGallons = o.optDouble("spanObservedRawGallons", 0.0),
                 ),
             )
         }
     }
-    return FuelCalibrationState(
-        samples = samples,
-        lastFillWasFull = j.optBoolean("lastFillWasFull", false),
-        lastOdometerMiles = if (j.isNull("lastOdometerMiles")) null else j.optDouble("lastOdometerMiles"),
-    )
+    return FuelCalibrationState(fills = fills)
 }
 
 // ── The adapter last used ────────────────────────────────────────────────────────
@@ -791,7 +812,7 @@ fun restoreRecords(context: Context, backup: JSONObject): List<String> {
         runCatching { parseFuelCalibration(JSONObject(backup.getString(KEY_FUEL_CALIBRATION))) }
             .getOrNull()?.let {
                 PrefsFuelCalibrationStore(context).save(it)
-                messages += "${it.samples.size} logged fill-ups"
+                messages += "${it.fills.size} logged fill-ups"
             }
     }
 

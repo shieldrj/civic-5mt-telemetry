@@ -1,165 +1,125 @@
 package com.shieldrj.civic5mt.service
 
-import com.shieldrj.civic5mt.core.FillOutcome
-import com.shieldrj.civic5mt.core.FillRejection
-import com.shieldrj.civic5mt.core.FillSample
+import com.shieldrj.civic5mt.core.FillRecord
 import com.shieldrj.civic5mt.core.FuelCalibrationState
+import com.shieldrj.civic5mt.core.ReceiptOutcome
+import com.shieldrj.civic5mt.core.ReceiptRefusal
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Test
 import kotlin.test.assertContains
-import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * What the driver is told after logging a fill.
+ * What the driver is told after saving a receipt.
  *
- * Worth its own file, because the fault this closes was entirely in the telling. The fill was
- * recorded, the correction was right, and the reply went to a status line drawn on a different
- * screen - so tapping the button on the Fuel tab was indistinguishable from tapping a dead
- * one. A silent success and a silent refusal look identical, and the refusal is the one that
- * needs something done about it.
+ * Worth its own file because this text is the whole visible result of typing a number in. The
+ * first version answered a correctly stored receipt in the warning colour, and a driver who had
+ * done everything right read it as a refusal.
  */
 class FillFeedbackTest {
 
-    /** A tank measured five percent under the pump: ten gallons burned, ten and a half sold. */
-    private fun accepted(fills: Int = 1): FillOutcome.Accepted {
-        val samples = List(fills) {
-            FillSample(
-                timestampMillis = 1_700_000_000_000 + it,
-                pumpGallons = 10.5,
-                measuredGallons = 10.0,
-                measuredMiles = 350.0,
-                fuelFactorInEffect = 1.0,
-                distanceFactorInEffect = 1.0,
-            )
-        }
-        return FillOutcome.Accepted(
-            sample = samples.last(),
-            state = FuelCalibrationState(samples = samples, lastFillWasFull = true),
-        )
-    }
+    /** A fill the car saw from 20% to 93%, with a receipt that measured the gauge. */
+    private val measured = FillRecord(
+        detectedAtMillis = 1_700_000_000_000,
+        levelBefore = 20.0,
+        levelAfter = 93.0,
+        pumpGallons = 9.125,
+    )
 
-    private fun rejected(reason: FillRejection) =
-        FillOutcome.Rejected(reason, FuelCalibrationState())
+    private fun saved(record: FillRecord, others: List<FillRecord> = emptyList()) =
+        ReceiptOutcome.Saved(record, FuelCalibrationState(fills = others + record))
+
+    private fun message(
+        outcome: ReceiptOutcome,
+        pump: Double = 9.125,
+        before: FuelCalibrationState = FuelCalibrationState(),
+        odometerGiven: Boolean = true,
+    ) = receiptFeedback(outcome, pump, before, odometerGiven)
 
     @Test
     @DisplayName("reads the gallons back, so the tap is visibly the number that was typed")
     fun echoesThePump() {
-        assertContains(fillFeedback(accepted(), pumpGallons = 11.42, levelPercent = 93.0), "11.42 gal")
+        assertContains(message(saved(measured), pump = 10.9), "10.90 gal saved")
     }
 
     @Test
-    @DisplayName("says how far off the fuel figure is, and over how many fills")
-    fun reportsTheCorrection() {
-        val message = fillFeedback(accepted(fills = 2), pumpGallons = 10.5, levelPercent = 93.0)
-
-        assertContains(message, "5.0% under the pump")
-        assertContains(message, "over 2 fills")
+    @DisplayName("says the gauge is now measured by the pump after the first receipt")
+    fun firstReceiptMeasuresTheGauge() {
+        assertContains(message(saved(measured)), "The fuel gauge is now measured by the pump.")
     }
 
     @Test
-    @DisplayName("counts a single fill in the singular")
-    fun singularFill() {
-        assertContains(fillFeedback(accepted(fills = 1), 10.5, 93.0), "over 1 fill.")
+    @DisplayName("counts the receipts behind the gauge after that")
+    fun countsReceipts() {
+        val earlier = measured.copy(detectedAtMillis = 1)
+        val msg = message(
+            saved(measured, others = listOf(earlier)),
+            before = FuelCalibrationState(fills = listOf(earlier)),
+        )
+        assertContains(msg, "measured from 2 receipts")
     }
 
     @Test
-    @DisplayName("names where the new tank started when the car is reporting a level")
-    fun saysWhereTheTankStarted() {
-        assertContains(fillFeedback(accepted(), 11.42, 93.0), "New tank started at 93%")
+    @DisplayName("tells a driver at the pump that the gauge is measured once the car starts")
+    fun waitingForTheRise() {
+        val msg = message(saved(measured.copy(levelAfter = null)))
+        assertContains(msg, "once you start the car")
     }
 
     @Test
-    @DisplayName("says the level is still to come when the car is asleep at the pump")
-    fun saysTheLevelIsPending() {
-        // The ordinary case, and the one that used to produce no message at all: the receipt
-        // is typed in with the ignition off, so there is no sender reading to report.
-        val message = fillFeedback(accepted(), pumpGallons = 11.42, levelPercent = null)
-
-        assertContains(message, "New tank started.")
-        assertContains(message, "when the car next reports one")
+    @DisplayName("explains a fill whose starting level the car never saw")
+    fun noBeforeLevel() {
+        val msg = message(saved(measured.copy(levelBefore = null)))
+        assertContains(msg, "didn't see the gauge before this fill")
     }
 
     @Test
-    @DisplayName("gives each refusal its own reason, and tells the driver about the tank anyway")
-    fun everyRefusalExplainsItself() {
-        val messages = FillRejection.entries.associateWith {
-            fillFeedback(rejected(it), pumpGallons = 11.42, levelPercent = null)
-        }
-
-        // Distinct, because two refusals that read alike are one refusal as far as the driver
-        // is concerned - and these six want six different things done next.
-        assertEquals(FillRejection.entries.size, messages.values.distinct().size)
-        messages.forEach { (reason, message) ->
-            assertTrue(message.length > 40, "$reason: $message")
-            // The tank restarts whatever the calibration made of the receipt, and that is the
-            // half that moves the range figure.
-            assertContains(message, "New tank started", message = reason.toString())
-        }
+    @DisplayName("explains a fill too small to measure")
+    fun tooSmall() {
+        val msg = message(saved(measured.copy(levelBefore = 80.0, pumpGallons = 1.6)), pump = 1.6)
+        assertContains(msg, "Too small a fill")
     }
 
     @Test
-    @DisplayName("does not read a typo back as logged")
-    fun doesNotClaimATypoWasLogged() {
-        // 114.2 for 11.42, which is the slip this rejection exists for. It was not used, and
-        // "logged" would tell the driver it was.
-        val message = fillFeedback(rejected(FillRejection.IMPLAUSIBLE_PUMP_GALLONS), 114.2, null)
+    @DisplayName("does not read a typo back as saved")
+    fun typoIsNotSaved() {
+        val msg = message(
+            ReceiptOutcome.Refused(ReceiptRefusal.IMPLAUSIBLE_PUMP_GALLONS, FuelCalibrationState()),
+            pump = 114.2,
+        )
+        assertContains(msg, "114.20 gal")
+        assertFalse(msg.contains("gal saved"), msg)
+        assertContains(msg, "not saved")
+    }
 
-        assertContains(message, "114.20 gal")
-        assertFalse(message.contains("logged"), message)
+    @Test
+    @DisplayName("asks for the odometer only when the fill has none")
+    fun asksForTheOdometer() {
+        assertContains(message(saved(measured), odometerGiven = false), "Add the odometer")
+        assertFalse(message(saved(measured), odometerGiven = true).contains("odometer"))
+        val withOdometer = measured.copy(odometerAtFill = 100_000.0)
+        assertFalse(message(saved(withOdometer), odometerGiven = false).contains("odometer"))
     }
 
     @Test
     @DisplayName("leaves no format specifier unfilled, in any outcome")
     fun noRawSpecifiersSurvive() {
-        // The gallons are interpolated into a template that is then handed to format(), so a
-        // specifier on the wrong side of that would reach a pump as "%.1f" or throw there.
-        val outcomes = FillRejection.entries.map { rejected(it) as FillOutcome } +
-            listOf(accepted(fills = 1), accepted(fills = 6))
-
+        val outcomes = listOf(
+            saved(measured),
+            saved(measured.copy(levelAfter = null)),
+            saved(measured.copy(levelBefore = null)),
+            saved(measured.copy(levelBefore = 80.0)),
+            ReceiptOutcome.Refused(ReceiptRefusal.IMPLAUSIBLE_PUMP_GALLONS, FuelCalibrationState()),
+        )
         outcomes.forEach { outcome ->
-            listOf(null, 93.0).forEach { level ->
-                val message = fillFeedback(outcome, pumpGallons = 11.42, levelPercent = level)
-                listOf("%.1f", "%.2f", "%s", "%d").forEach { specifier ->
-                    assertFalse(message.contains(specifier), "$specifier in: $message")
+            listOf(true, false).forEach { odo ->
+                val msg = message(outcome, odometerGiven = odo)
+                listOf("%.1f", "%.2f", "%s", "%d").forEach { spec ->
+                    assertFalse(msg.contains(spec), "$spec in: $msg")
                 }
+                assertTrue(msg.length > 20, msg)
             }
         }
-    }
-
-    @Test
-    @DisplayName("a first receipt reads as saved, and is shown as kept rather than refused")
-    fun firstFillIsSavedNotRefused() {
-        // The reported fault: 10.9 gallons typed in, stored correctly as the start of the next
-        // span, and answered in the warning colour, which read as the app refusing it.
-        val outcome = rejected(FillRejection.NO_FULL_FILL_BASELINE)
-        val message = fillFeedback(outcome, pumpGallons = 10.9, levelPercent = null)
-
-        assertContains(message, "10.90 gal saved as your starting fill")
-        assertTrue(fillWasTaken(outcome))
-    }
-
-    @Test
-    @DisplayName("keeps the warning colour for the outcomes that need something checked")
-    fun warnsOnlyWhenSomethingIsWrong() {
-        assertTrue(fillWasTaken(accepted()))
-        assertTrue(fillWasTaken(rejected(FillRejection.NOT_FILLED_TO_SHUTOFF)))
-        assertTrue(fillWasTaken(rejected(FillRejection.SPAN_TOO_SHORT)))
-        assertFalse(fillWasTaken(rejected(FillRejection.IMPLAUSIBLE_PUMP_GALLONS)))
-        assertFalse(fillWasTaken(rejected(FillRejection.NO_MEASUREMENT)))
-        assertFalse(fillWasTaken(rejected(FillRejection.IMPLAUSIBLE_RATIO)))
-    }
-
-    @Test
-    @DisplayName("asks for the odometer when a kept fill arrived without one")
-    fun asksForTheOdometer() {
-        val baseline = rejected(FillRejection.NO_FULL_FILL_BASELINE)
-
-        assertContains(fillFeedback(baseline, 10.9, null, odometerGiven = false), "Add the odometer")
-        assertFalse(fillFeedback(baseline, 10.9, null, odometerGiven = true).contains("odometer"))
-        // Not on a typo: the fill was not kept, so asking for more detail about it is noise.
-        val typo = fillFeedback(rejected(FillRejection.IMPLAUSIBLE_PUMP_GALLONS), 114.2, null, odometerGiven = false)
-        assertFalse(typo.contains("odometer"), typo)
     }
 }
