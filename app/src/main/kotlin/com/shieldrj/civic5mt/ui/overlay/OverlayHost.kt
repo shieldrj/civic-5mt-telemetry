@@ -3,6 +3,7 @@ package com.shieldrj.civic5mt.ui.overlay
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
@@ -10,6 +11,7 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
+import android.widget.TextView
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.ComposeView
 import androidx.lifecycle.Lifecycle
@@ -44,7 +46,7 @@ class OverlayHost(
     private val content: @Composable () -> Unit,
     private val onTap: (() -> Unit)? = null,
     private val onLongPress: (() -> Unit)? = null,
-    /** Tapping the card's top-right corner, where [HudContent] draws the close cross. */
+    /** Dropping the bubble on the cross that appears at the bottom of the screen mid-drag. */
     private val onClose: (() -> Unit)? = null,
 ) : LifecycleOwner, ViewModelStoreOwner, SavedStateRegistryOwner {
 
@@ -131,7 +133,7 @@ class OverlayHost(
                 onTap = onTap,
                 onLongPress = onLongPress,
                 onClose = onClose,
-                closeTargetPx = CLOSE_TARGET_DP * context.resources.displayMetrics.density,
+                dismiss = DismissTarget(context, windowManager),
             )
         )
 
@@ -194,13 +196,13 @@ class OverlayHost(
     /**
      * Drags the window, and tells a tap from a long-press from a drag.
      *
-     * The distinctions matter because the card does three jobs: it can be moved out of the
-     * way, tapping it opens the app on the Fuel screen - the fastest path to logging a fill-up
-     * while standing at the pump - and long-pressing it cycles its light/dark look, which is
-     * how it stays matched to whatever theme Google Maps has picked for itself. A press that
-     * never travelled beyond the touch slop is a tap or a long-press depending on how long it
-     * was held; anything that travelled was a drag, and its final position is what gets
-     * remembered.
+     * The distinctions matter because the bubble does four jobs: it can be moved out of the
+     * way, tapping it opens the app on the Fuel screen, long-pressing it cycles its light/dark
+     * look to match whatever theme Google Maps has picked, and dragging it onto the cross that
+     * appears at the bottom of the screen closes it - the pattern Android's chat bubbles use,
+     * because a circle has no corner to put a close button in. A press that never travelled
+     * beyond the touch slop is a tap or a long-press depending on how long it was held;
+     * anything that travelled was a drag.
      */
     private class DragHandler(
         private val windowManager: WindowManager,
@@ -209,7 +211,7 @@ class OverlayHost(
         private val onTap: (() -> Unit)?,
         private val onLongPress: (() -> Unit)?,
         private val onClose: (() -> Unit)?,
-        private val closeTargetPx: Float,
+        private val dismiss: DismissTarget,
     ) : View.OnTouchListener {
         private var initialX = 0
         private var initialY = 0
@@ -217,7 +219,6 @@ class OverlayHost(
         private var touchY = 0f
         private var downAt = 0L
         private var dragged = false
-        private var startedOnClose = false
 
         override fun onTouch(v: View, event: MotionEvent): Boolean = when (event.action) {
             MotionEvent.ACTION_DOWN -> {
@@ -227,34 +228,126 @@ class OverlayHost(
                 touchY = event.rawY
                 downAt = System.currentTimeMillis()
                 dragged = false
-                // Decided on the way down, not the way up, so that sliding off the cross
-                // before lifting cannot turn a miss into a dismissal.
-                startedOnClose = event.x >= v.width - closeTargetPx && event.y <= closeTargetPx
                 true
             }
             MotionEvent.ACTION_MOVE -> {
                 val dx = event.rawX - touchX
                 val dy = event.rawY - touchY
-                if (dx * dx + dy * dy > TOUCH_SLOP_PX * TOUCH_SLOP_PX) dragged = true
+                if (!dragged && dx * dx + dy * dy > TOUCH_SLOP_PX * TOUCH_SLOP_PX) {
+                    dragged = true
+                    if (onClose != null) dismiss.show()
+                }
                 if (dragged) {
                     params.x = initialX + dx.roundToInt()
                     params.y = initialY + dy.roundToInt()
                     runCatching { windowManager.updateViewLayout(v, params) }
+                    dismiss.setHot(dismiss.contains(event.rawX, event.rawY))
                 }
                 true
             }
             MotionEvent.ACTION_UP -> {
+                val dropped = dragged && onClose != null && dismiss.contains(event.rawX, event.rawY)
+                dismiss.hide()
                 when {
+                    dropped -> {
+                        // Put it back where it was before the drag, so the next time it
+                        // appears it is not sitting on top of the cross.
+                        params.x = initialX
+                        params.y = initialY
+                        runCatching { windowManager.updateViewLayout(v, params) }
+                        onClose?.invoke()
+                    }
                     dragged -> onMoved(params.x, params.y)
-                    // Before the long-press check, so that resting a thumb on the cross
-                    // dismisses the card rather than cycling its theme.
-                    startedOnClose && onClose != null -> onClose.invoke()
                     System.currentTimeMillis() - downAt >= LONG_PRESS_MS -> onLongPress?.invoke()
                     else -> onTap?.invoke()
                 }
                 true
             }
+            MotionEvent.ACTION_CANCEL -> {
+                dismiss.hide()
+                true
+            }
             else -> false
+        }
+    }
+
+    /**
+     * The cross at the bottom of the screen that a dragged bubble can be dropped on to close.
+     *
+     * A plain view in a window of its own, shown only while a drag is under way. It takes no
+     * touches - the drag keeps going to the bubble - and grows when the finger is over it, so
+     * it is plain that letting go will close the bubble.
+     */
+    private class DismissTarget(
+        private val context: Context,
+        private val windowManager: WindowManager,
+    ) {
+        private val density = context.resources.displayMetrics.density
+        private var view: TextView? = null
+        private var hot = false
+
+        private val idle = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(0xDD202124.toInt())
+        }
+        private val armed = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(0xFFD93025.toInt())
+        }
+
+        fun show() {
+            if (view != null) return
+            val size = (TARGET_DP * density).roundToInt()
+            val target = TextView(context).apply {
+                text = "✕"
+                textSize = 22f
+                gravity = Gravity.CENTER
+                setTextColor(android.graphics.Color.WHITE)
+                background = idle
+            }
+            val lp = WindowManager.LayoutParams(
+                size,
+                size,
+                overlayWindowType(),
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                PixelFormat.TRANSLUCENT,
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                y = (TARGET_MARGIN_DP * density).roundToInt()
+            }
+            runCatching { windowManager.addView(target, lp) }
+                .onSuccess { view = target }
+                .onFailure { Log.w(TAG, "Could not show the close target", it) }
+        }
+
+        fun hide() {
+            view?.let { runCatching { windowManager.removeView(it) } }
+            view = null
+            hot = false
+        }
+
+        /** Whether a finger at this screen position is over the target, generously. */
+        fun contains(rawX: Float, rawY: Float): Boolean {
+            val v = view ?: return false
+            if (v.width == 0) return false
+            val at = IntArray(2)
+            v.getLocationOnScreen(at)
+            val cx = at[0] + v.width / 2f
+            val cy = at[1] + v.height / 2f
+            val r = CATCH_RADIUS_DP * density
+            val dx = rawX - cx
+            val dy = rawY - cy
+            return dx * dx + dy * dy <= r * r
+        }
+
+        fun setHot(over: Boolean) {
+            if (over == hot) return
+            hot = over
+            val v = view ?: return
+            v.background = if (over) armed else idle
+            val scale = if (over) 1.25f else 1f
+            v.animate().scaleX(scale).scaleY(scale).setDuration(120).start()
         }
     }
 
@@ -287,15 +380,14 @@ class OverlayHost(
         /** Holding still this long is a long-press, not a tap. */
         private const val LONG_PRESS_MS = 400L
 
+        /** The close target's size, and how far above the bottom edge it sits. */
+        private const val TARGET_DP = 56f
+        private const val TARGET_MARGIN_DP = 72f
+
         /**
-         * The square in the card's top-right corner that dismisses it.
-         *
-         * Larger than the cross [HudContent] draws there, deliberately. The cross has to be
-         * small - the card is 128dp wide and sits over a map someone is navigating by - but
-         * the thing being aimed at is a moving car's dashboard, so the target is the
-         * conventional 44dp rather than the size of the glyph. It reaches the card's own
-         * padding and no further, so nothing else is inside it.
+         * How near the target a finger has to be to close the bubble. Larger than the target,
+         * because this is aimed at a phone on a dashboard mount.
          */
-        private const val CLOSE_TARGET_DP = 44f
+        private const val CATCH_RADIUS_DP = 64f
     }
 }

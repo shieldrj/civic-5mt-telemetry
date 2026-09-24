@@ -1,4 +1,5 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
       Bluetooth Classic, not LE. The OBDLink MX+ advertises Classic only, which is why the
@@ -26,6 +27,15 @@
       screen and re-checking when they come back.
     -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
+    <!--
+      Usage access, so the heads-up display can appear only while Google Maps is the app in
+      front. Another Settings-screen permission; without it the display simply shows whenever
+      a drive is connected, as it always did. It reveals which app is open, nothing on screen.
+    -->
+    <uses-permission
+        android:name="android.permission.PACKAGE_USAGE_STATS"
+        tools:ignore="ProtectedPermissions" />
 
     <!--
       The one thing this app asks the internet for: what Costco is charging for petrol at the

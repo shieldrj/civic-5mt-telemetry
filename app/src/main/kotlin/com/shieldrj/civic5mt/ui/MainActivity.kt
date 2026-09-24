@@ -35,6 +35,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Bluetooth
 import androidx.compose.material.icons.outlined.Layers
+import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -82,6 +83,9 @@ import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
 import com.shieldrj.civic5mt.service.loadLastAdapter
 import com.shieldrj.civic5mt.service.saveOverlayEnabled
+import com.shieldrj.civic5mt.service.ForegroundAppWatcher
+import com.shieldrj.civic5mt.service.loadOverlayMapsOnly
+import com.shieldrj.civic5mt.service.saveOverlayMapsOnly
 import com.shieldrj.civic5mt.transport.BluetoothClassicTransport
 import com.shieldrj.civic5mt.transport.PairedDevice
 import com.shieldrj.civic5mt.ui.overlay.OverlayHost
@@ -363,6 +367,9 @@ private fun SettingsPane() {
     var permissionEpoch by remember { mutableStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { permissionEpoch++ }
     val canOverlay = remember(permissionEpoch) { OverlayHost.canDrawOverlays(context) }
+    // Usage access is granted the same way, and re-read the same way.
+    val canSeeForeground = remember(permissionEpoch) { ForegroundAppWatcher(context).hasAccess() }
+    var mapsOnly by remember { mutableStateOf(loadOverlayMapsOnly(context)) }
 
     // The backup folder is picked once through the system picker; the grant is persisted so
     // every later backup is silent.
@@ -423,6 +430,27 @@ private fun SettingsPane() {
                         val next = !overlayEnabled
                         TelemetryState.setOverlayEnabled(next)
                         saveOverlayEnabled(context, next)
+                    }
+                },
+                // Whether the bubble waits for Google Maps. It needs usage access to know which
+                // app is in front; until that is granted it shows over anything, as it did.
+                Feature(
+                    "Only over Maps",
+                    when {
+                        !mapsOnly -> "Off - shows over any app"
+                        !canSeeForeground -> "Tap to allow usage access"
+                        else -> "On"
+                    },
+                    Icons.Outlined.Map,
+                ) {
+                    if (mapsOnly && !canSeeForeground) {
+                        runCatching {
+                            context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                        }
+                    } else {
+                        mapsOnly = !mapsOnly
+                        TelemetryState.setOverlayMapsOnly(mapsOnly)
+                        saveOverlayMapsOnly(context, mapsOnly)
                     }
                 },
                 Feature(
