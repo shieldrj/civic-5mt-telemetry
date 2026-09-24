@@ -21,7 +21,6 @@ import com.shieldrj.civic5mt.core.ClutchHealthEngine
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.DtcScanner
 import com.shieldrj.civic5mt.core.Elm327Client
-import com.shieldrj.civic5mt.core.FillOutcome
 import com.shieldrj.civic5mt.core.FuelCalibrationEngine
 import com.shieldrj.civic5mt.core.ObdTransportError
 import com.shieldrj.civic5mt.core.ReconnectPolicy
@@ -852,12 +851,12 @@ class TelemetryService : Service() {
         )
         TelemetryState.setCalibration(manager.getCalibration())
 
-        val message = fillFeedback(outcome, pumpGallons, level)
+        val message = fillFeedback(outcome, pumpGallons, level, odometerGiven = odometerMiles != null)
         TelemetryState.setStatusMessage(message)
         // Posted as well as set, because the screen with the button on it draws this one and
-        // not the status line. False for everything the calibration refused, which colours it
-        // differently: a refusal is the more important of the two to be able to see.
-        TelemetryState.postActionFeedback(message, worked = outcome is FillOutcome.Accepted)
+        // not the status line. Coloured by whether the fill was kept, not by whether it taught
+        // the calibration anything - see fillWasTaken.
+        TelemetryState.postActionFeedback(message, worked = fillWasTaken(outcome))
     }
 
     /**
