@@ -42,6 +42,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.plus
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
@@ -138,7 +139,9 @@ class TelemetryService : Service() {
         recorder = TripRecorder(TripDatabase.get(applicationContext).tripDao())
 
         TelemetryState.setOverlayEnabled(loadOverlayEnabled(applicationContext))
+        TelemetryState.setOverlayMapsOnly(loadOverlayMapsOnly(applicationContext))
         TelemetryState.setHudTheme(loadHudTheme(applicationContext))
+        watchForegroundApp()
         observeOverlay()
         observeFuelBlend()
         observeHudTheme()
@@ -241,24 +244,47 @@ class TelemetryService : Service() {
         }
     }
 
+    /** The app in front, and whether Android lets this app know it. See [ForegroundAppWatcher]. */
+    private val foregroundPackage = MutableStateFlow<String?>(null)
+    private val canSeeForeground = MutableStateFlow(false)
+
     /**
-     * Shows the HUD only while there is something to show.
+     * Polls which app is in front, once a second, while the answer can change anything.
      *
-     * All three conditions matter. Without the preference it appears uninvited over whatever
-     * is on screen; without the connection check it keeps displaying a frozen reading after
-     * the adapter drops, which is the failure that makes a driver stop trusting a gauge; and
-     * without the parked check it sits over the map after the drive has ended.
+     * Only while the HUD is wanted and set to wait for Maps, so an idle service asks nothing.
+     * A second is quick enough that the card is up before a glance at the mount lands on it.
+     */
+    private fun watchForegroundApp() {
+        scope.launch {
+            val watcher = ForegroundAppWatcher(applicationContext)
+            while (isActive) {
+                val wanted = TelemetryState.overlayEnabled.value && TelemetryState.overlayMapsOnly.value
+                if (wanted) {
+                    val access = watcher.hasAccess()
+                    canSeeForeground.value = access
+                    if (access) foregroundPackage.value = watcher.poll()
+                }
+                delay(FOREGROUND_POLL_MS)
+            }
+        }
+    }
+
+    /**
+     * Shows the HUD only while there is something to show. See [shouldShowHud].
+     *
+     * Without the preference it appears uninvited; without the connection check it keeps
+     * displaying a frozen reading after the adapter drops; without the parked check it sits
+     * over the map after the drive has ended; and without the Maps check it floats over
+     * everything else on the phone.
      */
     private fun observeOverlay() {
         scope.launch {
             combine(
-                TelemetryState.overlayEnabled,
-                TelemetryState.connection,
-                parkedTooLong,
-            ) { enabled, connection, parked ->
-                enabled && !parked && (connection == ConnectionStatus.CONNECTED ||
-                    connection == ConnectionStatus.SIMULATING)
-            }.collect { shouldShow ->
+                combine(TelemetryState.overlayEnabled, TelemetryState.connection, parkedTooLong, ::Triple),
+                combine(TelemetryState.overlayMapsOnly, canSeeForeground, foregroundPackage, ::Triple),
+            ) { (enabled, connection, parked), (mapsOnly, canSee, front) ->
+                shouldShowHud(enabled, parked, connection, mapsOnly, canSee, front)
+            }.distinctUntilChanged().collect { shouldShow ->
                 // WindowManager is main-thread only, and the service scope is Default.
                 withContext(kotlinx.coroutines.Dispatchers.Main) {
                     // runCatching because of what the alternative costs. This collector is
@@ -280,6 +306,11 @@ class TelemetryService : Service() {
                                 onClose = {
                                     TelemetryState.setOverlayEnabled(false)
                                     saveOverlayEnabled(applicationContext, false)
+                                    android.widget.Toast.makeText(
+                                        applicationContext,
+                                        "Heads-up display off. Turn it back on in Settings.",
+                                        android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
                                 },
                             )
                             overlay?.show()
@@ -1206,6 +1237,7 @@ class TelemetryService : Service() {
         private const val CLUTCH_SLIP_NOTIFICATION_ID = 3
         private const val CLUTCH_WEAR_NOTIFICATION_ID = 4
         private const val RECEIPT_NOTIFICATION_ID = 5
+        private const val FOREGROUND_POLL_MS = 1_000L
         private const val SLIP_ALERT_DEBOUNCE_MS = 15_000L
 
         /** Above a walking pace counts as driving, for HUD visibility. */

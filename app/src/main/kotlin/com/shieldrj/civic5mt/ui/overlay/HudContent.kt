@@ -1,17 +1,14 @@
 package com.shieldrj.civic5mt.ui.overlay
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -19,7 +16,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -45,6 +46,12 @@ private data class MapsTokens(
     val OnSurface: Color,
     val OnSurfaceVariant: Color,
     val Divider: Color,
+    /** Maps' route blue, for a tank with plenty in it. */
+    val Ring: Color,
+    /** Maps' traffic amber, for a quarter tank and below. */
+    val RingLow: Color,
+    /** Maps' traffic red, for the reserve under E. */
+    val RingEmpty: Color,
 ) {
     companion object {
         /** Maps' day palette. */
@@ -53,6 +60,9 @@ private data class MapsTokens(
             OnSurface = Color(0xFF202124),
             OnSurfaceVariant = Color(0xFF5F6368),
             Divider = Color(0xFFE8EAED),
+            Ring = Color(0xFF1A73E8),
+            RingLow = Color(0xFFF29900),
+            RingEmpty = Color(0xFFD93025),
         )
 
         /** Maps' night palette: the same structure, dimmed rather than inverted. */
@@ -61,6 +71,9 @@ private data class MapsTokens(
             OnSurface = Color(0xFFE3E3E3),
             OnSurfaceVariant = Color(0xFF9AA0A6),
             Divider = Color(0xFF3C4043),
+            Ring = Color(0xFF8AB4F8),
+            RingLow = Color(0xFFFDD663),
+            RingEmpty = Color(0xFFF28B82),
         )
 
         /** Tabular figures: a changing digit must not shuffle the ones beside it. */
@@ -69,34 +82,25 @@ private data class MapsTokens(
 }
 
 /**
- * The heads-up display: how much fuel is left and how far it goes, on a card styled after
- * Google Maps' own surfaces, because this window's whole life is spent floating over that app
- * while someone navigates by it. A card that looks native to the map reads as part of the
- * navigation; one that looks like a different app reads as clutter.
+ * The heads-up display: a round bubble in the style of Google Maps' own floating buttons,
+ * because its whole life is spent over that app while someone navigates by it. White (or
+ * Maps' night grey), soft shadow, one number - the same visual family as the speed bubble and
+ * the re-centre button, so it reads as part of the map rather than as something pasted on.
  *
- * It has been cut down twice. It began as the gear, a shift bar and live MPG - the Drive
- * screen in miniature - and every one of those is a number that moves every second, which on
- * top of a map someone is navigating by pulls the eye away and gives nothing back. Then it
- * carried three economy figures. Now it carries two, and they are two halves of one question:
- * how much fuel is in the car, and how far that gets you.
+ * The number is miles until the tank is dry, reserve included, matching the Drive screen: the
+ * one question worth a glance mid-route. The ring around it is how full the tank is, as a
+ * share of what the tank really holds (see TankState.fuelPercentRemaining) - blue with plenty,
+ * amber at a quarter, red once the gauge is on E and the reserve is being counted down.
  *
- * Economy is not that question. Miles per gallon over a tank is what a driver acts on at the
- * pump, standing still, with the app open - which is where it still is, on the Fuel screen. It
- * is not what anyone needs from a card floating over a route.
+ * It used to be a card carrying the percentage as a numeral and the miles beneath. A circle
+ * has room for one figure, and the ring carries the other without asking to be read.
  *
- * The percentage is the hero, and it is deliberately not the number on the dashboard. That
- * gauge shows 0 with a usable amount of fuel still in the tank; this one is a share of what
- * the tank really holds, so it reads 100 at the pump and still reads several percent when the
- * dashboard has given up. See TankState.fuelPercentRemaining for how the difference is
- * measured.
+ * Below E the miles are counted down from fuel burned rather than read off the gauge, so they
+ * carry a "~". Absent readings render as a dash: a fabricated number here is one someone
+ * drives past a filling station on.
  *
- * Below E the gauge stops moving, so the reserve - some seven percent of the tank - is counted
- * down from fuel burned instead. That last stretch is an estimate rather than a reading, and
- * is shown as "about 7". See TankState.belowSenderZero.
- *
- * Absent readings render as a dash. Both figures are null until the car has reported a fuel
- * level and a fill has been seen, and a fabricated number here is one someone drives past a
- * filling station on.
+ * Tap opens the Fuel screen, long-press cycles light and dark, and dragging it onto the cross
+ * that appears at the bottom of the screen closes it - see OverlayHost.
  */
 @Composable
 fun HudContent() {
@@ -106,142 +110,81 @@ fun HudContent() {
         HudTheme.LIGHT -> MapsTokens.Light
         HudTheme.DARK -> MapsTokens.Dark
         // Google Maps themes itself independently of the phone, so "system" is only ever a
-        // guess at what Maps is doing - which is why long-pressing the card can override it.
+        // guess at what Maps is doing - which is why long-pressing the bubble can override it.
         HudTheme.SYSTEM -> if (isSystemInDarkTheme()) MapsTokens.Dark else MapsTokens.Light
     }
 
-    // The outer padding exists because the overlay window sizes itself to this content:
-    // without slack around the card, the window edge would shear the shadow off.
-    Column(
-        modifier = Modifier.padding(8.dp),
-    ) {
-        Column(
-            modifier = Modifier
-                .width(128.dp)
-                // The shadow is what sells "this belongs to the map": every surface Google Maps
-                // draws over its tiles carries exactly this kind of soft elevation shadow.
-                .shadow(elevation = 6.dp, shape = RoundedCornerShape(16.dp))
-                .clip(RoundedCornerShape(16.dp))
-                .background(tokens.Surface)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-        ) {
-            val fuelPercent = metrics.fuelPercentRemaining
+    val miles = metrics.fuelRangeMiles
+    val percent = metrics.fuelPercentRemaining
+    val onE = metrics.tankBelowSenderZero
+    val ringColor = when {
+        onE -> tokens.RingEmpty
+        percent != null && percent < LOW_PERCENT -> tokens.RingLow
+        else -> tokens.Ring
+    }
 
-            // The close target lives in the heading row rather than floating over the card,
-            // so it cannot land on top of a number. It is drawn here and *hit* in
-            // OverlayHost.DragHandler, which owns the only touch listener on this window -
-            // see CLOSE_TARGET_DP, which is what keeps the two in agreement.
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+    // The outer padding exists because the overlay window sizes itself to this content:
+    // without slack around the bubble, the window edge would shear the shadow off.
+    Box(modifier = Modifier.padding(8.dp)) {
+        Box(
+            modifier = Modifier
+                .size(DIAMETER)
+                .shadow(elevation = 6.dp, shape = CircleShape)
+                .clip(CircleShape)
+                .background(tokens.Surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(modifier = Modifier.fillMaxSize().padding(4.dp)) {
+                val stroke = RING_WIDTH.toPx()
+                val inset = stroke / 2
+                val arcSize = Size(size.width - stroke, size.height - stroke)
+                drawArc(
+                    color = tokens.Divider,
+                    startAngle = 0f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    topLeft = Offset(inset, inset),
+                    size = arcSize,
+                    style = Stroke(width = stroke),
+                )
+                if (percent != null && percent > 0) {
+                    drawArc(
+                        color = ringColor,
+                        // From the top, clockwise, the way a gauge that empties reads.
+                        startAngle = -90f,
+                        sweepAngle = 360f * (percent / 100.0).coerceIn(0.0, 1.0).toFloat(),
+                        useCenter = false,
+                        topLeft = Offset(inset, inset),
+                        size = arcSize,
+                        style = Stroke(width = stroke, cap = StrokeCap.Round),
+                    )
+                }
+            }
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(
-                    text = "Fuel left",
+                    text = miles?.let { if (onE) "~$it" else "$it" } ?: "—",
+                    color = if (miles != null) tokens.OnSurface else tokens.OnSurfaceVariant,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Medium,
+                    style = MapsTokens.Numeric.copy(lineHeight = 20.sp),
+                )
+                Text(
+                    text = "mi",
                     color = tokens.OnSurfaceVariant,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Medium,
-                )
-                Text(
-                    text = "✕",
-                    color = tokens.OnSurfaceVariant,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
+                    style = TextStyle(lineHeight = 10.sp),
                 )
             }
-            Spacer(Modifier.height(1.dp))
-            // Once the sender is on its stop, the percentage stops counting down - there is
-            // fuel below there, counted down from fuel burned - so the card says "about 7" rather
-            // than "7". A card read at 60 mph is the last place to print a number that has
-            // quietly stopped meaning what it says. See TankState.belowSenderZero.
-            val bounded = metrics.tankBelowSenderZero
-
-            Row(
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.Start,
-            ) {
-                if (bounded && fuelPercent != null) {
-                    Text(
-                        text = "about",
-                        color = tokens.OnSurfaceVariant,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.alignByBaseline(),
-                    )
-                    Spacer(Modifier.width(4.dp))
-                }
-                Text(
-                    // Whole numbers. A tenth of a percent of a tank is two tenths of a
-                    // gallon, which is below what any of this can honestly resolve, and a
-                    // decimal place would only give the digit something to fidget with.
-                    text = fuelPercent?.let { "%.0f".format(it) } ?: "—",
-                    color = if (fuelPercent != null) tokens.OnSurface else tokens.OnSurfaceVariant,
-                    fontSize = 21.sp,
-                    fontWeight = FontWeight.Medium,
-                    style = MapsTokens.Numeric,
-                    modifier = Modifier.alignByBaseline(),
-                )
-                if (fuelPercent != null) {
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = "%",
-                        color = tokens.OnSurfaceVariant,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.alignByBaseline(),
-                    )
-                }
-            }
-
-            HudDivider(tokens)
-            HudDetailRow(
-                tokens,
-                label = "To empty",
-                // Abbreviated here and spelled out above, for width: the row is a label and a
-                // reading inside a 128dp card, and "under 30 mi" is wider than the two of them
-                // have between them. The word is on the figure that carries the card.
-                // Everything in the tank, matching the Drive screen. This card has room for
-                // one figure and it is the same question that screen answers - when does the
-                // car stop - so showing the dashboard's more cautious number here would put
-                // two different answers on two surfaces a glance apart.
-                value = metrics.fuelRangeMiles
-                    ?.let { if (bounded) "< $it mi" else "$it mi" }
-                    ?: "—",
-            )
         }
     }
 }
 
-/**
- * One secondary figure: heading left, reading right, the way Maps lays out the detail rows
- * under a place name. Small enough to stay subordinate to the tank figure above.
- */
-@Composable
-private fun HudDetailRow(tokens: MapsTokens, label: String, value: String) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 5.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            color = tokens.OnSurfaceVariant,
-            fontSize = 11.sp,
-        )
-        Text(
-            text = value,
-            color = tokens.OnSurface,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            style = MapsTokens.Numeric,
-        )
-    }
-}
+/** Maps' own floating buttons are 48-56dp; this carries a number, so a little larger. */
+private val DIAMETER = 68.dp
 
-/** A hairline, matching the dividers Maps draws between rows of a place card. */
-@Composable
-private fun HudDivider(tokens: MapsTokens) {
-    HorizontalDivider(color = tokens.Divider, thickness = 1.dp)
-}
+/** The fuel ring: thick enough to read at a glance, thin enough to stay a frame. */
+private val RING_WIDTH = 4.dp
+
+/** A quarter tank, where the ring turns amber. Around a hundred miles left on this car. */
+private const val LOW_PERCENT = 25.0

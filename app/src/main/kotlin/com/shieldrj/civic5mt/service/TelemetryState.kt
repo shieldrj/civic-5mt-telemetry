@@ -139,6 +139,17 @@ object TelemetryState {
     }
 
     /**
+     * Whether the heads-up display waits for Google Maps to be in front. See [shouldShowHud].
+     * On by default: the card is designed to sit over Maps and is clutter over anything else.
+     */
+    private val _overlayMapsOnly = MutableStateFlow(true)
+    val overlayMapsOnly: StateFlow<Boolean> = _overlayMapsOnly.asStateFlow()
+
+    fun setOverlayMapsOnly(mapsOnly: Boolean) {
+        _overlayMapsOnly.value = mapsOnly
+    }
+
+    /**
      * Which look the heads-up display wears.
      *
      * A preference rather than a derivation from the system setting because Google Maps picks

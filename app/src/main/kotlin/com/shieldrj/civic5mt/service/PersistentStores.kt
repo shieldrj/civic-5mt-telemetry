@@ -50,6 +50,7 @@ private const val KEY_CLUTCH = "civic_2013_clutch_profile_v2"
 private const val KEY_FUEL_BLEND = "civic_2013_fuel_blend_v1"
 private const val KEY_MIGRATION_DONE = "rescued_localstorage_imported_v1"
 private const val KEY_OVERLAY_ENABLED = "overlay_enabled"
+private const val KEY_OVERLAY_MAPS_ONLY = "overlay_maps_only"
 private const val KEY_OVERLAY_X = "overlay_x"
 private const val KEY_OVERLAY_Y = "overlay_y"
 private const val KEY_HUD_THEME = "hud_theme"
@@ -504,6 +505,14 @@ fun loadOverlayEnabled(context: Context): Boolean =
 
 fun saveOverlayEnabled(context: Context, enabled: Boolean) {
     telemetryPrefs(context).edit().putBoolean(KEY_OVERLAY_ENABLED, enabled).apply()
+}
+
+/** Whether the heads-up display only appears over Google Maps. On unless turned off. */
+fun loadOverlayMapsOnly(context: Context): Boolean =
+    telemetryPrefs(context).getBoolean(KEY_OVERLAY_MAPS_ONLY, true)
+
+fun saveOverlayMapsOnly(context: Context, mapsOnly: Boolean) {
+    telemetryPrefs(context).edit().putBoolean(KEY_OVERLAY_MAPS_ONLY, mapsOnly).apply()
 }
 
 /**
