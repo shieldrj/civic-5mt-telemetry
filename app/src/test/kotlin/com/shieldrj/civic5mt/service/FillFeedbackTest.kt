@@ -127,4 +127,39 @@ class FillFeedbackTest {
             }
         }
     }
+
+    @Test
+    @DisplayName("a first receipt reads as saved, and is shown as kept rather than refused")
+    fun firstFillIsSavedNotRefused() {
+        // The reported fault: 10.9 gallons typed in, stored correctly as the start of the next
+        // span, and answered in the warning colour, which read as the app refusing it.
+        val outcome = rejected(FillRejection.NO_FULL_FILL_BASELINE)
+        val message = fillFeedback(outcome, pumpGallons = 10.9, levelPercent = null)
+
+        assertContains(message, "10.90 gal saved as your starting fill")
+        assertTrue(fillWasTaken(outcome))
+    }
+
+    @Test
+    @DisplayName("keeps the warning colour for the outcomes that need something checked")
+    fun warnsOnlyWhenSomethingIsWrong() {
+        assertTrue(fillWasTaken(accepted()))
+        assertTrue(fillWasTaken(rejected(FillRejection.NOT_FILLED_TO_SHUTOFF)))
+        assertTrue(fillWasTaken(rejected(FillRejection.SPAN_TOO_SHORT)))
+        assertFalse(fillWasTaken(rejected(FillRejection.IMPLAUSIBLE_PUMP_GALLONS)))
+        assertFalse(fillWasTaken(rejected(FillRejection.NO_MEASUREMENT)))
+        assertFalse(fillWasTaken(rejected(FillRejection.IMPLAUSIBLE_RATIO)))
+    }
+
+    @Test
+    @DisplayName("asks for the odometer when a kept fill arrived without one")
+    fun asksForTheOdometer() {
+        val baseline = rejected(FillRejection.NO_FULL_FILL_BASELINE)
+
+        assertContains(fillFeedback(baseline, 10.9, null, odometerGiven = false), "Add the odometer")
+        assertFalse(fillFeedback(baseline, 10.9, null, odometerGiven = true).contains("odometer"))
+        // Not on a typo: the fill was not kept, so asking for more detail about it is noise.
+        val typo = fillFeedback(rejected(FillRejection.IMPLAUSIBLE_PUMP_GALLONS), 114.2, null, odometerGiven = false)
+        assertFalse(typo.contains("odometer"), typo)
+    }
 }

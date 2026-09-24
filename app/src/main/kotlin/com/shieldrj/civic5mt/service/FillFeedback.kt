@@ -22,6 +22,7 @@ internal fun fillFeedback(
     outcome: FillOutcome,
     pumpGallons: Double,
     levelPercent: Double?,
+    odometerGiven: Boolean = true,
 ): String {
     // Read back first, always. The receipt is the one figure here the driver knows
     // independently, so it is the one that proves the tap reached the right number.
@@ -44,9 +45,12 @@ internal fun fillFeedback(
                 "$pump logged. A part fill cannot be measured, but the next fill to the " +
                     "click will be measured from it."
 
+            // Not a failure, and it must not read like one. This is what every driver sees the
+            // first time they log a receipt: the fill was kept, as the start of the span the
+            // next one measures. Reported 2026-09-23 as "the app wouldn't take 10.9 gallons".
             FillRejection.NO_FULL_FILL_BASELINE ->
-                "$pump logged. Fill to the click again next time and that one gets " +
-                    "measured - it takes two to make a span."
+                "$pump saved as your starting fill. Fill to the click next time and that " +
+                    "fill calibrates the gauge."
 
             FillRejection.SPAN_TOO_SHORT ->
                 "$pump logged. Too small to measure from: it takes about " +
@@ -79,5 +83,38 @@ internal fun fillFeedback(
         "New tank started. Its level fills in when the car next reports one."
     }
 
-    return "$receipt $tank"
+    // The odometer is what turns the next receipt into a true miles-per-gallon, and it only
+    // works when both ends of the tank have one. Asked for here, while the pump is in front of
+    // the driver, because nothing else on the screen says the empty field cost anything.
+    val odometer = if (!odometerGiven && fillWasTaken(outcome)) {
+        " Add the odometer next time too - it makes the miles-to-empty exact."
+    } else {
+        ""
+    }
+
+    return "$receipt $tank$odometer"
+}
+
+/**
+ * Whether the fill was kept, which decides the colour it is reported in.
+ *
+ * Wider than [FillOutcome.Accepted]. A first fill, a part fill and a short one teach the
+ * calibration nothing, but each was stored exactly as it should be and each sets up the next
+ * fill. Showing them in the warning colour told a driver who had done everything right that
+ * the app had refused the receipt. Warning is kept for the outcomes where something needs
+ * checking: a number the tank could not have taken, or a tank the app did not see.
+ */
+internal fun fillWasTaken(outcome: FillOutcome): Boolean = when (outcome) {
+    is FillOutcome.Accepted -> true
+    is FillOutcome.Rejected -> when (outcome.reason) {
+        FillRejection.NO_FULL_FILL_BASELINE,
+        FillRejection.NOT_FILLED_TO_SHUTOFF,
+        FillRejection.SPAN_TOO_SHORT,
+        -> true
+
+        FillRejection.IMPLAUSIBLE_PUMP_GALLONS,
+        FillRejection.NO_MEASUREMENT,
+        FillRejection.IMPLAUSIBLE_RATIO,
+        -> false
+    }
 }

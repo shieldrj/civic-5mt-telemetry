@@ -829,14 +829,18 @@ private fun FillLogSection(context: android.content.Context) {
         }
     }
 
-    Spacer(Modifier.height(6.dp))
+    Spacer(Modifier.height(10.dp))
     val ready = pumpGallons != null && pumpGallons > 0
-    Text(
-        text = if (ready) "Log this fill" else "Enter the gallons to log this fill",
-        color = if (ready) CivicColors.Accent else CivicColors.Ink4,
-        fontSize = 15.sp,
+    // A filled button, not a line of coloured text. As text it sat between two other lines of
+    // text that were also tappable, and at a pump nothing about it said "press here".
+    Box(
         modifier = Modifier
             .fillMaxWidth()
+            .height(52.dp)
+            .background(
+                if (ready) CivicColors.Accent else CivicColors.Hairline,
+                RoundedCornerShape(14.dp),
+            )
             .then(
                 if (ready) {
                     Modifier.clickable {
@@ -852,9 +856,17 @@ private fun FillLogSection(context: android.content.Context) {
                 } else {
                     Modifier
                 }
-            )
-            .padding(vertical = 12.dp),
-    )
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = if (ready) "Log this fill" else "Enter the gallons to log this fill",
+            color = if (ready) CivicColors.Ink else CivicColors.Ink4,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+    Spacer(Modifier.height(6.dp))
 
     // The receipt-free path, kept because it is still the right answer sometimes: a fill
     // somebody else paid for, or one the app missed while the adapter was elsewhere. It
