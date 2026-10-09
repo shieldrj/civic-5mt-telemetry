@@ -230,9 +230,27 @@ object TankRules {
     /**
      * A rise of this many percent counts as a fill.
      *
-     * Requiring a 10% rise prevents cornering/hill sloshing from triggering false tank resets.
+     * It was 10, and that was measured to be too little. Between 6 and 8 October 2026 this
+     * car's sender rose 10 to 17.5 percent eleven times on ordinary commutes - hills and
+     * reconnects - and every one was recorded as a fill. The real fill that day rose 84. The
+     * phantoms were not just noise in the history: the last one was still waiting for a
+     * receipt when the real receipt was typed in at the pump, so it took it, and the 11.79
+     * gallons were measured against a 12 percent rise and thrown away.
+     *
+     * Twenty-five percent is about three gallons. Nothing this driver does at a pump is
+     * smaller, and nothing the sender has done on the road has been this large.
      */
-    const val FILL_RISE_PERCENT = 10.0
+    const val FILL_RISE_PERCENT = 25.0
+
+    /**
+     * How far the sender must sit above the smoothed level for the fast tracking of a fill.
+     *
+     * Kept apart from [FILL_RISE_PERCENT] on purpose. This one only decides how quickly the
+     * displayed level follows a pump that is running - it records nothing - and it has to stay
+     * small, or the fast tracking lets go twenty-five points short of full and a just-filled
+     * tank eases up over the next two minutes, reading a gallon short.
+     */
+    const val FAST_TRACK_RISE_PERCENT = 10.0
 
     /**
      * The sender must fall this far *while being watched* before gallons-per-percent is
@@ -598,8 +616,11 @@ class TankTracker(
             // Otherwise the tank is where it was left. Carry on from the stored figures.
         }
 
+        // Fuel only goes in with the car standing still. A rise while it is moving is the float
+        // riding a hill, however long the hill is, and is never followed as a fill.
+        val stationary = milesStep <= 0.0
         val above = levelPercent - state.smoothedLevelPercent
-        risingForSec = if (above > TankRules.FILL_RISE_PERCENT) risingForSec + dtSec else 0.0
+        risingForSec = if (stationary && above > TankRules.FAST_TRACK_RISE_PERCENT) risingForSec + dtSec else 0.0
 
         val timeConstant = if (risingForSec >= TankRules.SUSTAINED_RISE_SEC) {
             TankRules.FILL_TIME_CONSTANT_SEC
@@ -647,7 +668,7 @@ class TankTracker(
             fullMarkPercent = max(state.fullMarkPercent, smoothed),
         )
 
-        if (smoothed - state.lowestLevelPercent >= TankRules.FILL_RISE_PERCENT) {
+        if (stationary && smoothed - state.lowestLevelPercent >= TankRules.FILL_RISE_PERCENT) {
             startNewTank(smoothed)
         }
 

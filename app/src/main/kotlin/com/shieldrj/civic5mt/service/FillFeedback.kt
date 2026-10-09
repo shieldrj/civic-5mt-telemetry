@@ -56,9 +56,17 @@ internal fun receiptFeedback(
             "The car didn't see the gauge before this fill, so it couldn't measure it. " +
                 "The next fill will."
 
-        else ->
+        // Say which test failed. This used to blame the gallons whatever the cause, and told a
+        // driver who had put in 11.7 that it was too small a fill.
+        pumpGallons < FuelCalibrationRules.MIN_PUMP_GALLONS ->
             "Too small a fill to measure the gauge from - it takes about " +
                 "${FuelCalibrationRules.MIN_PUMP_GALLONS.toInt()} gallons."
+
+        else -> {
+            val rise = "%.0f%%".format(record.risePercent ?: 0.0)
+            "The car saw the gauge rise only $rise, which doesn't match $pump, so this " +
+                "receipt didn't measure the gauge. The next fill will."
+        }
     }
 
     // The odometer is what turns receipts into a true miles-per-gallon, and it only works

@@ -676,6 +676,37 @@ class TelemetryManagerTest {
         }
 
         @Test
+        fun `A receipt too big for the waiting fill is for a fill not yet seen`() {
+            // The reported case. An older fill was still waiting for its receipt when the next
+            // one was typed in at the pump, engine off, and took it - measuring 11.79 gallons
+            // against a 12 percent rise. The receipt belongs to the fill about to be noticed.
+            val car = Car()
+            val first = car.start()
+            first.driveGaugeDown(car.clock, from = 90.0, to = 20.0)
+            first.flush()
+
+            // A small top-off, its receipt never typed in.
+            car.clock.advanceMillis(30 * 60_000L)
+            val second = car.start()
+            second.driveMiles(car.clock, level = 50.0, miles = 1.0)
+            second.driveGaugeDown(car.clock, from = 50.0, to = 20.0)
+            assertNotNull(second.getCalibration().pendingReceipt(car.clock.nowMillis()))
+
+            // The real fill, logged at the pump before the engine starts.
+            car.clock.advanceMillis(10 * 60_000L)
+            second.recordReceipt(pumpGallons = 73.0 * trueGpp, levelPercent = null)
+            second.flush()
+            val m = car.start()
+            m.driveMiles(car.clock, level = 93.0, miles = 1.0)
+
+            val fills = m.getCalibration().fills
+            assertEquals(2, fills.size)
+            assertNull(fills[0].pumpGallons, "the top-off did not take it")
+            assertEquals(73.0 * trueGpp, fills[1].pumpGallons!!, 1e-9)
+            assertEquals(trueGpp, m.getCalibration().pumpGallonsPerPercent!!, 0.002)
+        }
+
+        @Test
         fun `A receipt logged with the engine running opens the tank there`() {
             val car = Car()
             val m = car.start()

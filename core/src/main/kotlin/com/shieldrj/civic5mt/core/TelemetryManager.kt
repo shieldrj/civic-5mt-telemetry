@@ -616,8 +616,11 @@ class TelemetryManager(
         levelPercent: Double? = null,
         amendLast: Boolean = false,
     ): ReceiptOutcome {
+        // A waiting record that is far too small for this receipt is not its fill: it is an
+        // older one, and this fill is still to be noticed. See FillRecord.couldHold.
+        val pending = fuelCalibration.get().pendingReceipt(clock.nowMillis())
         val hasRecordToFill = amendLast && fuelCalibration.get().fills.isNotEmpty() ||
-            fuelCalibration.get().pendingReceipt(clock.nowMillis()) != null
+            pending != null && pending.couldHold(pumpGallons)
         if (!hasRecordToFill && pumpGallons > 0 && pumpGallons <= FuelCalibrationRules.MAX_PUMP_GALLONS) {
             tank.markFilled(levelPercent)
             collectFill()

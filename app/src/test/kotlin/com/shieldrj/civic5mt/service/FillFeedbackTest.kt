@@ -82,6 +82,15 @@ class FillFeedbackTest {
     }
 
     @Test
+    @DisplayName("does not call a full tank too small when the gauge rise is what failed")
+    fun bigFillSmallRise() {
+        // The reported case: 11.79 gallons landed on a fill whose gauge rose 12 percent.
+        val msg = message(saved(measured.copy(levelBefore = 20.4, levelAfter = 32.8, pumpGallons = 11.79)), pump = 11.79)
+        assertFalse(msg.contains("Too small"), msg)
+        assertContains(msg, "rise only 12%")
+    }
+
+    @Test
     @DisplayName("does not read a typo back as saved")
     fun typoIsNotSaved() {
         val msg = message(
