@@ -84,6 +84,20 @@ data class FillRecord(
 
     val awaitingReceipt: Boolean
         get() = pumpGallons == null && !receiptSkipped
+
+    /**
+     * Whether a receipt for [gallons] could belong to this fill at all.
+     *
+     * The rise the car saw caps what went in: no gauge is worth more than
+     * [TankRules.MAX_GALLONS_PER_PERCENT] a point, and a hard brim adds a little the gauge
+     * cannot show. A receipt far beyond that is for a fill the car has not seen yet - typed in
+     * at the pump, engine off - and putting it here would measure the gauge against the wrong
+     * rise. True when the rise is not known, since then nothing contradicts it.
+     */
+    fun couldHold(gallons: Double): Boolean {
+        val rise = risePercent ?: return true
+        return gallons <= rise * TankRules.MAX_GALLONS_PER_PERCENT + FuelCalibrationRules.BRIM_SLACK_GALLONS
+    }
 }
 
 /**
@@ -131,8 +145,11 @@ object FuelCalibrationRules {
     /** And the gauge has to have risen this far. Thirty percent is about four gallons. */
     const val MIN_RISE_PERCENT = 30.0
 
+    /** What a hard-brimmed filler neck holds beyond anything the gauge can show. */
+    const val BRIM_SLACK_GALLONS = 1.5
+
     /** Beyond the tank's own capacity, plus a little for a hard-brimmed filler neck. */
-    const val MAX_PUMP_GALLONS = CivicSpecs.FUEL_TANK_CAPACITY_GALLONS + 1.5
+    const val MAX_PUMP_GALLONS = CivicSpecs.FUEL_TANK_CAPACITY_GALLONS + BRIM_SLACK_GALLONS
 
     /**
      * The gauge has to fall this far while watched before it can check the MAF.

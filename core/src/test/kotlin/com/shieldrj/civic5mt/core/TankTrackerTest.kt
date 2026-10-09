@@ -489,6 +489,47 @@ class TankTrackerTest {
             assertTrue(t.get().milesSinceFill >= milesBefore, "Miles should continue accumulating, not reset to 0")
             assertNotNull(t.get().tankMpg, "Tank MPG should remain active and valid")
         }
+
+        @Test
+        fun `A long climb that holds the float up is not a fill`() {
+            // Measured on this car: the sender sat 10 to 17 points high for minutes on a
+            // commute, and each time it was recorded as a fill. A hill is not a pump.
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+            driveDown(t, clock, 90.0, 40.0, 0.142, mpg = 33.0)
+            val milesBefore = t.get().milesSinceFill
+
+            repeat(300) {
+                clock.advanceMillis(1_000)
+                t.record(57.5, 0.01, 0.0003, 1.0)
+            }
+            // And then a stop at the top, with the float still up.
+            repeat(60) {
+                clock.advanceMillis(1_000)
+                t.record(57.5, 0.0, 0.0, 1.0)
+            }
+
+            assertTrue(t.get().milesSinceFill > milesBefore, "the same tank carries on")
+            assertNull(t.takeClosedTank(), "and no fill was recorded")
+        }
+
+        @Test
+        fun `A reconnect that reads a few points high is not a fill`() {
+            val clock = MutableClock(1_700_000_000_000)
+            val store = InMemoryTankStore()
+            TankTracker(store, clock).also {
+                driveDown(it, clock, 90.0, 40.0, 0.142, mpg = 33.0)
+                it.flush()
+            }
+            val milesBefore = store.load()!!.milesSinceFill
+
+            clock.advanceMillis(5 * 60_000)
+            val next = TankTracker(store, clock)
+            next.record(54.0, 0.0, 0.0, 1.0)
+
+            assertEquals(milesBefore, next.get().milesSinceFill, "same tank, same count")
+            assertNull(next.takeClosedTank())
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════
