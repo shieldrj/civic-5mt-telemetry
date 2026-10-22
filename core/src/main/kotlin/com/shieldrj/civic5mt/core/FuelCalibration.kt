@@ -418,6 +418,35 @@ data class FuelCalibrationState(
     }
 }
 
+/**
+ * Repairs stored fill spans whose watched gauge drop went negative under the old
+ * stationary-slosh pause.
+ *
+ * When a stop after a hill paused measurement for sixty seconds, the upward slosh was counted
+ * and the downward settle was not, leaving [FillRecord.spanObservedDropPercent] at -198% on a
+ * tank whose start and end levels and watched fuel share were all recorded cleanly.
+ */
+fun FuelCalibrationState.withUsableSpans(): FuelCalibrationState {
+    if (fills.none { it.spanObservedDropPercent < 0.0 }) return this
+    val healed = fills.mapIndexed { index, fill ->
+        if (fill.spanObservedDropPercent >= 0.0) return@mapIndexed fill
+        val startLevel = fills.getOrNull(index - 1)?.levelAfter ?: fill.levelAfter
+        val endLevel = fill.levelBefore
+        val totalDrop = if (startLevel != null && endLevel != null) {
+            (startLevel - endLevel).coerceAtLeast(0.0)
+        } else {
+            0.0
+        }
+        val watchedShare = if (fill.spanRawGallons > 0.0) {
+            (fill.spanObservedRawGallons / fill.spanRawGallons).coerceIn(0.0, 1.0)
+        } else {
+            0.0
+        }
+        fill.copy(spanObservedDropPercent = totalDrop * watchedShare)
+    }
+    return copy(fills = healed)
+}
+
 /** Where the fill history is kept between runs. */
 interface FuelCalibrationStore {
     fun load(): FuelCalibrationState?
@@ -444,7 +473,11 @@ class FuelCalibrationEngine(
     private val store: FuelCalibrationStore = InMemoryFuelCalibrationStore(),
     private val clock: MillisClock = SystemMillisClock,
 ) {
-    private var state: FuelCalibrationState = store.load() ?: FuelCalibrationState()
+    private var state: FuelCalibrationState = (store.load() ?: FuelCalibrationState()).let { loaded ->
+        val usable = loaded.withUsableSpans()
+        if (usable != loaded) store.save(usable)
+        usable
+    }
 
     fun get(): FuelCalibrationState = state
 

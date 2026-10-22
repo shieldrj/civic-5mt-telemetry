@@ -330,6 +330,48 @@ class FuelCalibrationTest {
 
             assertEquals(1 / 0.95, e.get().fuelCorrectionFactor, 1e-6)
         }
+
+        @Test
+        fun `a stored fill span whose watched drop went negative is repaired on load`() {
+            // The two fills read off the phone on 2026-10-21. Fill #2 had 373.4 miles and
+            // 10.255 raw MAF gallons against 10.83 pump gallons, but spanObservedDropPercent
+            // was -198.4% because stopping after hills threw away the downward half of each
+            // slosh. Repairing the span lets the receipt calibrate the MAF as intended.
+            val store = InMemoryFuelCalibrationStore(
+                FuelCalibrationState(
+                    fills = listOf(
+                        FillRecord(
+                            detectedAtMillis = 1791503676538L,
+                            levelBefore = 9.711277486177668,
+                            levelAfter = 93.3,
+                            pumpGallons = 11.79,
+                            filledToShutoff = true,
+                            spanRawMiles = 48.109822970094806,
+                            spanRawGallons = 1.3987886531478313,
+                            spanObservedDropPercent = 9.5,
+                            spanObservedRawGallons = 1.2279207452081063,
+                        ),
+                        FillRecord(
+                            detectedAtMillis = 1792106070170L,
+                            levelBefore = 15.40851943533939,
+                            levelAfter = 93.3,
+                            pumpGallons = 10.83,
+                            filledToShutoff = true,
+                            spanRawMiles = 373.41677996401195,
+                            spanRawGallons = 10.254911748871819,
+                            spanObservedDropPercent = -198.39999999999986,
+                            spanObservedRawGallons = 9.843918681911583,
+                        ),
+                    ),
+                ),
+            )
+
+            val e = FuelCalibrationEngine(store = store, clock = MutableClock(t0))
+
+            assertTrue(e.get().fuelCalibrated, "repaired span calibrates the MAF")
+            assertEquals(1.0637, e.get().fuelCorrectionFactor, 0.005)
+            assertNotNull(e.get().watchedMpg, "and unlocks watched economy")
+        }
     }
 
     @Nested
