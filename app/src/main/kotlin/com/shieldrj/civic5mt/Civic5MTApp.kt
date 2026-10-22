@@ -6,6 +6,7 @@ import com.shieldrj.civic5mt.service.PrefsClutchProfileStore
 import com.shieldrj.civic5mt.service.PrefsFuelCalibrationStore
 import com.shieldrj.civic5mt.service.PrefsLifetimeStore
 import com.shieldrj.civic5mt.service.PrefsOilProfileStore
+import com.shieldrj.civic5mt.service.PrefsTankStore
 import com.shieldrj.civic5mt.service.importRescuedRecordsOnce
 import com.shieldrj.civic5mt.service.loadFuelBlend
 import com.shieldrj.civic5mt.service.publishPersistedRecords
@@ -29,6 +30,8 @@ class Civic5MTApp : Application() {
         super.onCreate()
 
         importRescuedRecordsOnce(this)?.let { Log.i(TAG, it) }
+
+        PrefsTankStore(this).load()
 
         publishPersistedRecords(
             lifetime = PrefsLifetimeStore(this),

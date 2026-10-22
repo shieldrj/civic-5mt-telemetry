@@ -7,6 +7,7 @@ import com.shieldrj.civic5mt.core.FuelCalibrationStore
 import com.shieldrj.civic5mt.core.LifetimeStore
 import com.shieldrj.civic5mt.core.OilLifeEngine
 import com.shieldrj.civic5mt.core.OilProfileStore
+import com.shieldrj.civic5mt.core.withUsableSpans
 
 /**
  * Puts every persisted record on screen before anything has connected.
@@ -55,7 +56,7 @@ internal fun publishPersistedRecords(
         TelemetryState.setClutch(ClutchHealthEngine(clutch).getProfile())
     }
 
-    calibration.load()?.let { TelemetryState.setCalibration(it) }
+    calibration.load()?.let { TelemetryState.setCalibration(it.withUsableSpans()) }
 
     TelemetryState.setFuelBlend(blend)
 }

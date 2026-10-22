@@ -24,6 +24,8 @@ import com.shieldrj.civic5mt.core.OilLifeProfile
 import com.shieldrj.civic5mt.core.OilProfileStore
 import com.shieldrj.civic5mt.core.TankState
 import com.shieldrj.civic5mt.core.TankStore
+import com.shieldrj.civic5mt.core.withUsableCalibration
+import com.shieldrj.civic5mt.core.withUsableSpans
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.roundToInt
@@ -325,7 +327,12 @@ class PrefsTankStore(context: Context) : TankStore {
 
     override fun load(): TankState? {
         val raw = prefs.getString(KEY_TANK, null) ?: return null
-        return runCatching { parseTank(JSONObject(raw)) }
+        return runCatching {
+            val parsed = parseTank(JSONObject(raw))
+            val usable = parsed.withUsableCalibration()
+            if (usable != parsed) save(usable)
+            usable
+        }
             .onFailure { Log.w(TAG, "Tank record unreadable, ignoring", it) }
             .getOrNull()
     }
@@ -402,7 +409,12 @@ class PrefsFuelCalibrationStore(context: Context) : FuelCalibrationStore {
 
     override fun load(): FuelCalibrationState? {
         val raw = prefs.getString(KEY_FUEL_CALIBRATION, null) ?: return null
-        return runCatching { parseFuelCalibration(JSONObject(raw)) }
+        return runCatching {
+            val parsed = parseFuelCalibration(JSONObject(raw))
+            val usable = parsed.withUsableSpans()
+            if (usable != parsed) save(usable)
+            usable
+        }
             .onFailure { Log.w(TAG, "Fuel calibration unreadable, ignoring", it) }
             .getOrNull()
     }
