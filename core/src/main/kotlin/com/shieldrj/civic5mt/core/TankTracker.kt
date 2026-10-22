@@ -215,14 +215,28 @@ data class TankState(
  * app would have been in had the bad tank never been measured. The next fill measures again.
  */
 fun TankState.withUsableCalibration(): TankState {
+    // A negative watched drop came from the old stationary-slosh pause eating the downward
+    // half of each stop after a hill. Recover the watched share of the tank's real drop so the
+    // tank does not have to be thrown away.
+    val dropFixed = if (observedDropPercent < 0.0) {
+        val totalDrop = (levelPercentAtFill - smoothedLevelPercent).coerceAtLeast(0.0)
+        val watchedShare = if (rawGallonsSinceFill > 0.0) {
+            (observedRawGallons / rawGallonsSinceFill).coerceIn(0.0, 1.0)
+        } else {
+            0.0
+        }
+        copy(observedDropPercent = totalDrop * watchedShare)
+    } else {
+        this
+    }
     // Nothing to distrust in a figure that never claimed to be measured.
-    if (!calibrated) return this
-    val usable = TankRules.reconcileGallonsPerPercent(gallonsPerPercent, fullMarkPercent)
-        ?: return copy(
+    if (!dropFixed.calibrated) return dropFixed
+    val usable = TankRules.reconcileGallonsPerPercent(dropFixed.gallonsPerPercent, dropFixed.fullMarkPercent)
+        ?: return dropFixed.copy(
             gallonsPerPercent = CivicSpecs.NOMINAL_GALLONS_PER_SENDER_PERCENT,
             calibrated = false,
         )
-    return if (usable == gallonsPerPercent) this else copy(gallonsPerPercent = usable)
+    return if (usable == dropFixed.gallonsPerPercent) dropFixed else dropFixed.copy(gallonsPerPercent = usable)
 }
 
 object TankRules {
@@ -504,7 +518,11 @@ class TankTracker(
     private val store: TankStore = InMemoryTankStore(),
     private val clock: MillisClock = SystemMillisClock,
 ) {
-    private var state: TankState = (store.load() ?: TankState()).withUsableCalibration()
+    private var state: TankState = (store.load() ?: TankState()).let { loaded ->
+        val usable = loaded.withUsableCalibration()
+        if (usable != loaded) store.save(usable)
+        usable
+    }
     private var lastSaveAt: Long = 0L
     private var started = false
 
@@ -618,9 +636,21 @@ class TankTracker(
 
         // Fuel only goes in with the car standing still. A rise while it is moving is the float
         // riding a hill, however long the hill is, and is never followed as a fill.
+        //
+        // Stopping at a light after a hill or braking leaves the float ten to seventeen points
+        // above the smoothed level while it settles back down. On a settled tank, a rise smaller
+        // than FILL_RISE_PERCENT is that slosh rather than a pump; treating it as a fill paused
+        // measurement for a minute at every stop and threw away the downward half of the slosh,
+        // driving observedDropPercent to -198% and -292% over two real tanks.
         val stationary = milesStep <= 0.0
         val above = levelPercent - state.smoothedLevelPercent
-        risingForSec = if (stationary && above > TankRules.FAST_TRACK_RISE_PERCENT) risingForSec + dtSec else 0.0
+        val couldBeFill = settledForSec < TankRules.SETTLE_AFTER_FILL_SEC ||
+            levelPercent - state.lowestLevelPercent >= TankRules.FILL_RISE_PERCENT
+        risingForSec = if (stationary && above > TankRules.FAST_TRACK_RISE_PERCENT && couldBeFill) {
+            risingForSec + dtSec
+        } else {
+            0.0
+        }
 
         val timeConstant = if (risingForSec >= TankRules.SUSTAINED_RISE_SEC) {
             TankRules.FILL_TIME_CONSTANT_SEC
@@ -635,12 +665,11 @@ class TankTracker(
         // anything could have happened between them are not a measurement, and neither is a
         // fill or the minute after one.
         settledForSec = if (risingForSec > 0.0) 0.0 else settledForSec + dtSec
-        val previousRaw = lastRawLevel
-        lastRawLevel = levelPercent
-        val measurable = previousRaw != null &&
-            dtSec <= TankRules.MAX_CONTIGUOUS_STEP_SEC &&
-            settledForSec >= TankRules.SETTLE_AFTER_FILL_SEC
-        val droppedThisStep = if (measurable) previousRaw!! - levelPercent else 0.0
+        val settled = settledForSec >= TankRules.SETTLE_AFTER_FILL_SEC
+        val previousRaw = if (settled) lastRawLevel else null
+        lastRawLevel = if (settled) levelPercent else null
+        val measurable = previousRaw != null && dtSec <= TankRules.MAX_CONTIGUOUS_STEP_SEC
+        val droppedThisStep = if (measurable) previousRaw - levelPercent else 0.0
         val rawGallonsStep = if (fuelFactor > 0) gallonsStep / fuelFactor else gallonsStep
         val rawMilesStep = if (distanceFactor > 0) milesStep / distanceFactor else milesStep
 
@@ -908,7 +937,20 @@ class RangeDamper(
  */
 fun splitRange(tank: TankState, dampedTotalMiles: Int, mpgUsed: Double): RangeEstimate {
     val gallons = tank.gallonsRemaining
-    val reserveShare = if (gallons > 0.001) (tank.reserveGallons / gallons).coerceIn(0.0, 1.0) else 0.0
+    // Honda's dashboard range and gauge E mark stop with the published 1.9-gallon reserve still
+    // in the tank, even when PID 012F continues reading down through the bottom of the tank
+    // (0.140 gal/% across 93.3% on this car). Splitting at the larger of the sender's floor and
+    // the published dashboard reserve keeps "gauge reads empty at" aligned with the dash.
+    val dashboardReserveGallons = if (tank.fullMarkPercent >= TankRules.FULL_MARK_MIN_PERCENT) {
+        max(tank.reserveGallons, CivicSpecs.FUEL_RESERVE_BELOW_SENDER_ZERO_GALLONS)
+    } else {
+        0.0
+    }
+    val reserveShare = if (gallons > 0.001) {
+        (dashboardReserveGallons / gallons).coerceIn(0.0, 1.0)
+    } else {
+        0.0
+    }
     val reserveMiles = (dampedTotalMiles * reserveShare).toInt()
     return RangeEstimate(
         totalMiles = dampedTotalMiles,

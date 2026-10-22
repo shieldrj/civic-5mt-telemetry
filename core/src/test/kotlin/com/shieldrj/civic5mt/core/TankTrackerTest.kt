@@ -530,6 +530,80 @@ class TankTrackerTest {
             assertEquals(milesBefore, next.get().milesSinceFill, "same tank, same count")
             assertNull(next.takeClosedTank())
         }
+
+        @Test
+        fun `Stopping after a climb does not eat the downward half of the slosh`() {
+            // What drove observedDropPercent to -198.4% and -292.3% on two real tanks. A climb
+            // or braking while moving pushed the float 14 points above the smoothed level,
+            // which was counted as a negative drop (-14); stopping at a light right afterwards
+            // triggered risingForSec, reset settledForSec to zero for a minute, and threw away
+            // the +14 return as the float settled back down.
+            val clock = MutableClock(1_700_000_000_000)
+            val t = TankTracker(InMemoryTankStore(), clock)
+            driveDown(t, clock, 90.0, 40.0, 0.140, mpg = 35.0)
+            val dropBefore = t.get().observedDropPercent
+
+            repeat(30) {
+                // Ten seconds of braking/hill while moving: float sloshes up from 40 to 54.
+                repeat(10) {
+                    clock.advanceMillis(1_000)
+                    t.record(54.0, 0.005, 0.00015, 1.0)
+                }
+                // Stop at the red light for twenty seconds while the float settles back to 40.
+                repeat(5) {
+                    clock.advanceMillis(1_000)
+                    t.record(54.0, 0.0, 0.00005, 1.0)
+                }
+                repeat(15) {
+                    clock.advanceMillis(1_000)
+                    t.record(40.0, 0.0, 0.00005, 1.0)
+                }
+                // Pull away on the flat at 40.
+                repeat(40) {
+                    clock.advanceMillis(1_000)
+                    t.record(40.0, 0.01, 0.0003, 1.0)
+                }
+            }
+
+            assertEquals(
+                dropBefore,
+                t.get().observedDropPercent,
+                0.01,
+                "thirty hill-and-stop cycles cancelled out instead of accumulating to -420%",
+            )
+        }
+
+        @Test
+        fun `A stored tank whose watched drop went negative is repaired on load`() {
+            // The tank read off the phone on 2026-10-21: 354.8 miles driven from 93.3% down to
+            // 23.09%, with observedDropPercent sitting at -292.3% from the stationary-slosh bug.
+            val store = InMemoryTankStore(
+                TankState(
+                    fillTimestamp = 1792106070170L,
+                    levelPercentAtFill = 93.3,
+                    milesSinceFill = 354.84342830516686,
+                    gallonsUsedSinceFill = 9.947908458796608,
+                    gallonsPerPercent = 0.14004366567402932,
+                    calibrated = true,
+                    smoothedLevelPercent = 23.09177959586657,
+                    lowestLevelPercent = 21.152697380875473,
+                    fullMarkPercent = 93.3,
+                    observedDropPercent = -292.3000000000005,
+                    observedGallons = 9.415855939448169,
+                    rawMilesSinceFill = 354.84342830516686,
+                    rawGallonsSinceFill = 9.947908458796608,
+                    observedRawGallons = 9.415855939448169,
+                ),
+            )
+
+            val t = TankTracker(store, MutableClock(1_700_000_000_000))
+
+            assertTrue(
+                t.get().observedDropPercent > 60.0,
+                "repaired watched drop to ${t.get().observedDropPercent}%",
+            )
+            assertEquals(t.get().observedDropPercent, store.load()!!.observedDropPercent, 1e-9)
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════════════

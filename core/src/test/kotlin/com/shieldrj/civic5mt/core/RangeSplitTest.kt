@@ -109,6 +109,33 @@ class RangeSplitTest {
             assertEquals(0, split.totalMiles)
             assertEquals(0, split.reserveMiles)
         }
+
+        @Test
+        fun `when PID 012F scales to the bottom of the tank, the dashboard reserve is still split off`() {
+            // The state read off the phone on 2026-10-21 after two pump receipts: PID 012F
+            // measured 0.14004 gal/% across a 93.3% full mark, so PID 012F itself keeps reading
+            // down into the 1.9-gallon reserve (leaving only 0.13 gal below PID 012F = 0%).
+            // Honda's dashboard gauge and DTE still stop with the 1.9-gallon reserve in the
+            // tank, so "gauge reads empty at" has to split at 1.9 gallons (~68 mi), not 0.13
+            // gallons (~5 mi).
+            val t = tank(
+                senderPercent = 23.09177959586657,
+                gallonsPerPercent = 0.14004366567402932,
+                fullMark = 93.3,
+            )
+            val split = splitRange(t, dampedTotalMiles = 120, mpgUsed = 35.7)
+
+            assertEquals(120, split.totalMiles)
+            assertTrue(
+                split.reserveMiles in 60..72,
+                "expected ~68 mi of dashboard reserve, got ${split.reserveMiles}",
+            )
+            assertTrue(
+                split.toSenderZeroMiles in 48..60,
+                "expected ~52 mi to dashboard E, got ${split.toSenderZeroMiles}",
+            )
+            assertEquals(120, split.toSenderZeroMiles + split.reserveMiles)
+        }
     }
 
     @Nested
