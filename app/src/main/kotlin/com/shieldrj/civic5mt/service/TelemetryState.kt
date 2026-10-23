@@ -11,6 +11,7 @@ import com.shieldrj.civic5mt.core.OilLifeProfile
 import com.shieldrj.civic5mt.core.ProtocolLogEntry
 import com.shieldrj.civic5mt.core.RawObdData
 import com.shieldrj.civic5mt.core.ShiftMode
+import com.shieldrj.civic5mt.core.TankState
 import com.shieldrj.civic5mt.core.TripAnalytics
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -63,6 +64,13 @@ object TelemetryState {
      */
     private val _calibration = MutableStateFlow(FuelCalibrationState())
     val calibration: StateFlow<FuelCalibrationState> = _calibration.asStateFlow()
+
+    /**
+     * The last stored tank state, so the Fuel tab can show the tank level and range when
+     * parked or standing at a pump with the engine off.
+     */
+    private val _tank = MutableStateFlow(TankState())
+    val tank: StateFlow<TankState> = _tank.asStateFlow()
 
     /** Human-readable progress during the handshake, and the failure text if it fails. */
     private val _statusMessage = MutableStateFlow("Not connected")
@@ -208,6 +216,10 @@ object TelemetryState {
 
     internal fun setCalibration(state: FuelCalibrationState) {
         _calibration.value = state
+    }
+
+    internal fun setTank(tank: TankState) {
+        _tank.value = tank
     }
 
     internal fun setStatusMessage(message: String) {

@@ -4,9 +4,12 @@ import com.shieldrj.civic5mt.core.ClutchHealthEngine
 import com.shieldrj.civic5mt.core.ClutchProfileStore
 import com.shieldrj.civic5mt.core.FuelBlendId
 import com.shieldrj.civic5mt.core.FuelCalibrationStore
+import com.shieldrj.civic5mt.core.InMemoryTankStore
 import com.shieldrj.civic5mt.core.LifetimeStore
 import com.shieldrj.civic5mt.core.OilLifeEngine
 import com.shieldrj.civic5mt.core.OilProfileStore
+import com.shieldrj.civic5mt.core.TankStore
+import com.shieldrj.civic5mt.core.withUsableCalibration
 import com.shieldrj.civic5mt.core.withUsableSpans
 
 /**
@@ -45,6 +48,7 @@ internal fun publishPersistedRecords(
     clutch: ClutchProfileStore,
     calibration: FuelCalibrationStore,
     blend: FuelBlendId,
+    tank: TankStore = InMemoryTankStore(),
 ) {
     lifetime.load()?.let { TelemetryState.setLifetime(it) }
 
@@ -56,7 +60,28 @@ internal fun publishPersistedRecords(
         TelemetryState.setClutch(ClutchHealthEngine(clutch).getProfile())
     }
 
-    calibration.load()?.let { TelemetryState.setCalibration(it.withUsableSpans()) }
+    val calState = calibration.load()?.withUsableSpans()
+    if (calState != null) {
+        TelemetryState.setCalibration(calState)
+    }
+
+    tank.load()?.withUsableCalibration()?.let { loadedTank ->
+        val pumpGpp = calState?.pumpGallonsPerPercent
+        val effectiveTank = if (pumpGpp != null) {
+            val reconciled = com.shieldrj.civic5mt.core.TankRules.reconcileGallonsPerPercent(
+                pumpGpp,
+                loadedTank.fullMarkPercent,
+            )
+            if (reconciled != null) {
+                loadedTank.copy(gallonsPerPercent = reconciled, calibrated = true)
+            } else {
+                loadedTank
+            }
+        } else {
+            loadedTank
+        }
+        TelemetryState.setTank(effectiveTank)
+    }
 
     TelemetryState.setFuelBlend(blend)
 }

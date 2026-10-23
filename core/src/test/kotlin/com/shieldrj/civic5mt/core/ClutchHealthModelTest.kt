@@ -414,6 +414,82 @@ class ClutchHealthModelTest {
             assertFalse(lastStatus.isSlipping)
             assertTrue(engine.getProfile().recentIncidents.isEmpty(), "No slip incidents should be logged for 4th gear downshift")
         }
+
+        @Test
+        fun `Rev-matched downshift from 5th to 4th without throttle lift does not trigger slip`() {
+            val clock = MutableClock()
+            val gears = GearCalculatorEngine(clock)
+            val engine = createEngine(clock)
+            engine.resetClutchProfile(100_000.0)
+
+            fun tick(rpm: Double, speedKmh: Double, throttle: Double): ClutchLiveStatus {
+                clock.advanceSec(0.08)
+                val gear = gears.analyzeGear(rpm, speedKmh, throttle)
+                return engine.recordTelemetryStep(
+                    rpm = rpm,
+                    speedKmh = speedKmh,
+                    throttlePercent = throttle,
+                    mafGramsPerSec = 55.0,
+                    lambda = 1.0,
+                    timingAdvanceDeg = 24.0,
+                    gearSelection = gear.currentGear,
+                    ambientTempC = 20.0,
+                    speedMph = speedKmh * 0.621371,
+                    dtSec = 0.08,
+                ).first
+            }
+
+            // 1. Cruising in 5th gear at 105 km/h under 35% throttle
+            repeat(20) { tick(lockedRpm(5, 105.0), 105.0, 35.0) }
+
+            // 2. Crisp rev-matched downshift into 4th gear at 105 km/h under 58% throttle
+            //    without an intermediate low-throttle or open-driveline sample
+            var lastStatus: ClutchLiveStatus? = null
+            repeat(25) {
+                lastStatus = tick(lockedRpm(4, 105.0), 105.0, 58.0)
+            }
+
+            assertNotNull(lastStatus)
+            assertEquals(4, lastStatus.attributedGear, "Adjacent downshift to 4th must be recognized immediately")
+            assertEquals(SlipClassification.LOCKED, lastStatus.classification)
+            assertFalse(lastStatus.isMacroSlip)
+            assertFalse(lastStatus.isSlipping)
+            assertTrue(engine.getProfile().recentIncidents.isEmpty(), "No slip incidents should be logged for rev-matched 4th gear downshift")
+        }
+
+        @Test
+        fun `withUsableIncidents heals false downshift incidents and restores capacity floor and health`() {
+            val base = createEngine().resetClutchProfile(195_000.0)
+            val poisoned = base.copy(
+                currentOdometer = 196_437.9,
+                accumulatedFrictionEnergyJoules = 4_871_160.29,
+                totalEngagementsCount = 1984,
+                abnormalSlipCount = 9,
+                ratioCalibration = 1.0493079787539398,
+                observedCapacityFloorNm = 80.0,
+                recentIncidents = listOf(
+                    ClutchSlipIncident(timestamp = 1792770016154L, gear = 5, speedKmh = 105.0, peakSlipRpm = 900.4659, durationSec = 60.415, peakTorqueNm = 169.369),
+                    ClutchSlipIncident(timestamp = 1792769850703L, gear = 5, speedKmh = 104.0, peakSlipRpm = 885.8172, durationSec = 53.729, peakTorqueNm = 168.427),
+                    ClutchSlipIncident(timestamp = 1792684523285L, gear = 5, speedKmh = 100.0, peakSlipRpm = 859.0933, durationSec = 11.179, peakTorqueNm = 167.269),
+                    ClutchSlipIncident(timestamp = 1792623045691L, gear = 5, speedKmh = 56.0, peakSlipRpm = 459.4557, durationSec = 3.921, peakTorqueNm = 123.519),
+                    ClutchSlipIncident(timestamp = 1792622972709L, gear = 5, speedKmh = 68.0, peakSlipRpm = 564.8617, durationSec = 17.515, peakTorqueNm = 168.250),
+                    ClutchSlipIncident(timestamp = 1792622938221L, gear = 5, speedKmh = 62.0, peakSlipRpm = 515.0522, durationSec = 20.996, peakTorqueNm = 165.402),
+                    ClutchSlipIncident(timestamp = 1792622731978L, gear = 5, speedKmh = 88.0, peakSlipRpm = 720.8926, durationSec = 8.431, peakTorqueNm = 168.821),
+                    ClutchSlipIncident(timestamp = 1792622668168L, gear = 5, speedKmh = 77.0, peakSlipRpm = 629.5665, durationSec = 5.451, peakTorqueNm = 165.747),
+                    ClutchSlipIncident(timestamp = 1791568621712L, gear = 3, speedKmh = 46.0, peakSlipRpm = 895.3652, durationSec = 15.174, peakTorqueNm = 122.742),
+                ),
+            )
+
+            val store = InMemoryClutchProfileStore(poisoned)
+            val engine = ClutchHealthEngine(store)
+            val healed = engine.getProfile()
+
+            assertTrue(healed.recentIncidents.isEmpty(), "All 9 false downshift incidents must be pruned")
+            assertEquals(0, healed.abnormalSlipCount)
+            assertEquals(283.5, healed.observedCapacityFloorNm)
+            assertEquals(99.0, healed.clutchHealthPercent)
+            assertEquals(ClutchConditionGrade.EXCELLENT, healed.conditionGrade)
+        }
     }
 
     @Nested

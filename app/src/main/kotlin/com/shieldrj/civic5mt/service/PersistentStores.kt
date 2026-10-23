@@ -25,6 +25,7 @@ import com.shieldrj.civic5mt.core.OilProfileStore
 import com.shieldrj.civic5mt.core.TankState
 import com.shieldrj.civic5mt.core.TankStore
 import com.shieldrj.civic5mt.core.withUsableCalibration
+import com.shieldrj.civic5mt.core.withUsableIncidents
 import com.shieldrj.civic5mt.core.withUsableSpans
 import org.json.JSONArray
 import org.json.JSONObject
@@ -185,7 +186,12 @@ class PrefsClutchProfileStore(context: Context) : ClutchProfileStore {
 
     override fun load(): ClutchProfile? {
         val raw = prefs.getString(KEY_CLUTCH, null) ?: return null
-        return runCatching { parseClutchProfile(JSONObject(raw)) }
+        return runCatching {
+            val parsed = parseClutchProfile(JSONObject(raw))
+            val usable = parsed.withUsableIncidents()
+            if (usable != parsed) save(usable)
+            usable
+        }
             .onFailure { Log.w(TAG, "Clutch profile unreadable, ignoring", it) }
             .getOrNull()
     }

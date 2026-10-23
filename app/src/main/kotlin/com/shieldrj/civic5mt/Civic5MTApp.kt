@@ -31,7 +31,7 @@ class Civic5MTApp : Application() {
 
         importRescuedRecordsOnce(this)?.let { Log.i(TAG, it) }
 
-        PrefsTankStore(this).load()
+        val tankStore = PrefsTankStore(this)
 
         publishPersistedRecords(
             lifetime = PrefsLifetimeStore(this),
@@ -39,6 +39,7 @@ class Civic5MTApp : Application() {
             clutch = PrefsClutchProfileStore(this),
             calibration = PrefsFuelCalibrationStore(this),
             blend = loadFuelBlend(this),
+            tank = tankStore,
         )
     }
 

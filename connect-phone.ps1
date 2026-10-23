@@ -16,17 +16,22 @@ if ($devs -match "(\S+)\s+device\b") {
     exit 0
 }
 
-# 2. Start ADB server with mDNS support
+# 2. Start ADB server with mDNS support and wake phone Wi-Fi
+$ip = "192.168.1.225"
 & adb start-server | Out-Null
-Start-Sleep -Seconds 1
+Test-Connection -ComputerName $ip -Count 2 -Quiet | Out-Null
 
-# 3. Check mDNS discovered services
-$mdns = & adb mdns services | Out-String
-if ($mdns -match "(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+)") {
-    $endpoint = $matches[1]
-    Write-Host "⚡ Found phone via mDNS: $endpoint. Connecting..." -ForegroundColor Yellow
-    & adb connect $endpoint | Out-Null
-    Start-Sleep -Seconds 1
+# 3. Check mDNS discovered services (poll up to 3 times while mDNS resolves)
+for ($attempt = 1; $attempt -le 3; $attempt++) {
+    Start-Sleep -Seconds 2
+    $mdns = & adb mdns services | Out-String
+    if ($mdns -match "(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+)") {
+        $endpoint = $matches[1]
+        Write-Host "⚡ Found phone via mDNS: $endpoint. Connecting..." -ForegroundColor Yellow
+        & adb connect $endpoint | Out-Null
+        Start-Sleep -Seconds 1
+        break
+    }
 }
 
 $devs = & adb devices | Out-String
@@ -37,7 +42,6 @@ if ($devs -match "(\S+)\s+device\b") {
 }
 
 # 4. Fallback: Fast auto-scan for phone's open wireless debugging port
-$ip = "192.168.1.225"
 Write-Host "🔍 Locating active wireless debugging port on $ip..." -ForegroundColor Yellow
 
 $foundPort = $null
