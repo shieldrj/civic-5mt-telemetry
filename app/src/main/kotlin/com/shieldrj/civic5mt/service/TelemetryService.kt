@@ -135,6 +135,7 @@ class TelemetryService : Service() {
         TelemetryState.setOil(manager.oilLife.getProfile())
         TelemetryState.setClutch(manager.clutchHealth.getProfile())
         TelemetryState.setCalibration(manager.getCalibration())
+        TelemetryState.setTank(manager.tank.get())
 
         recorder = TripRecorder(TripDatabase.get(applicationContext).tripDao())
 
@@ -950,6 +951,7 @@ class TelemetryService : Service() {
             amendLast = amendLast,
         )
         TelemetryState.setCalibration(manager.getCalibration())
+        TelemetryState.setTank(manager.tank.get())
         if (outcome is ReceiptOutcome.Saved) {
             getSystemService(NotificationManager::class.java).cancel(RECEIPT_NOTIFICATION_ID)
         }
@@ -978,6 +980,7 @@ class TelemetryService : Service() {
         }
         manager.markFilled(level)
         TelemetryState.setCalibration(manager.getCalibration())
+        TelemetryState.setTank(manager.tank.get())
         val done = "Started a new tank at " + level.toInt() + "%"
         TelemetryState.setStatusMessage(done)
         TelemetryState.postActionFeedback(done, worked = true)
@@ -1078,6 +1081,7 @@ class TelemetryService : Service() {
 
             val snapshot = manager.also { it.shiftMode = TelemetryState.shiftMode.value }.tick(elm.data.value, dtSec, TelemetryState.connection.value)
             TelemetryState.setMetrics(snapshot.metrics)
+            TelemetryState.setTank(manager.tank.get())
             publishFillRecord()
             TelemetryState.setTrip(snapshot.trip)
             TelemetryState.setOil(snapshot.oil)

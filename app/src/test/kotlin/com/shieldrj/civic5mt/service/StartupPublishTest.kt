@@ -10,9 +10,12 @@ import com.shieldrj.civic5mt.core.InMemoryClutchProfileStore
 import com.shieldrj.civic5mt.core.InMemoryFuelCalibrationStore
 import com.shieldrj.civic5mt.core.InMemoryLifetimeStore
 import com.shieldrj.civic5mt.core.InMemoryOilProfileStore
+import com.shieldrj.civic5mt.core.InMemoryTankStore
 import com.shieldrj.civic5mt.core.LifetimeStats
 import com.shieldrj.civic5mt.core.LifetimeStore
 import com.shieldrj.civic5mt.core.OilProfileStore
+import com.shieldrj.civic5mt.core.TankState
+import com.shieldrj.civic5mt.core.TankStore
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.DisplayName
 import org.junit.jupiter.api.Nested
@@ -49,6 +52,7 @@ class StartupPublishTest {
     fun resetSingleton() {
         TelemetryState.setLifetime(LifetimeStats())
         TelemetryState.setCalibration(FuelCalibrationState())
+        TelemetryState.setTank(TankState())
         TelemetryState.setFuelBlend(FuelBlendId.E10)
     }
 
@@ -58,7 +62,8 @@ class StartupPublishTest {
         clutch: ClutchProfileStore = InMemoryClutchProfileStore(),
         calibration: FuelCalibrationStore = InMemoryFuelCalibrationStore(),
         blend: FuelBlendId = FuelBlendId.E10,
-    ) = publishPersistedRecords(lifetime, oil, clutch, calibration, blend)
+        tank: TankStore = InMemoryTankStore(),
+    ) = publishPersistedRecords(lifetime, oil, clutch, calibration, blend, tank)
 
     /** A store holding a real profile, without spelling out eighteen fields nobody reads. */
     private fun seededClutchStore(engagements: Int): InMemoryClutchProfileStore {
@@ -113,6 +118,36 @@ class StartupPublishTest {
 
             assertEquals(132_004.2, TelemetryState.lifetime.value.totalMiles)
             assertEquals(FuelBlendId.E15, TelemetryState.fuelBlend.value)
+        }
+
+        @Test
+        @DisplayName("publishes the persisted tank state with learned pump gallons per percent")
+        fun publishesTank() {
+            val cal = FuelCalibrationState(
+                fills = listOf(
+                    FillRecord(
+                        detectedAtMillis = 1_700_000_000_000L,
+                        levelBefore = 11.28,
+                        levelAfter = 93.30,
+                        pumpGallons = 11.50,
+                    ),
+                ),
+            )
+            val storedTank = TankState(
+                smoothedLevelPercent = 93.2,
+                fullMarkPercent = 93.3,
+                milesSinceFill = 30.9,
+                gallonsUsedSinceFill = 0.83,
+            )
+
+            publish(
+                calibration = InMemoryFuelCalibrationStore(cal),
+                tank = InMemoryTankStore(storedTank),
+            )
+
+            assertEquals(93.2, TelemetryState.tank.value.smoothedLevelPercent)
+            assertEquals(30.9, TelemetryState.tank.value.milesSinceFill)
+            assertEquals(true, TelemetryState.tank.value.calibrated)
         }
     }
 

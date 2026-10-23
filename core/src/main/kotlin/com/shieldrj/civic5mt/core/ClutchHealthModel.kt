@@ -103,6 +103,56 @@ data class ClutchProfile(
     val recentIncidents: List<ClutchSlipIncident> = emptyList(),
 )
 
+/**
+ * Drops stored slip incidents whose peak RPM was actually the locked ratio of a lower gear,
+ * and restores [ClutchProfile.observedCapacityFloorNm] when no genuine high-gear slip remains.
+ *
+ * A rev-matched downshift from 5th to 4th on the highway raises engine speed by ~30.5% (+830 to
+ * +880 RPM at 100-105 km/h). Before adjacent-gear lock detection, a fast rev-match that did not
+ * drop throttle below 20% stayed attributed to 5th gear for the duration of the pass in 4th,
+ * logging the 4th-gear ratio as a 5th-gear slip and ratcheting [ClutchProfile.observedCapacityFloorNm]
+ * down to 80 N·m.
+ */
+fun ClutchProfile.withUsableIncidents(): ClutchProfile {
+    if (recentIncidents.isEmpty() && observedCapacityFloorNm >= CivicSpecs.CLUTCH_NEW_TORQUE_CAPACITY_NM) {
+        return this
+    }
+    val kept = recentIncidents.filterNot { isFalseDownshiftIncident(it, ratioCalibration) }
+    val removedCount = recentIncidents.size - kept.size
+    if (removedCount == 0) return this
+
+    val updatedAbnormalCount = (abnormalSlipCount - removedCount).coerceAtLeast(kept.size)
+    val highGearFloors = kept
+        .filter { it.gear >= 3 && it.peakTorqueNm > 50.0 }
+        .map { max(80.0, it.peakTorqueNm * 1.05) }
+    val restoredFloor = highGearFloors.minOrNull() ?: CivicSpecs.CLUTCH_NEW_TORQUE_CAPACITY_NM
+
+    return copy(
+        abnormalSlipCount = updatedAbnormalCount,
+        observedCapacityFloorNm = restoredFloor,
+        recentIncidents = kept,
+    )
+}
+
+private fun isFalseDownshiftIncident(
+    incident: ClutchSlipIncident,
+    ratioCalibration: Double,
+): Boolean {
+    if (incident.gear <= 1 || incident.speedKmh <= 0.0) return false
+    val wheelRpm = (incident.speedKmh / 60.0) / CivicSpecs.TIRE_CIRCUMFERENCE_KM
+    fun lockedRpm(g: Int): Double {
+        val ratio = CivicSpecs.GEAR_RATIOS[g] ?: return 0.0
+        return wheelRpm * ratio * CivicSpecs.FINAL_DRIVE_RATIO * ratioCalibration
+    }
+
+    val peakRpm = lockedRpm(incident.gear) + incident.peakSlipRpm
+    val tolerance = if (incident.durationSec >= 3.0) 0.08 else 0.03
+    return (1 until incident.gear).any { lowerGear ->
+        val target = lockedRpm(lowerGear)
+        target > 0.0 && abs(peakRpm - target) / target <= tolerance
+    }
+}
+
 interface ClutchProfileStore {
     fun load(): ClutchProfile?
     fun save(profile: ClutchProfile)
@@ -164,8 +214,13 @@ class ClutchHealthEngine(
     private var drivelineDisengagedSinceConfirmed: Boolean = false
 
     init {
-        profile = store.load() ?: defaultProfile().also { store.save(it) }
+        val loaded = store.load()
+        val healed = loaded?.withUsableIncidents()
+        profile = healed ?: defaultProfile()
         recalculateClutchHealth()
+        if (loaded == null || profile != loaded) {
+            store.save(profile)
+        }
     }
 
     /**
@@ -280,7 +335,13 @@ class ClutchHealthEngine(
      * locked figure is slip. Once a lift is seen the gear is no longer trustworthy and
      * nothing is attributed until the ratio matches again.
      */
-    private fun attributeGear(reportedGear: Int?, throttlePercent: Double, stationary: Boolean): Int? {
+    private fun attributeGear(
+        reportedGear: Int?,
+        throttlePercent: Double,
+        stationary: Boolean,
+        rpm: Double,
+        wheelRpm: Double,
+    ): Int? {
         if (stationary) {
             // Stopped: whatever gear it was in, the next move re-establishes it.
             confirmedGear = null
@@ -320,8 +381,19 @@ class ClutchHealthEngine(
         }
 
         // 2. Adjacent gear downshift (e.g. 5th -> 4th, a 30.5% ratio step):
-        //    Sustained slip in 5th can momentarily drift into 4th's match window. Keep
-        //    attributing to 5th unless a lift, open driveline, or stop has occurred.
+        //    A slipping clutch can wander into GearCalculatorEngine's wide 8% uncalibrated
+        //    window, but a car that has actually downshifted into 4th sits locked within 2.5%
+        //    of 4th gear's tyre-calibrated ratio.
+        val adjacentTargetRpm = expectedRpmFor(reportedGear, wheelRpm)
+        if (adjacentTargetRpm > 200.0 && abs(rpm - adjacentTargetRpm) / adjacentTargetRpm <= 0.025) {
+            confirmedGear = reportedGear
+            drivelineDisengagedSinceConfirmed = false
+            if (throttlePercent >= LIFT_THROTTLE_PERCENT) {
+                liftedSinceGearConfirmed = false
+            }
+            return reportedGear
+        }
+
         return confirmedGear
     }
 
@@ -452,7 +524,7 @@ class ClutchHealthEngine(
                 }
             }
         }
-        val attributedGear = attributeGear(reportedGear, throttlePercent, stationary)
+        val attributedGear = attributeGear(reportedGear, throttlePercent, stationary, rpm, wheelRpm)
         updateCalibration(reportedGear, rpm, wheelRpm, throttlePercent, speedKmh)
 
         var slipRpm = 0.0

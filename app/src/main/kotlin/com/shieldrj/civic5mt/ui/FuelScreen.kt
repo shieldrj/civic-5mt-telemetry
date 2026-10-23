@@ -44,13 +44,18 @@ import com.shieldrj.civic5mt.core.COSTCO_STATIONS
 import com.shieldrj.civic5mt.core.CivicSpecs
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.FUEL_BLENDS
+import com.shieldrj.civic5mt.core.FillRecord
 import com.shieldrj.civic5mt.core.FuelBlendId
+import com.shieldrj.civic5mt.core.FuelCalibrationState
 import com.shieldrj.civic5mt.core.GasPriceSnapshot
 import com.shieldrj.civic5mt.core.LiveMetrics
 import com.shieldrj.civic5mt.core.OUNCES_PER_US_GALLON
+import com.shieldrj.civic5mt.core.TankRules
 import com.shieldrj.civic5mt.core.TripAnalytics
 import com.shieldrj.civic5mt.core.fuelBlend
 import com.shieldrj.civic5mt.core.isClosedLoop
+import com.shieldrj.civic5mt.core.rangeMiles
+import com.shieldrj.civic5mt.core.splitRange
 import com.shieldrj.civic5mt.data.GasPriceRepository
 import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
@@ -335,98 +340,125 @@ private fun TankSection(
     onSelect: (FuelBlendId) -> Unit,
 ) {
     val blend = fuelBlend(activeId)
+    val calibration by TelemetryState.calibration.collectAsStateWithLifecycle()
+    val savedTank by TelemetryState.tank.collectAsStateWithLifecycle()
+    val lifetime by TelemetryState.lifetime.collectAsStateWithLifecycle()
+
     SectionHeading(
         title = "Fuel in the tank",
         aside = "%.2f:1 · %.0f g/L".format(blend.stoichAfr, blend.densityGramsPerLiter),
     )
 
-    if (live) {
-        // Both absent on a car with no PID 2F, and drawn as absences rather than as a
-        // five-eighths tank. That default is what this port removed.
-        // What is in the tank, and what the car thinks is in the tank. They are different
-        // numbers and both are worth showing here: the first is the honest one and is what
-        // the overlay carries, the second is what the dashboard gauge is doing - which is
-        // the thing being corrected, so hiding it would make the correction unreadable.
-        // Under E both figures are counted down from fuel burned rather than read off the
-        // gauge, so both are marked as estimates. See TankState.belowSenderZero.
-        val bounded = metrics.tankBelowSenderZero
+    val hasSavedTank = savedTank.fillTimestamp != 0L
+    if (live || hasSavedTank) {
+        val bounded = if (live) metrics.tankBelowSenderZero else savedTank.belowSenderZero
+        val fuelLeftPercent = if (live) metrics.fuelPercentRemaining else savedTank.fuelPercentRemaining
+        val senderPercent = if (live) metrics.fuelLevelPercent else savedTank.smoothedLevelPercent
+
+        val verifiedMpg = calibration.economyMpg
+        val parkedMpgUsed = TankRules.mpgForRange(
+            tankMpg = savedTank.tankMpg,
+            tankGallonsUsed = savedTank.gallonsUsedSinceFill,
+            lifetimeMpg = lifetime.lifetimeMpg,
+            lifetimeMiles = lifetime.totalMiles,
+            verifiedMpg = verifiedMpg,
+        )
+        val parkedRange = if (hasSavedTank) {
+            val total = rangeMiles(savedTank, lifetime.lifetimeMpg, lifetime.totalMiles, verifiedMpg)
+            splitRange(savedTank, total, parkedMpgUsed)
+        } else {
+            null
+        }
+
+        val rangeTotal = if (live) metrics.fuelRangeMiles else parkedRange?.totalMiles
+        val rangeToZero = if (live) metrics.fuelRangeToSenderZeroMiles else parkedRange?.toSenderZeroMiles
+        val reserveMiles = if (live) metrics.fuelRangeReserveMiles else parkedRange?.reserveMiles
+        val rangeMpgUsed = if (live) metrics.rangeMpgUsed else parkedRange?.mpgUsed
 
         ValueRow(
             label = "Fuel left",
-            value = metrics.fuelPercentRemaining
+            value = fuelLeftPercent
                 ?.let { if (bounded) "about %.0f%%".format(it) else "%.0f%%".format(it) }
                 ?: "—",
-            note = metrics.fuelLevelPercent
-                ?.let { "the sender reads %.0f%%".format(it) }
+            note = senderPercent
+                ?.let {
+                    if (live) {
+                        "the sender reads %.0f%%".format(it)
+                    } else {
+                        "last seen · sender read %.0f%%".format(it)
+                    }
+                }
                 ?: "not reported by this car",
         )
         ValueRow(
             label = "Range",
-            value = metrics.fuelRangeMiles
+            value = rangeTotal
                 ?.let { if (bounded) "about $it mi" else "$it mi" }
                 ?: "—",
             note = when {
-                metrics.fuelRangeMiles == null -> null
+                rangeTotal == null -> null
                 bounded -> "gauge on E, counting down the reserve"
+                !live -> "%.0f mi since fill · %.1f gal left".format(
+                    savedTank.milesSinceFill,
+                    savedTank.gallonsRemaining,
+                )
                 else -> "at this tank's economy"
             },
         )
-        // The split between fuel the sender can see and fuel underneath its zero.
-        //
-        // This row is the answer to "why does the dash say fifty-four when this says a hundred
-        // and thirty". It is not a disagreement about fuel: Honda's figure stops at the
-        // sender's zero on purpose and this one counts the reserve underneath it. Printing one
-        // number made that look like an error rather than a different question.
-        val reserveMiles = metrics.fuelRangeReserveMiles
-        if (reserveMiles != null && reserveMiles > 0) {
+        if (reserveMiles != null && reserveMiles > 0 && rangeToZero != null) {
             ValueRow(
                 label = "Gauge reads E at",
-                value = "${metrics.fuelRangeToSenderZeroMiles} mi",
+                value = "$rangeToZero mi",
                 note = "then $reserveMiles mi of reserve below E",
             )
         }
-        if (metrics.rangeMpgUsed != null) {
+        if (rangeMpgUsed != null) {
+            val effVerifiedMpg = if (live) metrics.verifiedMpg else calibration.economyMpg
+            val effVerifiedGal = if (live) metrics.verifiedGallons else calibration.receiptGallons
+            val effLifetimeMiles = if (live) metrics.lifetimeMiles else lifetime.totalMiles
             ValueRow(
                 label = "Range is built on",
-                value = "%.1f mpg".format(metrics.rangeMpgUsed),
+                value = "%.1f mpg".format(rangeMpgUsed),
                 note = when {
-                    metrics.verifiedMpg != null -> "checked against %.1f gal of receipts"
-                        .format(metrics.verifiedGallons)
-                    metrics.lifetimeMiles >= 20 -> "this car's lifetime average"
+                    effVerifiedMpg != null -> "checked against %.1f gal of receipts"
+                        .format(effVerifiedGal)
+                    effLifetimeMiles >= 20 -> "this car's lifetime average"
                     else -> "the EPA rating, until this car has measured its own"
                 },
             )
         }
-        // What the receipts have done. The spread is the honest width of every figure above:
-        // receipts that disagree by two percent cannot give a range better than two percent.
-        val receipts = metrics.calibrationFillCount
+    }
+
+    val receipts = if (live) metrics.calibrationFillCount else calibration.gaugeReceiptCount
+    val spread = if (live) metrics.calibrationSpreadPercent else calibration.spreadPercent
+    val fuelFactor = if (live) metrics.fuelCorrectionFactor else calibration.fuelCorrectionFactor
+    val distFactor = if (live) metrics.distanceCorrectionFactor else calibration.distanceCorrectionFactor
+
+    ValueRow(
+        label = "Gauge measured",
+        value = when (receipts) {
+            0 -> "not yet"
+            1 -> "by 1 receipt"
+            else -> "by $receipts receipts"
+        },
+        note = when {
+            receipts == 0 -> "add a receipt after your next fill"
+            spread != null -> "they agree within %.1f%%".format(spread)
+            else -> "gallons pumped against the gauge's rise"
+        },
+    )
+    if (fuelFactor != 1.0 || distFactor != 1.0) {
         ValueRow(
-            label = "Gauge measured",
-            value = when (receipts) {
-                0 -> "not yet"
-                1 -> "by 1 receipt"
-                else -> "by $receipts receipts"
-            },
-            note = when {
-                receipts == 0 -> "add a receipt after your next fill"
-                metrics.calibrationSpreadPercent != null ->
-                    "they agree within %.1f%%".format(metrics.calibrationSpreadPercent)
-                else -> "gallons pumped against the gauge's rise"
+            label = "Sensor correction",
+            value = buildString {
+                append("fuel %+.1f%%".format((fuelFactor - 1.0) * 100))
+                if (distFactor != 1.0) {
+                    append(", miles %+.1f%%".format((distFactor - 1.0) * 100))
+                }
             },
         )
-        if (metrics.fuelCorrectionFactor != 1.0 || metrics.distanceCorrectionFactor != 1.0) {
-            ValueRow(
-                label = "Sensor correction",
-                value = buildString {
-                    append("fuel %+.1f%%".format((metrics.fuelCorrectionFactor - 1.0) * 100))
-                    if (metrics.distanceCorrectionFactor != 1.0) {
-                        append(", miles %+.1f%%".format((metrics.distanceCorrectionFactor - 1.0) * 100))
-                    }
-                },
-            )
-        }
-        Spacer(Modifier.height(8.dp))
     }
+    Spacer(Modifier.height(8.dp))
 
     Text(
         text = "Sets the stoichiometric ratio and the density behind every fuel figure on " +
@@ -851,6 +883,11 @@ private fun ReceiptSection(context: android.content.Context) {
                 .clickable { handLog = true }
                 .padding(vertical = 12.dp),
         )
+
+        if (calibration.fills.size > 1) {
+            Spacer(Modifier.height(6.dp))
+            RecentFillsList(calibration)
+        }
     }
 
     // What the last tap did. The work happens in the service, so without this the button
@@ -990,6 +1027,48 @@ private fun ReceiptCard(
 /** "Wed 5:02 PM", which is how a driver remembers a fill. */
 private fun fillTime(millis: Long): String =
     java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.US).format(java.util.Date(millis))
+
+/** "Oct 22", for comparing fills across weeks. */
+private fun fillDate(millis: Long): String =
+    java.text.SimpleDateFormat("MMM d", java.util.Locale.US).format(java.util.Date(millis))
+
+@Composable
+private fun RecentFillsList(calibration: FuelCalibrationState) {
+    Label("RECENT FILL-UPS")
+    Spacer(Modifier.height(6.dp))
+    val fuelFactor = calibration.fuelCorrectionFactor
+    val distFactor = calibration.distanceCorrectionFactor
+
+    calibration.fills.takeLast(6).asReversed().forEach { fill ->
+        FillHistoryRow(fill, fuelFactor, distFactor)
+    }
+}
+
+@Composable
+private fun FillHistoryRow(fill: FillRecord, fuelFactor: Double, distFactor: Double) {
+    val leftLabel = buildString {
+        append(fillDate(fill.detectedAtMillis))
+        val before = fill.levelBefore
+        val after = fill.levelAfter
+        if (before != null && after != null) {
+            append(" · %.0f%% → %.0f%%".format(before, after))
+        }
+    }
+    val gallonsText = fill.pumpGallons?.let { "%.2f gal".format(it) } ?: "no receipt"
+    val tankNote = if (fill.spanRawMiles >= 10.0 && fill.spanRawGallons > 0.1) {
+        val miles = fill.spanRawMiles * distFactor
+        val gallons = fill.spanRawGallons * fuelFactor
+        "%.0f mi · %.1f mpg".format(miles, miles / gallons)
+    } else {
+        null
+    }
+
+    ValueRow(
+        label = leftLabel,
+        value = gallonsText,
+        note = tankNote,
+    )
+}
 
 /** A plain number entry, hand-rolled to match the rest of the screen. */
 @Composable
