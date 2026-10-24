@@ -2,11 +2,14 @@ package com.shieldrj.civic5mt.service
 
 import com.shieldrj.civic5mt.core.ClutchHealthEngine
 import com.shieldrj.civic5mt.core.ClutchProfileStore
+import com.shieldrj.civic5mt.core.DtcReportStore
+import com.shieldrj.civic5mt.core.DtcScanReport
 import com.shieldrj.civic5mt.core.FuelBlendId
 import com.shieldrj.civic5mt.core.FillRecord
 import com.shieldrj.civic5mt.core.FuelCalibrationState
 import com.shieldrj.civic5mt.core.FuelCalibrationStore
 import com.shieldrj.civic5mt.core.InMemoryClutchProfileStore
+import com.shieldrj.civic5mt.core.InMemoryDtcReportStore
 import com.shieldrj.civic5mt.core.InMemoryFuelCalibrationStore
 import com.shieldrj.civic5mt.core.InMemoryLifetimeStore
 import com.shieldrj.civic5mt.core.InMemoryOilProfileStore
@@ -53,6 +56,7 @@ class StartupPublishTest {
         TelemetryState.setLifetime(LifetimeStats())
         TelemetryState.setCalibration(FuelCalibrationState())
         TelemetryState.setTank(TankState())
+        TelemetryState.setDtcReport(null)
         TelemetryState.setFuelBlend(FuelBlendId.E10)
     }
 
@@ -63,7 +67,8 @@ class StartupPublishTest {
         calibration: FuelCalibrationStore = InMemoryFuelCalibrationStore(),
         blend: FuelBlendId = FuelBlendId.E10,
         tank: TankStore = InMemoryTankStore(),
-    ) = publishPersistedRecords(lifetime, oil, clutch, calibration, blend, tank)
+        dtcReport: DtcReportStore = InMemoryDtcReportStore(),
+    ) = publishPersistedRecords(lifetime, oil, clutch, calibration, blend, tank, dtcReport)
 
     /** A store holding a real profile, without spelling out eighteen fields nobody reads. */
     private fun seededClutchStore(engagements: Int): InMemoryClutchProfileStore {
@@ -148,6 +153,16 @@ class StartupPublishTest {
             assertEquals(93.2, TelemetryState.tank.value.smoothedLevelPercent)
             assertEquals(30.9, TelemetryState.tank.value.milesSinceFill)
             assertEquals(true, TelemetryState.tank.value.calibrated)
+        }
+
+        @Test
+        @DisplayName("publishes the last DTC scan report so Codes works parked")
+        fun publishesDtcReport() {
+            val report = DtcScanReport(timestamp = 1_700_000_000_000L, milOn = false)
+
+            publish(dtcReport = InMemoryDtcReportStore(report))
+
+            assertEquals(report, TelemetryState.dtcReport.value)
         }
     }
 

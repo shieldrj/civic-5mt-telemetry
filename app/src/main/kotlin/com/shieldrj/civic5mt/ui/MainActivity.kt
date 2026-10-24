@@ -150,6 +150,14 @@ class MainActivity : ComponentActivity() {
                 deepLinkTab.value = Tab.Health
                 deepLinkSection.value = HealthSection.Clutch
             }
+            TelemetryService.SCREEN_OIL -> {
+                deepLinkTab.value = Tab.Health
+                deepLinkSection.value = HealthSection.Oil
+            }
+            TelemetryService.SCREEN_CODES -> {
+                deepLinkTab.value = Tab.Health
+                deepLinkSection.value = HealthSection.Codes
+            }
         }
     }
 }

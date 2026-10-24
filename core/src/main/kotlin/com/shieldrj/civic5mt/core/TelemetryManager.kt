@@ -29,10 +29,17 @@ class TelemetryManager(
     val tank: TankTracker = TankTracker(clock = clock),
     val fuelCalibration: FuelCalibrationEngine = FuelCalibrationEngine(clock = clock),
     val charging: ChargingMonitor = ChargingMonitor(),
+    val engineHealth: EngineHealthMonitor = EngineHealthMonitor(),
     private val gearCalculator: GearCalculatorEngine = GearCalculatorEngine(clock),
 ) {
     var shiftMode: ShiftMode = ShiftMode.ECO
     var gasPricePerGallon: Double = CivicSpecs.GAS_PRICE_DEFAULT_DOLLARS_PER_GALLON
+
+    private var dtcReport: DtcScanReport? = null
+
+    fun setDtcReport(report: DtcScanReport?) {
+        dtcReport = report
+    }
 
     private var lifetime: LifetimeStats = lifetimeStore.load() ?: LifetimeStats()
     private var lifetimeSaveTimestamp: Long = 0
@@ -257,6 +264,17 @@ class TelemetryManager(
         // would otherwise hand a single stale 12.1 the twenty seconds it needs to become a
         // warning. A gap nobody watched is not twenty seconds of anything.
         charging.observe(raw.batteryVoltage, raw.rpm, integrationDtSec)
+        engineHealth.observe(
+            rpm = raw.rpm,
+            speedKmh = raw.speedKmh,
+            coolantF = coolantF,
+            throttlePos = raw.throttlePos,
+            stft = raw.stft,
+            ltft = raw.ltft,
+            fuelSystemStatus = raw.fuelSystemStatus,
+            outsideAirC = raw.ambientC,
+            dtSec = integrationDtSec,
+        )
 
         val health = evaluateHealthStatus(
             rpm = raw.rpm,
@@ -264,9 +282,8 @@ class TelemetryManager(
             isClutchSlipping = clutchLive.isSlipping,
             clutchLive = clutchLive,
             clutchProfile = clutchProfile,
+            oilProfile = oilProfile,
             gear = gear.currentGear,
-            stft = raw.stft,
-            ltft = raw.ltft,
         )
 
         val metrics = LiveMetrics(
@@ -357,11 +374,12 @@ class TelemetryManager(
         isClutchSlipping: Boolean,
         clutchLive: ClutchLiveStatus,
         clutchProfile: ClutchProfile,
+        oilProfile: OilLifeProfile,
         gear: GearSelection,
-        stft: Double,
-        ltft: Double,
     ): VehicleHealthStatus {
         val chargingStatus = chargingHealthStatus(charging.verdict, charging.volts, charging.peakVolts)
+        val dtcStatus = dtcHealthStatus(dtcReport)
+        val engineIssueStatus = engineIssueHealthStatus(engineHealth.activeIssue)
 
         if (coolantF >= 225) {
             return VehicleHealthStatus(
@@ -374,6 +392,7 @@ class TelemetryManager(
         // system that has actually failed outranks a coolant reading ten degrees warm, and
         // burying it under one meant the more urgent banner was the one that never showed.
         if (chargingStatus?.level == HealthLevel.CRITICAL) return chargingStatus
+        if (dtcStatus?.level == HealthLevel.CRITICAL) return dtcStatus
         if (coolantF >= 215) {
             return VehicleHealthStatus(
                 level = HealthLevel.ADVISORY,
@@ -382,6 +401,7 @@ class TelemetryManager(
             )
         }
         if (chargingStatus != null) return chargingStatus
+        if (dtcStatus != null) return dtcStatus
         if (clutchLive.isMacroSlip) {
             // The gear the slip was measured against, not [gear]. Under real slip the ratio
             // no longer matches anything, so the calculator's answer here is "CLUTCH" -
@@ -407,18 +427,13 @@ class TelemetryManager(
                 detail = "Clutch holding capacity severely degraded. Inspection recommended.",
             )
         }
-        val totalTrim = stft + ltft
-        if (rpm >= CivicSpecs.ENGINE_RUNNING_RPM && totalTrim > 18.0) {
+        if (engineIssueStatus != null) return engineIssueStatus
+        if (oilProfile.oilLifePercent <= EngineHealthRules.OIL_SERVICE_DUE_PERCENT) {
             return VehicleHealthStatus(
                 level = HealthLevel.ADVISORY,
-                summary = "RUNNING LEAN · TRIMS +%.0f%%".format(totalTrim),
-                detail = "ECU adding excess fuel. Check for vacuum leak or dirty MAF sensor.",
-            )
-        } else if (rpm >= CivicSpecs.ENGINE_RUNNING_RPM && totalTrim < -18.0) {
-            return VehicleHealthStatus(
-                level = HealthLevel.ADVISORY,
-                summary = "RUNNING RICH · TRIMS %.0f%%".format(totalTrim),
-                detail = "ECU removing excess fuel.",
+                summary = "OIL CHANGE DUE · ${oilProfile.oilLifePercent.toInt()}%",
+                detail = "Engine oil life is down to ${oilProfile.oilLifePercent.toInt()}% " +
+                    "(${oilProfile.estimatedMilesRemaining} mi left). Change with 0W-20 full synthetic.",
             )
         }
         if (rpm >= CivicSpecs.ENGINE_RUNNING_RPM && coolantF in 33..159) {
@@ -549,6 +564,7 @@ class TelemetryManager(
         // The charging verdict is a per-drive judgement - "never came up to a charge" means
         // never on this drive - so the peak it rests on has to start over with the trip.
         charging.resetForDrive()
+        engineHealth.resetForDrive()
     }
 
     /**

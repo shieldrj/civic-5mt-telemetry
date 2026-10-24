@@ -84,10 +84,13 @@ fun DriveScreen(
                     HealthStatusBanner(
                         status = metrics.healthStatus,
                         onClick = {
-                            if (metrics.healthStatus.summary.startsWith("CLUTCH")) {
-                                onOpenHealth(HealthSection.Clutch)
-                            } else {
-                                onOpenHealth(HealthSection.Codes)
+                            when {
+                                metrics.healthStatus.summary.startsWith("CLUTCH") ->
+                                    onOpenHealth(HealthSection.Clutch)
+                                metrics.healthStatus.summary.startsWith("OIL") ->
+                                    onOpenHealth(HealthSection.Oil)
+                                else ->
+                                    onOpenHealth(HealthSection.Codes)
                             }
                         },
                     )
@@ -215,10 +218,13 @@ fun DriveScreen(
                 HealthStatusBanner(
                     status = metrics.healthStatus,
                     onClick = {
-                        if (metrics.healthStatus.summary.startsWith("CLUTCH")) {
-                            onOpenHealth(HealthSection.Clutch)
-                        } else {
-                            onOpenHealth(HealthSection.Codes)
+                        when {
+                            metrics.healthStatus.summary.startsWith("CLUTCH") ->
+                                onOpenHealth(HealthSection.Clutch)
+                            metrics.healthStatus.summary.startsWith("OIL") ->
+                                onOpenHealth(HealthSection.Oil)
+                            else ->
+                                onOpenHealth(HealthSection.Codes)
                         }
                     },
                 )
