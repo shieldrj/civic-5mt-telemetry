@@ -873,16 +873,19 @@ private fun FeatureCard(feature: Feature, modifier: Modifier = Modifier) {
 
 /** A quiet surface for secondary information, so the screen reads in layers. */
 @Composable
-private fun PanelCard(content: @Composable () -> Unit) {
+internal fun PanelCard(
+    modifier: Modifier = Modifier,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
     Box(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(18.dp))
             .background(Color(0xFF15181C))
             .border(1.dp, CivicColors.HairlineStrong, RoundedCornerShape(18.dp))
-            .padding(16.dp),
+            .padding(18.dp),
     ) {
-        Column { content() }
+        Column(content = content)
     }
 }
 

@@ -29,6 +29,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -53,7 +54,6 @@ import com.shieldrj.civic5mt.core.OUNCES_PER_US_GALLON
 import com.shieldrj.civic5mt.core.TankRules
 import com.shieldrj.civic5mt.core.TripAnalytics
 import com.shieldrj.civic5mt.core.fuelBlend
-import com.shieldrj.civic5mt.core.isClosedLoop
 import com.shieldrj.civic5mt.core.rangeMiles
 import com.shieldrj.civic5mt.core.splitRange
 import com.shieldrj.civic5mt.data.GasPriceRepository
@@ -65,12 +65,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * What the engine is actually burning, and what it is burning.
+ * Fuel economy, range estimation, pump receipts, and combustion telemetry.
  *
- * The live half is only drawn while something is connected - a mixture reading from a link
- * that dropped ten minutes ago is worse than none. The blend picker and the fill log are the
- * other half and are always available, because both are used standing at a pump with the
- * engine off.
+ * Structured into clean card containers with generous spacing so lines and explanatory
+ * notes never crowd or collide on phone screens.
  */
 @Composable
 fun FuelScreen(modifier: Modifier = Modifier) {
@@ -80,13 +78,11 @@ fun FuelScreen(modifier: Modifier = Modifier) {
     val connection by TelemetryState.connection.collectAsStateWithLifecycle()
     val blendId by TelemetryState.fuelBlend.collectAsStateWithLifecycle()
     val blend = fuelBlend(blendId)
+    val calibration by TelemetryState.calibration.collectAsStateWithLifecycle()
     val gasPrices by GasPriceRepository.snapshot.collectAsStateWithLifecycle()
     val gasRefreshing by GasPriceRepository.refreshing.collectAsStateWithLifecycle()
     val gasFetchFailed by GasPriceRepository.lastAttemptFailed.collectAsStateWithLifecycle()
 
-    // Asked once per opening of the tab, and only when what is already held has aged out.
-    // This tab gets opened at a pump - which is when the answer is wanted, and also where the
-    // phone may have no signal - so the fetch updates what is drawn rather than gating it.
     LaunchedEffect(Unit) { GasPriceRepository.refreshIfStale(context) }
 
     val live = connection == ConnectionStatus.CONNECTED ||
@@ -96,21 +92,18 @@ fun FuelScreen(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 24.dp),
+            .padding(horizontal = 20.dp, vertical = 20.dp),
     ) {
-        Text(
-            text = "FUEL",
-            color = CivicColors.Ink3,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-            letterSpacing = 2.sp,
-        )
-        Spacer(Modifier.height(18.dp))
+        ReceiptsSection(context, calibration)
+        Spacer(Modifier.height(16.dp))
 
-        // First, because it is the one thing on this screen that asks something of the driver,
-        // and the reminder notification lands here.
-        ReceiptSection(context)
-        Spacer(Modifier.height(24.dp))
+        TankAndRangeCard(metrics = metrics, live = live)
+        Spacer(Modifier.height(16.dp))
+
+        if (live) {
+            LiveCombustionCard(metrics = metrics, trip = trip, stoichAfr = blend.stoichAfr)
+            Spacer(Modifier.height(16.dp))
+        }
 
         CostcoSection(
             snapshot = gasPrices,
@@ -118,144 +111,467 @@ fun FuelScreen(modifier: Modifier = Modifier) {
             fetchFailed = gasFetchFailed,
             onRefresh = { GasPriceRepository.refresh(context) },
         )
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(16.dp))
 
-        if (live) {
-            LiveFuel(metrics, trip, blend.stoichAfr)
-            Spacer(Modifier.height(24.dp))
-            IdleSection(trip)
-            Spacer(Modifier.height(24.dp))
-        } else {
-            Text(
-                text = "Nothing connected. Mixture, burn rate and idle cost are live readings " +
-                    "and are not kept on screen after the link drops.",
-                color = CivicColors.Ink3,
-                fontSize = 14.sp,
-            )
-            Spacer(Modifier.height(24.dp))
-        }
-
-        TankSection(
-            metrics = metrics,
-            live = live,
+        FuelBlendCard(
             activeId = blendId,
             onSelect = { id ->
-                // The screen owns this preference: it writes both the flow the service
-                // observes and the file it survives in. See TelemetryState.fuelBlend.
                 TelemetryState.setFuelBlend(id)
                 saveFuelBlend(context, id)
             },
         )
 
-
         if (live) {
-            Spacer(Modifier.height(24.dp))
-            OxygenSection(metrics)
+            Spacer(Modifier.height(16.dp))
+            OxygenSensorsCard(metrics)
         }
 
+        Spacer(Modifier.height(16.dp))
     }
 }
 
-// ── The two live figures ────────────────────────────────────────────────────────
+// ── 1. Receipts & History ────────────────────────────────────────────────────────
 
 @Composable
-private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Double) {
-    val isDfco = metrics.isDfcoActive
+private fun ReceiptsSection(
+    context: android.content.Context,
+    calibration: FuelCalibrationState,
+) {
+    val pending = calibration.pendingReceipt(System.currentTimeMillis())
+    val last = calibration.fills.lastOrNull()
+    var handLog by remember { mutableStateOf(false) }
+    var amending by remember { mutableStateOf(false) }
 
-    // This tank, and how much of it is left. Instant MPG used to be here and is gone: it is
-    // on the dashboard already, and a figure that changes every second cannot be compared to
-    // anything. Burn rate stays, further down, because gallons per hour at a standstill is a
-    // different question and has a real answer.
-    Row(modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.weight(1f)) {
-            Label("THIS TANK")
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.Bottom) {
-                Text(
-                    text = metrics.tankMpg?.let { "%.1f".format(it) } ?: "—",
-                    color = if (metrics.tankMpg == null) CivicColors.Ink3 else CivicColors.Ink,
-                    fontSize = 40.sp,
-                    fontWeight = FontWeight.Light,
-                    modifier = Modifier.alignByBaseline(),
-                )
-                Spacer(Modifier.width(5.dp))
-                Text(
-                    text = "mpg",
-                    color = CivicColors.Ink3,
-                    fontSize = 13.sp,
-                    modifier = Modifier.alignByBaseline(),
-                )
-            }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                // Three different reasons for having no figure, and they are not the same
-                // thing. The bench reports a tank level and is simply not allowed to spend
-                // anyone's fuel; a car with no PID 2F has nothing to report at all.
-                text = when {
-                    metrics.tankMilesSinceFill != null ->
-                        "%.0f mi since the fill".format(metrics.tankMilesSinceFill)
-                    metrics.fuelLevelPercent == null -> "no tank level from this car"
-                    else -> "not tracked on a simulated drive"
+    when {
+        pending != null -> {
+            ReceiptCard(
+                title = "Add your fill-up receipt",
+                subtitle = buildString {
+                    append("Filled up ").append(fillTime(pending.detectedAtMillis))
+                    pending.levelAfter?.let { append(" · gauge rose to %.0f%%".format(it)) }
                 },
+                context = context,
+                amendLast = false,
+                onDone = {},
+                onSkip = { TelemetryService.skipReceipt(context) },
+            )
+        }
+
+        amending && last != null -> {
+            ReceiptCard(
+                title = "Correct the last receipt",
+                subtitle = "Filled up " + fillTime(last.detectedAtMillis),
+                context = context,
+                amendLast = true,
+                onDone = { amending = false },
+                onSkip = null,
+            )
+        }
+
+        handLog -> {
+            ReceiptCard(
+                title = "Log a fill-up",
+                subtitle = "Only for a fill you just completed. This starts a new tank measurement now.",
+                context = context,
+                amendLast = false,
+                onDone = { handLog = false },
+                onSkip = null,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = "No receipt? Start a new tank without one",
+                color = CivicColors.Ink3,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable {
+                        TelemetryService.markFilled(context)
+                        handLog = false
+                    }
+                    .padding(vertical = 8.dp),
+            )
+        }
+
+        else -> {
+            PanelCard {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CardHeader("FILL-UPS & RECEIPTS")
+                    Text(
+                        text = "Log by hand",
+                        color = CivicColors.Accent,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier
+                            .clickable { handLog = true }
+                            .padding(vertical = 4.dp),
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+
+                if (last != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(
+                                text = "Last fill-up",
+                                color = CivicColors.Ink,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = fillTime(last.detectedAtMillis),
+                                color = CivicColors.Ink3,
+                                fontSize = 12.sp,
+                            )
+                        }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = last.pumpGallons?.let { "%.2f gal".format(it) } ?: "no receipt",
+                                color = CivicColors.Ink,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            if (last.pumpGallons != null) {
+                                Spacer(Modifier.width(12.dp))
+                                Text(
+                                    text = "Change",
+                                    color = CivicColors.Accent,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    modifier = Modifier
+                                        .clickable { amending = true }
+                                        .padding(vertical = 4.dp),
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Text(
+                        text = "After your next fill-up, a card appears here when you start the car. Enter the gallons from your receipt to calibrate the fuel gauge.",
+                        color = CivicColors.Ink3,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                    )
+                }
+
+                if (calibration.fills.size > 1) {
+                    Spacer(Modifier.height(14.dp))
+                    Box(Modifier.fillMaxWidth().height(1.dp).background(CivicColors.Hairline))
+                    Spacer(Modifier.height(12.dp))
+
+                    Text(
+                        text = "RECENT FILL-UPS",
+                        color = CivicColors.Ink3,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = 1.4.sp,
+                    )
+                    Spacer(Modifier.height(6.dp))
+
+                    val fuelFactor = calibration.fuelCorrectionFactor
+                    val distFactor = calibration.distanceCorrectionFactor
+
+                    calibration.fills.takeLast(5).asReversed().forEachIndexed { idx, fill ->
+                        if (idx > 0) {
+                            Box(Modifier.fillMaxWidth().height(1.dp).background(CivicColors.Hairline))
+                        }
+                        FillHistoryItem(fill, fuelFactor, distFactor)
+                    }
+                }
+            }
+        }
+    }
+
+    val feedback by TelemetryState.actionFeedback.collectAsStateWithLifecycle()
+    feedback?.let { result ->
+        LaunchedEffect(result.sequence) {
+            delay(12_000)
+            TelemetryState.clearActionFeedback(result.sequence)
+        }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = result.message,
+            color = if (result.worked) CivicColors.Good else CivicColors.Warn,
+            fontSize = 13.sp,
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+        )
+    }
+}
+
+@Composable
+private fun FillHistoryItem(fill: FillRecord, fuelFactor: Double, distFactor: Double) {
+    val levelJump = if (fill.levelBefore != null && fill.levelAfter != null) {
+        "%.0f%% → %.0f%%".format(fill.levelBefore, fill.levelAfter)
+    } else {
+        null
+    }
+    val tankSpan = if (fill.spanRawMiles >= 10.0 && fill.spanRawGallons > 0.1) {
+        val miles = fill.spanRawMiles * distFactor
+        val gallons = fill.spanRawGallons * fuelFactor
+        "%.0f mi · %.1f mpg".format(miles, miles / gallons)
+    } else {
+        null
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = fillDate(fill.detectedAtMillis),
+                    color = CivicColors.Ink,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                levelJump?.let {
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = it,
+                        color = CivicColors.Ink3,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+            Text(
+                text = fill.pumpGallons?.let { "%.2f gal".format(it) } ?: "no receipt",
+                color = CivicColors.Ink,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
+        if (tankSpan != null) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = tankSpan,
                 color = CivicColors.Ink3,
                 fontSize = 12.sp,
             )
         }
+    }
+}
 
-        Column(Modifier.weight(1f)) {
-            Label("UNTIL DRY")
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.Bottom) {
-                // "about" once the gauge is on E. Below it the reserve is counted down from fuel
-                // burned, which is an estimate rather than a reading. See TankState.belowSenderZero.
-                if (metrics.tankBelowSenderZero && metrics.fuelRangeMiles != null) {
+// ── 2. This Tank & Range ────────────────────────────────────────────────────────
+
+@Composable
+private fun TankAndRangeCard(
+    metrics: LiveMetrics,
+    live: Boolean,
+) {
+    val calibration by TelemetryState.calibration.collectAsStateWithLifecycle()
+    val savedTank by TelemetryState.tank.collectAsStateWithLifecycle()
+    val lifetime by TelemetryState.lifetime.collectAsStateWithLifecycle()
+
+    val hasSavedTank = savedTank.fillTimestamp != 0L
+    if (!live && !hasSavedTank) return
+
+    val bounded = if (live) metrics.tankBelowSenderZero else savedTank.belowSenderZero
+    val fuelLeftPercent = if (live) metrics.fuelPercentRemaining else savedTank.fuelPercentRemaining
+    val senderPercent = if (live) metrics.fuelLevelPercent else savedTank.smoothedLevelPercent
+
+    val verifiedMpg = calibration.economyMpg
+    val parkedMpgUsed = TankRules.mpgForRange(
+        tankMpg = savedTank.tankMpg,
+        tankGallonsUsed = savedTank.gallonsUsedSinceFill,
+        lifetimeMpg = lifetime.lifetimeMpg,
+        lifetimeMiles = lifetime.totalMiles,
+        verifiedMpg = verifiedMpg,
+    )
+    val parkedRange = if (hasSavedTank) {
+        val total = rangeMiles(savedTank, lifetime.lifetimeMpg, lifetime.totalMiles, verifiedMpg)
+        splitRange(savedTank, total, parkedMpgUsed)
+    } else {
+        null
+    }
+
+    val displayMpg = if (live) metrics.tankMpg else savedTank.tankMpg
+    val displayMiles = if (live) metrics.tankMilesSinceFill else savedTank.milesSinceFill
+    val rangeTotal = if (live) metrics.fuelRangeMiles else parkedRange?.totalMiles
+    val rangeToZero = if (live) metrics.fuelRangeToSenderZeroMiles else parkedRange?.toSenderZeroMiles
+    val reserveMiles = if (live) metrics.fuelRangeReserveMiles else parkedRange?.reserveMiles
+    val rangeMpgUsed = if (live) metrics.rangeMpgUsed else parkedRange?.mpgUsed
+    val gallonsLeft = if (live) metrics.tankGallonsRemaining else savedTank.gallonsRemaining
+
+    PanelCard {
+        CardHeader("THIS TANK & RANGE")
+        Spacer(Modifier.height(14.dp))
+
+        Row(modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "TANK ECONOMY",
+                    color = CivicColors.Ink3,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 1.4.sp,
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.Bottom) {
                     Text(
-                        text = "about",
+                        text = displayMpg?.let { "%.1f".format(it) } ?: "—",
+                        color = if (displayMpg == null) CivicColors.Ink3 else CivicColors.Ink,
+                        fontSize = 34.sp,
+                        fontWeight = FontWeight.Light,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "mpg",
                         color = CivicColors.Ink3,
                         fontSize = 13.sp,
                         modifier = Modifier.alignByBaseline(),
                     )
-                    Spacer(Modifier.width(5.dp))
                 }
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    text = metrics.fuelRangeMiles?.toString() ?: "—",
-                    color = CivicColors.Ink,
-                    fontSize = 40.sp,
-                    fontWeight = FontWeight.Light,
-                    modifier = Modifier.alignByBaseline(),
-                )
-                Spacer(Modifier.width(5.dp))
-                Text(
-                    text = "mi",
+                    text = when {
+                        displayMiles != null -> "%.0f mi since fill".format(displayMiles)
+                        senderPercent == null -> "no tank level"
+                        else -> "calibrating…"
+                    },
                     color = CivicColors.Ink3,
-                    fontSize = 13.sp,
-                    modifier = Modifier.alignByBaseline(),
+                    fontSize = 12.sp,
                 )
             }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = metrics.tankGallonsRemaining
-                    ?.let {
-                        if (metrics.tankBelowSenderZero) {
-                            "about %.1f gal left".format(it)
-                        } else {
-                            "%.1f gal left".format(it)
-                        }
+
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "ESTIMATED RANGE",
+                    color = CivicColors.Ink3,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    letterSpacing = 1.4.sp,
+                )
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.Bottom) {
+                    if (bounded && rangeTotal != null) {
+                        Text(
+                            text = "about",
+                            color = CivicColors.Ink3,
+                            fontSize = 13.sp,
+                            modifier = Modifier.alignByBaseline(),
+                        )
+                        Spacer(Modifier.width(4.dp))
                     }
-                    ?: "",
-                color = CivicColors.Ink3,
-                fontSize = 12.sp,
+                    Text(
+                        text = rangeTotal?.toString() ?: "—",
+                        color = CivicColors.Ink,
+                        fontSize = 34.sp,
+                        fontWeight = FontWeight.Light,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "mi",
+                        color = CivicColors.Ink3,
+                        fontSize = 13.sp,
+                        modifier = Modifier.alignByBaseline(),
+                    )
+                }
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = gallonsLeft?.let {
+                        if (bounded) "about %.1f gal left".format(it)
+                        else "%.1f gal remaining".format(it)
+                    } ?: "",
+                    color = CivicColors.Ink3,
+                    fontSize = 12.sp,
+                )
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Box(Modifier.fillMaxWidth().height(1.dp).background(CivicColors.Hairline))
+        Spacer(Modifier.height(6.dp))
+
+        ValueRow(
+            label = "Fuel in tank",
+            value = fuelLeftPercent?.let { if (bounded) "about %.0f%%".format(it) else "%.0f%%".format(it) } ?: "—",
+            note = senderPercent?.let {
+                if (live) "sender reports %.0f%% · nominal 13.2 gal capacity".format(it)
+                else "last recorded · sender was at %.0f%%".format(it)
+            } ?: "not reported by this car",
+        )
+
+        if (reserveMiles != null && reserveMiles > 0 && rangeToZero != null) {
+            ValueRow(
+                label = "Gauge hits E in",
+                value = "$rangeToZero mi",
+                note = "then $reserveMiles mi of reserve below E",
+            )
+        }
+
+        if (rangeMpgUsed != null) {
+            val effVerifiedMpg = if (live) metrics.verifiedMpg else calibration.economyMpg
+            val effVerifiedGal = if (live) metrics.verifiedGallons else calibration.receiptGallons
+            val effLifetimeMiles = if (live) metrics.lifetimeMiles else lifetime.totalMiles
+            ValueRow(
+                label = "Range calculated from",
+                value = "%.1f mpg".format(rangeMpgUsed),
+                note = when {
+                    effVerifiedMpg != null -> "checked against %.1f gal of pump receipts".format(effVerifiedGal)
+                    effLifetimeMiles >= 20 -> "this car's lifetime average"
+                    else -> "the EPA rating, until this car has measured its own"
+                },
+            )
+        }
+
+        val receipts = if (live) metrics.calibrationFillCount else calibration.gaugeReceiptCount
+        val spread = if (live) metrics.calibrationSpreadPercent else calibration.spreadPercent
+        ValueRow(
+            label = "Gauge calibration",
+            value = when (receipts) {
+                0 -> "not yet calibrated"
+                1 -> "calibrated by 1 receipt"
+                else -> "calibrated by $receipts receipts"
+            },
+            note = when {
+                receipts == 0 -> "add a receipt after your next fill to calibrate"
+                spread != null -> "receipts agree within %.1f%%".format(spread)
+                else -> "gallons pumped matched to gauge float rise"
+            },
+        )
+
+        val fuelFactor = if (live) metrics.fuelCorrectionFactor else calibration.fuelCorrectionFactor
+        val distFactor = if (live) metrics.distanceCorrectionFactor else calibration.distanceCorrectionFactor
+        if (fuelFactor != 1.0 || distFactor != 1.0) {
+            ValueRow(
+                label = "Sensor corrections",
+                value = buildString {
+                    append("fuel %+.1f%%".format((fuelFactor - 1.0) * 100))
+                    if (distFactor != 1.0) {
+                        append(", miles %+.1f%%".format((distFactor - 1.0) * 100))
+                    }
+                },
             )
         }
     }
+}
 
-    Spacer(Modifier.height(24.dp))
-    SectionHeading("Combustion", if (isDfco) "Fuel cut" else "Closed loop")
+// ── 3. Live Combustion (Connected only) ─────────────────────────────────────────
 
+@Composable
+private fun LiveCombustionCard(
+    metrics: LiveMetrics,
+    trip: TripAnalytics,
+    stoichAfr: Double,
+) {
+    val isDfco = metrics.isDfcoActive
     val afr = metrics.airFuelRatio
-    // Judged against the blend rather than gasoline's 14.7. Stoichiometry moves with the
-    // fuel, so measuring an E10 mixture against pure gasoline reads every normal cruise as
-    // rich - which is how a driver learns to ignore the reading.
     val lambda = if (stoichAfr > 0) afr / stoichAfr else 1.0
     val offStoich = lambda < 0.97 || lambda > 1.03
     val afrStatus = when {
@@ -264,320 +580,365 @@ private fun LiveFuel(metrics: LiveMetrics, trip: TripAnalytics, stoichAfr: Doubl
         else -> "Stoichiometric"
     }
 
-    ValueRow(
-        label = "Air to fuel",
-        value = "%.2f:1".format(afr),
-        // Whether the mixture was measured or inferred, said out loud. This car has no
-        // narrowband front sensor, so the figure comes from the fuel trims - a legitimate
-        // derivation, and not the same claim as a wideband reading.
-        note = metrics.equivalenceRatio
-            ?.let { "$afrStatus · λ %.3f".format(it) }
-            ?: "$afrStatus · from fuel trims",
-    )
-    Spacer(Modifier.height(8.dp))
-    Meter(
-        fraction = (((afr - 10.0) / 10.0).coerceIn(0.0, 1.0)).toFloat(),
-        markerFraction = (((stoichAfr - 10.0) / 10.0).coerceIn(0.0, 1.0)).toFloat(),
-        color = if (offStoich) CivicColors.Warn else CivicColors.Ink,
-    )
-    Spacer(Modifier.height(12.dp))
-    ValueRow(
-        label = "Burn rate",
-        value = "%.2f gal/hr".format(metrics.fuelFlowGalPerHour),
-        // Ounces a minute rather than litres an hour. Gallons an hour is a small number at
-        // idle, where this reading is most often looked at.
-        note = "%.1f fl oz/min".format(metrics.fuelFlowGalPerHour * OUNCES_PER_US_GALLON / 60),
-    )
-    ValueRow(
-        label = "ECU fuel trims",
-        value = "Short %s%.1f%%   Long %s%.1f%%".format(
-            if (metrics.shortTermFuelTrim > 0) "+" else "",
-            metrics.shortTermFuelTrim,
-            if (metrics.longTermFuelTrim > 0) "+" else "",
-            metrics.longTermFuelTrim,
-        ),
-    )
+    PanelCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CardHeader("LIVE COMBUSTION")
+            Text(
+                text = if (isDfco) "Fuel cut (DFCO)" else "Closed loop",
+                color = if (isDfco) CivicColors.Good else CivicColors.Ink3,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+        Spacer(Modifier.height(14.dp))
 
-    // Absent rather than assumed: a car with no PID 03 shows no row at all. It sits directly
-    // under the trims because it is what says how to read them - in closed loop they are a
-    // correction towards stoichiometric, and in open loop the ECU is following an enrichment
-    // map instead and the air:fuel figure above is not what the trims describe.
-    metrics.fuelSystemStatusLabel?.let { status ->
         ValueRow(
-            label = "Fuel system",
-            value = status,
-            note = if (isClosedLoop(metrics.fuelSystemStatus)) null else "trims are not feedback here",
+            label = "Air to fuel",
+            value = "%.2f:1".format(afr),
+            note = metrics.equivalenceRatio
+                ?.let { "$afrStatus · λ %.3f".format(it) }
+                ?: "$afrStatus · from fuel trims",
+            emphasizeValue = true,
         )
+        Spacer(Modifier.height(4.dp))
+        Meter(
+            fraction = (((afr - 10.0) / 10.0).coerceIn(0.0, 1.0)).toFloat(),
+            markerFraction = (((stoichAfr - 10.0) / 10.0).coerceIn(0.0, 1.0)).toFloat(),
+            color = if (offStoich) CivicColors.Warn else CivicColors.Ink,
+        )
+        Spacer(Modifier.height(10.dp))
+
+        ValueRow(
+            label = "Burn rate",
+            value = "%.2f gal/hr".format(metrics.fuelFlowGalPerHour),
+            note = "%.1f fl oz/min".format(metrics.fuelFlowGalPerHour * OUNCES_PER_US_GALLON / 60),
+        )
+
+        ValueRow(
+            label = "ECU fuel trims",
+            value = "Short %s%.1f%%   Long %s%.1f%%".format(
+                if (metrics.shortTermFuelTrim > 0) "+" else "",
+                metrics.shortTermFuelTrim,
+                if (metrics.longTermFuelTrim > 0) "+" else "",
+                metrics.longTermFuelTrim,
+            ),
+            note = metrics.fuelSystemStatusLabel,
+        )
+
+        val idleOunces = trip.idleFuelGallons * OUNCES_PER_US_GALLON
+        if (trip.idleTimeSec > 5) {
+            val totalSec = trip.idleTimeSec.roundToInt()
+            ValueRow(
+                label = "Burned at idle",
+                value = "%.1f fl oz".format(idleOunces),
+                note = "$%.2f spent (${totalSec / 60}m ${totalSec % 60}s stopped this trip)".format(trip.idleCostDollars),
+            )
+        }
     }
 }
 
-// ── Idling ──────────────────────────────────────────────────────────────────────
+// ── 4. Costco Gas Prices ────────────────────────────────────────────────────────
 
 @Composable
-private fun IdleSection(trip: TripAnalytics) {
-    val total = trip.idleTimeSec.roundToInt()
-    SectionHeading("Idling", "${total / 60}m ${total % 60}s this trip")
+private fun CostcoSection(
+    snapshot: GasPriceSnapshot,
+    refreshing: Boolean,
+    fetchFailed: Boolean,
+    onRefresh: suspend () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val now = System.currentTimeMillis()
 
-    // US fluid ounces. The web build printed gallons multiplied by a thousand and labelled
-    // the result mL, which understated it by a factor of 3.79 - so a long wait at a level
-    // crossing looked like a thimble of fuel. Ounces now, because that is what the rest of
-    // this app measures in.
-    val ounces = trip.idleFuelGallons * OUNCES_PER_US_GALLON
-    ValueRow(
-        label = "Burned at a standstill",
-        value = "%.1f fl oz".format(ounces),
-        note = "$%.2f".format(trip.idleCostDollars),
-    )
+    PanelCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CardHeader("COSTCO GAS")
+            val asideText = when {
+                refreshing -> "Checking…"
+                snapshot.isEmpty -> null
+                else -> priceAge(snapshot.ageMillis(now))
+            }
+            asideText?.let {
+                Text(it, color = CivicColors.Ink3, fontSize = 12.sp)
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+
+        if (snapshot.isEmpty) {
+            Text(
+                text = if (fetchFailed) {
+                    "Could not reach Costco. Tap to try again."
+                } else {
+                    "No prices yet. Tap to fetch them."
+                },
+                color = CivicColors.Ink3,
+                fontSize = 13.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { scope.launch { onRefresh() } }
+                    .padding(vertical = 6.dp),
+            )
+        } else {
+            val rows = COSTCO_STATIONS.sortedBy {
+                snapshot.prices[it.warehouseId]?.regular ?: Double.MAX_VALUE
+            }
+            val quoted = rows.mapNotNull { snapshot.prices[it.warehouseId]?.regular }
+            val cheapest = quoted.minOrNull()
+            val spread = if (quoted.size > 1) quoted.max() - quoted.min() else 0.0
+
+            rows.forEachIndexed { idx, station ->
+                if (idx > 0) {
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(CivicColors.Hairline),
+                    )
+                }
+                val price = snapshot.prices[station.warehouseId]
+                val regular = price?.regular
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(station.name, color = CivicColors.Ink, fontSize = 14.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        price?.premium?.let {
+                            Text(
+                                "prem $%.2f".format(it),
+                                color = CivicColors.Ink4,
+                                fontSize = 12.sp,
+                            )
+                            Spacer(Modifier.width(14.dp))
+                        }
+                        Text(
+                            text = regular?.let { "$%.3f".format(it) } ?: "—",
+                            color = when {
+                                regular == null -> CivicColors.Ink4
+                                regular == cheapest -> CivicColors.Accent
+                                else -> CivicColors.Ink
+                            },
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+            val summaryText = buildString {
+                if (spread >= 0.01) {
+                    append("%.0f¢/gal spread between warehouses ".format(spread * 100))
+                    append("($%.2f on a full tank). ".format(spread * CivicSpecs.FUEL_TANK_CAPACITY_GALLONS))
+                } else if (quoted.size > 1) {
+                    append("All within a cent of each other. ")
+                }
+                if (fetchFailed) append("Last fetch failed. ")
+                append("Tap to refresh.")
+            }
+            Text(
+                text = summaryText,
+                color = CivicColors.Ink3,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { scope.launch { onRefresh() } }
+                    .padding(top = 4.dp),
+            )
+        }
+    }
 }
 
-// ── The tank, and what is in it ─────────────────────────────────────────────────
+// ── 5. Fuel Blend ───────────────────────────────────────────────────────────────
 
 @Composable
-private fun TankSection(
-    metrics: LiveMetrics,
-    live: Boolean,
+private fun FuelBlendCard(
     activeId: FuelBlendId,
     onSelect: (FuelBlendId) -> Unit,
 ) {
     val blend = fuelBlend(activeId)
-    val calibration by TelemetryState.calibration.collectAsStateWithLifecycle()
-    val savedTank by TelemetryState.tank.collectAsStateWithLifecycle()
-    val lifetime by TelemetryState.lifetime.collectAsStateWithLifecycle()
 
-    SectionHeading(
-        title = "Fuel in the tank",
-        aside = "%.2f:1 · %.0f g/L".format(blend.stoichAfr, blend.densityGramsPerLiter),
-    )
-
-    val hasSavedTank = savedTank.fillTimestamp != 0L
-    if (live || hasSavedTank) {
-        val bounded = if (live) metrics.tankBelowSenderZero else savedTank.belowSenderZero
-        val fuelLeftPercent = if (live) metrics.fuelPercentRemaining else savedTank.fuelPercentRemaining
-        val senderPercent = if (live) metrics.fuelLevelPercent else savedTank.smoothedLevelPercent
-
-        val verifiedMpg = calibration.economyMpg
-        val parkedMpgUsed = TankRules.mpgForRange(
-            tankMpg = savedTank.tankMpg,
-            tankGallonsUsed = savedTank.gallonsUsedSinceFill,
-            lifetimeMpg = lifetime.lifetimeMpg,
-            lifetimeMiles = lifetime.totalMiles,
-            verifiedMpg = verifiedMpg,
-        )
-        val parkedRange = if (hasSavedTank) {
-            val total = rangeMiles(savedTank, lifetime.lifetimeMpg, lifetime.totalMiles, verifiedMpg)
-            splitRange(savedTank, total, parkedMpgUsed)
-        } else {
-            null
-        }
-
-        val rangeTotal = if (live) metrics.fuelRangeMiles else parkedRange?.totalMiles
-        val rangeToZero = if (live) metrics.fuelRangeToSenderZeroMiles else parkedRange?.toSenderZeroMiles
-        val reserveMiles = if (live) metrics.fuelRangeReserveMiles else parkedRange?.reserveMiles
-        val rangeMpgUsed = if (live) metrics.rangeMpgUsed else parkedRange?.mpgUsed
-
-        ValueRow(
-            label = "Fuel left",
-            value = fuelLeftPercent
-                ?.let { if (bounded) "about %.0f%%".format(it) else "%.0f%%".format(it) }
-                ?: "—",
-            note = senderPercent
-                ?.let {
-                    if (live) {
-                        "the sender reads %.0f%%".format(it)
-                    } else {
-                        "last seen · sender read %.0f%%".format(it)
-                    }
-                }
-                ?: "not reported by this car",
-        )
-        ValueRow(
-            label = "Range",
-            value = rangeTotal
-                ?.let { if (bounded) "about $it mi" else "$it mi" }
-                ?: "—",
-            note = when {
-                rangeTotal == null -> null
-                bounded -> "gauge on E, counting down the reserve"
-                !live -> "%.0f mi since fill · %.1f gal left".format(
-                    savedTank.milesSinceFill,
-                    savedTank.gallonsRemaining,
-                )
-                else -> "at this tank's economy"
-            },
-        )
-        if (reserveMiles != null && reserveMiles > 0 && rangeToZero != null) {
-            ValueRow(
-                label = "Gauge reads E at",
-                value = "$rangeToZero mi",
-                note = "then $reserveMiles mi of reserve below E",
+    PanelCard {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            CardHeader("FUEL BLEND")
+            Text(
+                text = "%.2f:1 stoich · %.0f g/L".format(blend.stoichAfr, blend.densityGramsPerLiter),
+                color = CivicColors.Ink3,
+                fontSize = 12.sp,
             )
         }
-        if (rangeMpgUsed != null) {
-            val effVerifiedMpg = if (live) metrics.verifiedMpg else calibration.economyMpg
-            val effVerifiedGal = if (live) metrics.verifiedGallons else calibration.receiptGallons
-            val effLifetimeMiles = if (live) metrics.lifetimeMiles else lifetime.totalMiles
-            ValueRow(
-                label = "Range is built on",
-                value = "%.1f mpg".format(rangeMpgUsed),
-                note = when {
-                    effVerifiedMpg != null -> "checked against %.1f gal of receipts"
-                        .format(effVerifiedGal)
-                    effLifetimeMiles >= 20 -> "this car's lifetime average"
-                    else -> "the EPA rating, until this car has measured its own"
-                },
-            )
-        }
-    }
+        Spacer(Modifier.height(14.dp))
 
-    val receipts = if (live) metrics.calibrationFillCount else calibration.gaugeReceiptCount
-    val spread = if (live) metrics.calibrationSpreadPercent else calibration.spreadPercent
-    val fuelFactor = if (live) metrics.fuelCorrectionFactor else calibration.fuelCorrectionFactor
-    val distFactor = if (live) metrics.distanceCorrectionFactor else calibration.distanceCorrectionFactor
-
-    ValueRow(
-        label = "Gauge measured",
-        value = when (receipts) {
-            0 -> "not yet"
-            1 -> "by 1 receipt"
-            else -> "by $receipts receipts"
-        },
-        note = when {
-            receipts == 0 -> "add a receipt after your next fill"
-            spread != null -> "they agree within %.1f%%".format(spread)
-            else -> "gallons pumped against the gauge's rise"
-        },
-    )
-    if (fuelFactor != 1.0 || distFactor != 1.0) {
-        ValueRow(
-            label = "Sensor correction",
-            value = buildString {
-                append("fuel %+.1f%%".format((fuelFactor - 1.0) * 100))
-                if (distFactor != 1.0) {
-                    append(", miles %+.1f%%".format((distFactor - 1.0) * 100))
+        Row(modifier = Modifier.fillMaxWidth()) {
+            FUEL_BLENDS.keys.forEach { id ->
+                val selected = id == activeId
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable { onSelect(id) }
+                        .padding(vertical = 4.dp, horizontal = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(
+                        text = id.name,
+                        color = if (selected) CivicColors.Ink else CivicColors.Ink3,
+                        fontSize = 14.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(2.dp)
+                            .background(if (selected) CivicColors.Accent else CivicColors.Hairline),
+                    )
                 }
-            },
-        )
-    }
-    Spacer(Modifier.height(8.dp))
-
-    Text(
-        text = "Sets the stoichiometric ratio and the density behind every fuel figure on " +
-            "this screen.",
-        color = CivicColors.Ink3,
-        fontSize = 12.5.sp,
-    )
-    Spacer(Modifier.height(12.dp))
-
-    // Selected is white text over an accent hairline, not a filled block. It is a setting
-    // someone changes about once a year and it should not be the loudest thing on screen.
-    Row(modifier = Modifier.fillMaxWidth()) {
-        FUEL_BLENDS.keys.forEach { id ->
-            val selected = id == activeId
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .clickable { onSelect(id) }
-                    .padding(end = 12.dp),
-            ) {
-                Text(
-                    text = id.name,
-                    color = if (selected) CivicColors.Ink else CivicColors.Ink3,
-                    fontSize = 13.sp,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(if (selected) CivicColors.Accent else CivicColors.Hairline)
-                )
             }
         }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            text = blend.label,
+            color = CivicColors.Ink3,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+        )
     }
-    Spacer(Modifier.height(8.dp))
-    Text(
-        text = fuelBlend(activeId).label,
-        color = CivicColors.Ink4,
-        fontSize = 11.5.sp,
-    )
 }
 
-// ── Oxygen sensors ──────────────────────────────────────────────────────────────
+// ── 6. Oxygen Sensors (Connected only) ───────────────────────────────────────────
 
-/**
- * The front sensor is not the same device on every car, so this cannot assume a voltage.
- *
- * A narrowband answers PID 14 with a voltage that swings across 0.45 V; a wide-range sensor
- * answers PID 34 with lambda and a current, and does not swing at all. This Civic has the
- * latter, and the row used to print a fixed 0.45 V - the seeded default - directly above a
- * genuine post-catalyst reading, with nothing to tell them apart.
- */
 @Composable
-private fun OxygenSection(metrics: LiveMetrics) {
+private fun OxygenSensorsCard(metrics: LiveMetrics) {
     val preCatLambda = metrics.o2Sensor1Lambda
     val preCatVolts = metrics.o2Sensor1Voltage
 
-    SectionHeading("Oxygen sensors", null)
+    PanelCard {
+        CardHeader("OXYGEN SENSORS")
+        Spacer(Modifier.height(14.dp))
 
-    when {
-        // Voltage wins where both arrive, matching the order the poll loop prefers, so two
-        // pre-catalyst rows can never appear at once.
-        preCatVolts != null -> VoltageSensor("Pre-catalyst", preCatVolts)
+        when {
+            preCatVolts != null -> VoltageSensor("Pre-catalyst", preCatVolts)
 
-        preCatLambda != null -> {
-            ValueRow(
-                label = "Pre-catalyst",
-                value = "%.3f λ".format(preCatLambda),
-                note = buildString {
-                    append(
-                        when {
-                            preCatLambda < 0.98 -> "Rich"
-                            preCatLambda > 1.02 -> "Lean"
-                            else -> "At balance"
-                        }
-                    )
-                    metrics.o2Sensor1CurrentMa?.let { append(" · %.2f mA".format(it)) }
-                },
-            )
-            Spacer(Modifier.height(8.dp))
-            // Scaled 0.8 - 1.2 lambda with the hairline at stoichiometry. A wideband holds
-            // far tighter than a narrowband swings, so a 0 - 1.275 V style scale would draw
-            // every reading as the same bar.
-            Meter(
-                fraction = (((preCatLambda - 0.8) / 0.4).coerceIn(0.0, 1.0)).toFloat(),
-                markerFraction = 0.5f,
-                color = CivicColors.Ink,
-            )
-            Spacer(Modifier.height(14.dp))
+            preCatLambda != null -> {
+                ValueRow(
+                    label = "Pre-catalyst",
+                    value = "%.3f λ".format(preCatLambda),
+                    note = buildString {
+                        append(
+                            when {
+                                preCatLambda < 0.98 -> "Rich"
+                                preCatLambda > 1.02 -> "Lean"
+                                else -> "At balance"
+                            }
+                        )
+                        metrics.o2Sensor1CurrentMa?.let { append(" · %.2f mA".format(it)) }
+                    },
+                )
+                Spacer(Modifier.height(4.dp))
+                Meter(
+                    fraction = (((preCatLambda - 0.8) / 0.4).coerceIn(0.0, 1.0)).toFloat(),
+                    markerFraction = 0.5f,
+                    color = CivicColors.Ink,
+                )
+                Spacer(Modifier.height(10.dp))
+            }
+
+            else -> {
+                ValueRow(
+                    label = "Pre-catalyst",
+                    value = "—",
+                    note = "not reported by this car",
+                )
+                Spacer(Modifier.height(8.dp))
+            }
         }
 
-        else -> {
-            ValueRow(
-                label = "Pre-catalyst",
-                value = "—",
-                note = "not reported by this car",
+        VoltageSensor("Post-catalyst", metrics.o2Sensor2Voltage)
+
+        Text(
+            text = if (preCatLambda != null) {
+                "Wide-range front sensor reports lambda directly in closed loop. Post-catalyst sensor monitors catalyst efficiency (code P0420)."
+            } else {
+                "Pre-catalyst sensor swings across 0.45V in closed loop. Post-catalyst sensor monitors catalyst efficiency (code P0420)."
+            },
+            color = CivicColors.Ink3,
+            fontSize = 12.sp,
+            lineHeight = 16.sp,
+        )
+    }
+}
+
+// ── Shared UI Elements ──────────────────────────────────────────────────────────
+
+@Composable
+private fun CardHeader(title: String) {
+    Text(
+        text = title,
+        color = CivicColors.Ink3,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        letterSpacing = 2.sp,
+    )
+}
+
+@Composable
+private fun ValueRow(
+    label: String,
+    value: String,
+    note: String? = null,
+    modifier: Modifier = Modifier,
+    emphasizeValue: Boolean = false,
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 7.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = label,
+                color = CivicColors.Ink2,
+                fontSize = 14.sp,
+                modifier = Modifier.weight(1f, fill = false),
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.width(16.dp))
+            Text(
+                text = value,
+                color = if (value == "—") CivicColors.Ink4 else CivicColors.Ink,
+                fontSize = if (emphasizeValue) 15.sp else 14.sp,
+                fontWeight = if (emphasizeValue) FontWeight.SemiBold else FontWeight.Normal,
+            )
+        }
+        if (note != null) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = note,
+                color = CivicColors.Ink3,
+                fontSize = 12.sp,
+                lineHeight = 16.sp,
+            )
         }
     }
-
-    VoltageSensor("Post-catalyst", metrics.o2Sensor2Voltage)
-
-    Text(
-        text = if (preCatLambda != null) {
-            "A wide-range front sensor reports lambda directly and holds close to 1.000 in " +
-                "closed loop rather than swinging, with its current near zero. The " +
-                "post-catalyst sensor should stay comparatively steady; one that starts " +
-                "swinging actively is the live signature behind code P0420."
-        } else {
-            "A healthy pre-catalyst sensor swings actively across the 0.45 V line while the " +
-                "post-catalyst one stays comparatively steady. A post-catalyst trace that " +
-                "starts mirroring the pre-catalyst swing is the live signature behind code " +
-                "P0420."
-        },
-        color = CivicColors.Ink3,
-        fontSize = 12.5.sp,
-    )
 }
 
 @Composable
@@ -591,21 +952,15 @@ private fun VoltageSensor(label: String, volts: Double) {
             else -> "Switching"
         },
     )
-    Spacer(Modifier.height(8.dp))
-    // Scaled 0 - 1.0 V: a narrowband only uses roughly 0.1 - 0.9 V of the PID's 1.275 V full
-    // scale, so scaling to full scale would flatten the trace. The marker is the 0.45 V
-    // stoichiometric switch point.
+    Spacer(Modifier.height(4.dp))
     Meter(
         fraction = volts.coerceIn(0.0, 1.0).toFloat(),
         markerFraction = 0.45f,
         color = CivicColors.Ink,
     )
-    Spacer(Modifier.height(14.dp))
+    Spacer(Modifier.height(10.dp))
 }
 
-// ── Pieces ──────────────────────────────────────────────────────────────────────
-
-/** A bar with a hairline where the meaningful value sits, so "rich" is read off a scale. */
 @Composable
 private fun Meter(fraction: Float, markerFraction: Float, color: Color) {
     Canvas(
@@ -627,287 +982,6 @@ private fun Meter(fraction: Float, markerFraction: Float, color: Color) {
     }
 }
 
-// ── What Costco is charging ─────────────────────────────────────────────────────
-
-/**
- * The three warehouses, cheapest first.
- *
- * Sorted by price rather than held in a fixed order, because the question being asked at a
- * quarter tank is "which one", not "what is San Dimas". The cheapest regular is drawn in the
- * accent colour and the gap to the dearest is spelled out as a tankful: three cents a gallon
- * is not worth a detour and thirty is, and that is hard to see in three numbers that all end
- * in nine.
- *
- * Premium is shown small beside each. The R18Z1 is a regular-fuel engine, so premium here is
- * information rather than a choice.
- *
- * Prices come from Costco's own price service, cached on this phone. Nothing on this screen
- * needs the car: it is drawn whether or not anything is connected, because deciding where to
- * fill up happens before the drive as often as during it.
- */
-@Composable
-private fun CostcoSection(
-    snapshot: GasPriceSnapshot,
-    refreshing: Boolean,
-    fetchFailed: Boolean,
-    onRefresh: suspend () -> Unit,
-) {
-    val scope = rememberCoroutineScope()
-    val now = System.currentTimeMillis()
-
-    SectionHeading(
-        title = "Costco gas",
-        aside = when {
-            refreshing -> "checking..."
-            snapshot.isEmpty -> null
-            else -> priceAge(snapshot.ageMillis(now))
-        },
-    )
-
-    if (snapshot.isEmpty) {
-        Text(
-            text = if (fetchFailed) {
-                "Could not reach Costco. Tap to try again."
-            } else {
-                "No prices yet. Tap to fetch them."
-            },
-            color = CivicColors.Ink3,
-            fontSize = 13.sp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { scope.launch { onRefresh() } }
-                .padding(vertical = 10.dp),
-        )
-        return
-    }
-
-    // A station whose pumps stopped reporting sorts to the end rather than disappearing: a
-    // missing row reads as a station that closed, and it has not.
-    val rows = COSTCO_STATIONS.sortedBy {
-        snapshot.prices[it.warehouseId]?.regular ?: Double.MAX_VALUE
-    }
-    val quoted = rows.mapNotNull { snapshot.prices[it.warehouseId]?.regular }
-    val cheapest = quoted.minOrNull()
-    val spread = if (quoted.size > 1) quoted.max() - quoted.min() else 0.0
-
-    rows.forEach { station ->
-        val price = snapshot.prices[station.warehouseId]
-        val regular = price?.regular
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 7.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            Text(station.name, color = CivicColors.Ink2, fontSize = 14.sp)
-            Row(verticalAlignment = Alignment.Bottom) {
-                price?.premium?.let {
-                    Text("prem %.2f".format(it), color = CivicColors.Ink4, fontSize = 12.sp)
-                    Spacer(Modifier.width(12.dp))
-                }
-                Text(
-                    text = regular?.let { "$%.3f".format(it) } ?: "-",
-                    // The cheapest pump is the only thing this section has an opinion about.
-                    color = when {
-                        regular == null -> CivicColors.Ink4
-                        regular == cheapest -> CivicColors.Accent
-                        else -> CivicColors.Ink
-                    },
-                    fontSize = 17.sp,
-                )
-            }
-        }
-    }
-
-    Spacer(Modifier.height(4.dp))
-    Text(
-        text = buildString {
-            if (spread >= 0.01) {
-                // A tankful is the unit the difference is actually felt in.
-                append("%.0f cents a gallon between them".format(spread * 100))
-                append(", $%.2f on a full tank. ".format(spread * CivicSpecs.FUEL_TANK_CAPACITY_GALLONS))
-            } else if (quoted.size > 1) {
-                append("All within a cent of each other. ")
-            }
-            if (fetchFailed) append("Last check failed, so these may have moved. ")
-            append("Tap to refresh.")
-        },
-        color = CivicColors.Ink3,
-        fontSize = 12.sp,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable { scope.launch { onRefresh() } }
-            .padding(vertical = 6.dp),
-    )
-}
-
-/** How old a price is, said the way a person would say it. */
-private fun priceAge(ageMillis: Long): String {
-    val minutes = ageMillis / 60_000L
-    val hours = minutes / 60L
-    return when {
-        minutes < 2L -> "just now"
-        minutes < 60L -> minutes.toString() + " min ago"
-        minutes < 120L -> "an hour ago"
-        hours < 24L -> hours.toString() + " hours ago"
-        hours < 48L -> "yesterday"
-        else -> (hours / 24L).toString() + " days ago"
-    }
-}
-
-/**
- * The receipt for the last fill-up, which can be added whenever it is to hand.
- *
- * The car notices a fill by itself - the gauge rises when the engine next starts - and records
- * it with the gauge reading from before and after. This section only asks for the one number
- * the car cannot know: the gallons on the receipt. It asks for it here, at the top of the
- * screen, from the moment the fill is noticed until it is answered, so it can be typed in at
- * home from the Costco app rather than at the pump.
- *
- * When no fill is waiting, it shows the last one and keeps the hand-logging path for a fill the
- * car missed, folded away because it is rarely needed.
- */
-@Composable
-private fun ReceiptSection(context: android.content.Context) {
-    val calibration by TelemetryState.calibration.collectAsStateWithLifecycle()
-    val pending = calibration.pendingReceipt(System.currentTimeMillis())
-    val last = calibration.fills.lastOrNull()
-    var handLog by remember { mutableStateOf(false) }
-    var amending by remember { mutableStateOf(false) }
-
-    if (pending != null) {
-        ReceiptCard(
-            title = "Add your fill-up receipt",
-            subtitle = buildString {
-                append("Filled up ").append(fillTime(pending.detectedAtMillis))
-                pending.levelAfter?.let { append(" · gauge rose to %.0f%%".format(it)) }
-            },
-            context = context,
-            amendLast = false,
-            onDone = {},
-            onSkip = { TelemetryService.skipReceipt(context) },
-        )
-    } else if (amending && last != null) {
-        ReceiptCard(
-            title = "Correct the last receipt",
-            subtitle = "Filled up " + fillTime(last.detectedAtMillis),
-            context = context,
-            amendLast = true,
-            onDone = { amending = false },
-            onSkip = null,
-        )
-    } else if (handLog) {
-        ReceiptCard(
-            title = "Log a fill-up",
-            subtitle = "Only for a fill you just made. This starts a new tank now, so don't use " +
-                "it for an older receipt.",
-            context = context,
-            amendLast = false,
-            onDone = { handLog = false },
-            onSkip = null,
-        )
-        Text(
-            text = "No receipt? Start a new tank without one",
-            color = CivicColors.Ink3,
-            fontSize = 13.sp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable {
-                    TelemetryService.markFilled(context)
-                    handLog = false
-                }
-                .padding(vertical = 10.dp),
-        )
-        if (calibration.fills.isNotEmpty()) {
-            // Only after a new MAF sensor or different size tyres: either makes every stored
-            // fill a measurement of a car that no longer exists.
-            Text(
-                text = "New MAF sensor or tyre size? Clear the saved fill-ups",
-                color = CivicColors.Ink4,
-                fontSize = 12.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        TelemetryService.resetFuelCalibration(context)
-                        handLog = false
-                    }
-                    .padding(vertical = 10.dp),
-            )
-        }
-    } else {
-        // Said in so many words, because the card appearing on its own is the whole design and
-        // an empty section looked like a missing feature. Reported 2026-09-23: "I don't see where
-        // to enter the receipt".
-        SectionHeading("Fill-up receipt", null)
-        Text(
-            text = "Nothing to enter right now. After your next fill-up, a card appears here " +
-                "when you start the car. Enter the gallons then, or any time in the next 3 days.",
-            color = CivicColors.Ink2,
-            fontSize = 14.sp,
-        )
-        Spacer(Modifier.height(12.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            Text(
-                text = when {
-                    last == null -> "No fill-ups recorded yet"
-                    last.pumpGallons != null ->
-                        "Last: " + fillTime(last.detectedAtMillis) + " · " + "%.2f gal".format(last.pumpGallons)
-                    else -> "Last: " + fillTime(last.detectedAtMillis) + " · no receipt"
-                },
-                color = CivicColors.Ink3,
-                fontSize = 13.sp,
-                modifier = Modifier.weight(1f),
-            )
-            if (last?.pumpGallons != null) {
-                Text(
-                    text = "Change",
-                    color = CivicColors.Accent,
-                    fontSize = 14.sp,
-                    modifier = Modifier
-                        .clickable { amending = true }
-                        .padding(start = 16.dp, top = 6.dp, bottom = 6.dp),
-                )
-            }
-        }
-        // Worded as the rare case it is. It closes the tank now, so using it for an old receipt
-        // would start a new tank at whatever the gauge reads today.
-        Text(
-            text = "Just filled up and no card appeared? Log it by hand",
-            color = CivicColors.Ink3,
-            fontSize = 13.sp,
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { handLog = true }
-                .padding(vertical = 12.dp),
-        )
-
-        if (calibration.fills.size > 1) {
-            Spacer(Modifier.height(6.dp))
-            RecentFillsList(calibration)
-        }
-    }
-
-    // What the last tap did. The work happens in the service, so without this the button
-    // would look dead whether it had saved the receipt or refused it.
-    val feedback by TelemetryState.actionFeedback.collectAsStateWithLifecycle()
-    feedback?.let { result ->
-        LaunchedEffect(result.sequence) {
-            delay(12_000)
-            TelemetryState.clearActionFeedback(result.sequence)
-        }
-        Text(
-            text = result.message,
-            color = if (result.worked) CivicColors.Good else CivicColors.Warn,
-            fontSize = 13.sp,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
-    }
-}
-
-/** The receipt form: gallons, an optional odometer, and one button. */
 @Composable
 private fun ReceiptCard(
     title: String,
@@ -926,8 +1000,10 @@ private fun ReceiptCard(
     Column(
         Modifier
             .fillMaxWidth()
-            .border(1.dp, CivicColors.Accent, RoundedCornerShape(14.dp))
-            .padding(16.dp),
+            .clip(RoundedCornerShape(18.dp))
+            .background(Color(0xFF15181C))
+            .border(1.dp, CivicColors.Accent, RoundedCornerShape(18.dp))
+            .padding(18.dp),
     ) {
         Text(title, color = CivicColors.Ink, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(4.dp))
@@ -940,8 +1016,6 @@ private fun ReceiptCard(
             }
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                // The odometer now, wherever "now" is. The app works back to the pump from the
-                // miles it has counted since, so it can be read at home with the receipt.
                 EntryField(label = "ODOMETER NOW", value = odometer, onChange = { odometer = it }, hint = "optional")
             }
         }
@@ -977,7 +1051,7 @@ private fun ReceiptCard(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp)
+                .height(50.dp)
                 .background(
                     if (ready) CivicColors.Accent else CivicColors.Hairline,
                     RoundedCornerShape(14.dp),
@@ -1005,7 +1079,7 @@ private fun ReceiptCard(
             Text(
                 text = if (ready) "Save" else "Enter the gallons",
                 color = if (ready) CivicColors.Ink else CivicColors.Ink4,
-                fontSize = 16.sp,
+                fontSize = 15.sp,
                 fontWeight = FontWeight.SemiBold,
             )
         }
@@ -1024,53 +1098,25 @@ private fun ReceiptCard(
     }
 }
 
-/** "Wed 5:02 PM", which is how a driver remembers a fill. */
 private fun fillTime(millis: Long): String =
     java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.US).format(java.util.Date(millis))
 
-/** "Oct 22", for comparing fills across weeks. */
 private fun fillDate(millis: Long): String =
     java.text.SimpleDateFormat("MMM d", java.util.Locale.US).format(java.util.Date(millis))
 
-@Composable
-private fun RecentFillsList(calibration: FuelCalibrationState) {
-    Label("RECENT FILL-UPS")
-    Spacer(Modifier.height(6.dp))
-    val fuelFactor = calibration.fuelCorrectionFactor
-    val distFactor = calibration.distanceCorrectionFactor
-
-    calibration.fills.takeLast(6).asReversed().forEach { fill ->
-        FillHistoryRow(fill, fuelFactor, distFactor)
+private fun priceAge(ageMillis: Long): String {
+    val minutes = ageMillis / 60_000L
+    val hours = minutes / 60L
+    return when {
+        minutes < 2L -> "just now"
+        minutes < 60L -> "$minutes min ago"
+        minutes < 120L -> "1 hour ago"
+        hours < 24L -> "$hours hours ago"
+        hours < 48L -> "yesterday"
+        else -> "${hours / 24L} days ago"
     }
 }
 
-@Composable
-private fun FillHistoryRow(fill: FillRecord, fuelFactor: Double, distFactor: Double) {
-    val leftLabel = buildString {
-        append(fillDate(fill.detectedAtMillis))
-        val before = fill.levelBefore
-        val after = fill.levelAfter
-        if (before != null && after != null) {
-            append(" · %.0f%% → %.0f%%".format(before, after))
-        }
-    }
-    val gallonsText = fill.pumpGallons?.let { "%.2f gal".format(it) } ?: "no receipt"
-    val tankNote = if (fill.spanRawMiles >= 10.0 && fill.spanRawGallons > 0.1) {
-        val miles = fill.spanRawMiles * distFactor
-        val gallons = fill.spanRawGallons * fuelFactor
-        "%.0f mi · %.1f mpg".format(miles, miles / gallons)
-    } else {
-        null
-    }
-
-    ValueRow(
-        label = leftLabel,
-        value = gallonsText,
-        note = tankNote,
-    )
-}
-
-/** A plain number entry, hand-rolled to match the rest of the screen. */
 @Composable
 private fun EntryField(
     label: String,
@@ -1078,7 +1124,13 @@ private fun EntryField(
     onChange: (String) -> Unit,
     hint: String,
 ) {
-    Label(label)
+    Text(
+        text = label,
+        color = CivicColors.Ink3,
+        fontSize = 11.sp,
+        fontWeight = FontWeight.Medium,
+        letterSpacing = 1.6.sp,
+    )
     Spacer(Modifier.height(5.dp))
     Box(
         Modifier
@@ -1091,8 +1143,6 @@ private fun EntryField(
         }
         BasicTextField(
             value = value,
-            // Filtered on the way in rather than validated on the way out. A stray character
-            // in a gallons figure is not a thing to explain to someone standing at a pump.
             onValueChange = { entered ->
                 onChange(entered.filter { it.isDigit() || it == '.' }.take(9))
             },
@@ -1103,52 +1153,4 @@ private fun EntryField(
             modifier = Modifier.fillMaxWidth(),
         )
     }
-}
-
-@Composable
-private fun SectionHeading(title: String, aside: String?) {
-    Box(Modifier.fillMaxWidth().height(1.dp).background(CivicColors.Hairline))
-    Spacer(Modifier.height(14.dp))
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Bottom,
-    ) {
-        Text(title, color = CivicColors.Ink, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-        aside?.let { Text(it, color = CivicColors.Ink3, fontSize = 12.sp) }
-    }
-    Spacer(Modifier.height(12.dp))
-}
-
-@Composable
-private fun ValueRow(label: String, value: String, note: String? = null) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Bottom,
-    ) {
-        Text(label, color = CivicColors.Ink2, fontSize = 14.sp)
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                text = value,
-                color = if (value == "—") CivicColors.Ink4 else CivicColors.Ink,
-                fontSize = 14.sp,
-            )
-            note?.let {
-                Spacer(Modifier.width(10.dp))
-                Text(it, color = CivicColors.Ink3, fontSize = 12.sp)
-            }
-        }
-    }
-}
-
-@Composable
-private fun Label(text: String) {
-    Text(
-        text = text,
-        color = CivicColors.Ink3,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium,
-        letterSpacing = 1.6.sp,
-    )
 }
