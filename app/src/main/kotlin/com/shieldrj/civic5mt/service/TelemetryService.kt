@@ -22,6 +22,7 @@ import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.DtcScanner
 import com.shieldrj.civic5mt.core.Elm327Client
 import com.shieldrj.civic5mt.core.FuelCalibrationEngine
+import com.shieldrj.civic5mt.core.HealthLevel
 import com.shieldrj.civic5mt.core.ReceiptOutcome
 import com.shieldrj.civic5mt.core.ObdTransportError
 import com.shieldrj.civic5mt.core.ReconnectPolicy
@@ -136,6 +137,10 @@ class TelemetryService : Service() {
         TelemetryState.setClutch(manager.clutchHealth.getProfile())
         TelemetryState.setCalibration(manager.getCalibration())
         TelemetryState.setTank(manager.tank.get())
+        PrefsDtcReportStore(applicationContext).load()?.let {
+            manager.setDtcReport(it)
+            TelemetryState.setDtcReport(it)
+        }
 
         recorder = TripRecorder(TripDatabase.get(applicationContext).tripDao())
 
@@ -149,6 +154,7 @@ class TelemetryService : Service() {
         observeDrivingState()
         observeVoltageAlerts()
         observeClutchAlerts()
+        observeHealthAlerts()
         observeWidgetPushes()
     }
 
@@ -550,6 +556,67 @@ class TelemetryService : Service() {
         )
     }
 
+    private val alertedHealthKeys = mutableSetOf<String>()
+
+    /**
+     * Posts a one-shot notification per drive when [LiveMetrics.healthStatus] transitions to
+     * [HealthLevel.ADVISORY] or [HealthLevel.CRITICAL] for an engine, charging, fault-code,
+     * or oil issue.
+     */
+    private fun observeHealthAlerts() {
+        scope.launch {
+            launch {
+                TelemetryState.connection.collect { status ->
+                    if (status == ConnectionStatus.CONNECTED || status == ConnectionStatus.SIMULATING) {
+                        alertedHealthKeys.clear()
+                    }
+                }
+            }
+            TelemetryState.metrics.collect { m ->
+                val status = m.healthStatus
+                if (status.level == HealthLevel.OK) return@collect
+                if (status.summary.startsWith("CLUTCH")) return@collect
+                // Deduplicate by the category prefix before '·' so fluctuating RPM or voltage
+                // values do not re-fire the notification on every tick.
+                val alertKey = status.summary.substringBefore("·").trim()
+                if (alertedHealthKeys.add(alertKey)) {
+                    postHealthAlert(status.summary, status.detail)
+                }
+            }
+        }
+    }
+
+    private fun postHealthAlert(summary: String, detail: String?) {
+        val targetScreen = when {
+            summary.startsWith("OIL") -> SCREEN_OIL
+            summary.startsWith("CLUTCH") -> SCREEN_CLUTCH
+            else -> SCREEN_CODES
+        }
+        val openHealth = PendingIntent.getActivity(
+            this,
+            103,
+            Intent(this, MainActivity::class.java).apply {
+                putExtra(EXTRA_OPEN_SCREEN, targetScreen)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            },
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val body = detail ?: "Tap to see what the car is reporting."
+        runCatching {
+            getSystemService(NotificationManager::class.java).notify(
+                HEALTH_ALERT_NOTIFICATION_ID,
+                Notification.Builder(this, ALERT_CHANNEL_ID)
+                    .setContentTitle(summary)
+                    .setContentText(body)
+                    .setStyle(Notification.BigTextStyle().bigText(body))
+                    .setSmallIcon(R.drawable.ic_stat_telemetry)
+                    .setContentIntent(openHealth)
+                    .setAutoCancel(true)
+                    .build(),
+            )
+        }.onFailure { Log.w(TAG, "Health alert notification failed", it) }
+    }
+
     /** Pushes tank figures to the home-screen widget, at most every thirty seconds. */
     private fun observeWidgetPushes() {
         scope.launch {
@@ -690,6 +757,15 @@ class TelemetryService : Service() {
                     recorder.start(System.currentTimeMillis(), simulated = false)
 
                     startLoops(elm)
+                    // Run one automatic diagnostic scan shortly after connecting so pending or
+                    // confirmed fault codes surface on the health banner without a manual tap.
+                    scope.launch {
+                        delay(AUTO_SCAN_DELAY_MS)
+                        if (client === elm) {
+                            runCatching { performAndSaveScan(elm) }
+                                .onFailure { Log.w(TAG, "Automatic startup DTC scan failed", it) }
+                        }
+                    }
                     return@launch
                 } catch (e: CancellationException) {
                     throw e
@@ -873,6 +949,13 @@ class TelemetryService : Service() {
      * the poll loop is the collision that used to freeze every gauge on its last good
      * value. The gauges simply slow down while this runs.
      */
+    private suspend fun performAndSaveScan(elm: Elm327Client) {
+        val report = DtcScanner(elm).performFullScan()
+        PrefsDtcReportStore(applicationContext).save(report)
+        manager.setDtcReport(report)
+        TelemetryState.setDtcReport(report)
+    }
+
     private fun scanForCodes() {
         val elm = client
         if (elm == null) {
@@ -882,7 +965,7 @@ class TelemetryService : Service() {
         scope.launch {
             TelemetryState.setScanning(true)
             try {
-                TelemetryState.setDtcReport(DtcScanner(elm).performFullScan())
+                performAndSaveScan(elm)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -909,7 +992,7 @@ class TelemetryService : Service() {
             try {
                 val scanner = DtcScanner(elm)
                 scanner.clearAllCodes()
-                TelemetryState.setDtcReport(scanner.performFullScan())
+                performAndSaveScan(elm)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -1235,12 +1318,16 @@ class TelemetryService : Service() {
         const val EXTRA_OPEN_SCREEN = "open_screen"
         const val SCREEN_FUEL = "fuel"
         const val SCREEN_CLUTCH = "clutch"
+        const val SCREEN_CODES = "codes"
+        const val SCREEN_OIL = "oil"
 
         private const val ALERT_CHANNEL_ID = "alerts"
         private const val VOLTAGE_NOTIFICATION_ID = 2
         private const val CLUTCH_SLIP_NOTIFICATION_ID = 3
         private const val CLUTCH_WEAR_NOTIFICATION_ID = 4
         private const val RECEIPT_NOTIFICATION_ID = 5
+        private const val HEALTH_ALERT_NOTIFICATION_ID = 6
+        private const val AUTO_SCAN_DELAY_MS = 3_000L
         private const val FOREGROUND_POLL_MS = 1_000L
         private const val SLIP_ALERT_DEBOUNCE_MS = 15_000L
 

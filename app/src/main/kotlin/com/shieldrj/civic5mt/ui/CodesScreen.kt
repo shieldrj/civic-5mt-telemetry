@@ -1,5 +1,6 @@
 package com.shieldrj.civic5mt.ui
 
+import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -26,18 +27,20 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.shieldrj.civic5mt.core.ConnectionStatus
 import com.shieldrj.civic5mt.core.DtcSeverity
+import com.shieldrj.civic5mt.core.HealthLevel
 import com.shieldrj.civic5mt.core.MonitorState
 import com.shieldrj.civic5mt.core.ScannedDtc
+import com.shieldrj.civic5mt.core.dtcHealthStatus
 import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.TelemetryState
 
 /**
- * Fault codes, and the emissions self-tests.
+ * Engine health verdict, fault codes, and emissions readiness.
  *
- * The screen leads with pending codes rather than confirmed ones, which is backwards from most
- * scan tools and deliberate. A confirmed code has already lit the dashboard - you know about
- * it. A pending code is the fault that has happened once and not yet lit anything, and it is
- * the only one on this screen you can still get ahead of.
+ * The app scans for codes automatically at the start of every drive and watches fuel trims,
+ * thermostat warm-up, warm idle stability, charging voltage, oil life, and clutch slip in the
+ * background. This screen states the plain-English verdict first and only expands individual
+ * codes or incomplete emissions monitors when something needs attention.
  */
 @Composable
 fun CodesSection(modifier: Modifier = Modifier) {
@@ -45,9 +48,16 @@ fun CodesSection(modifier: Modifier = Modifier) {
     val report by TelemetryState.dtcReport.collectAsStateWithLifecycle()
     val scanning by TelemetryState.scanning.collectAsStateWithLifecycle()
     val connection by TelemetryState.connection.collectAsStateWithLifecycle()
+    val metrics by TelemetryState.metrics.collectAsStateWithLifecycle()
     var confirmingClear by remember { mutableStateOf(false) }
 
     val connected = connection == ConnectionStatus.CONNECTED
+    val live = connection == ConnectionStatus.CONNECTED || connection == ConnectionStatus.SIMULATING
+
+    val activeIssue = when {
+        live && metrics.healthStatus.level != HealthLevel.OK -> metrics.healthStatus
+        else -> report?.let { dtcHealthStatus(it) }
+    }
 
     Column(
         modifier = modifier
@@ -56,84 +66,149 @@ fun CodesSection(modifier: Modifier = Modifier) {
             .padding(horizontal = 20.dp, vertical = 24.dp),
     ) {
         when {
-            scanning -> Text("Scanning…", color = CivicColors.Ink2, fontSize = 14.sp)
-
-            !connected -> Text(
-                // The bench has no ECU to ask, and inventing a plausible fault would be a
-                // scan tool that lies. It says so instead.
-                text = "Connect to the adapter with the ignition on to scan. " +
-                    "A simulated drive has no ECU to ask.",
-                color = CivicColors.Ink3,
-                fontSize = 14.sp,
-            )
-
-            report == null -> Text(
-                "No scan yet.",
-                color = CivicColors.Ink3,
-                fontSize = 14.sp,
-            )
-        }
-
-        report?.let { r ->
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
+            activeIssue != null -> {
+                val issueColor = if (activeIssue.level == HealthLevel.CRITICAL) {
+                    CivicColors.Accent
+                } else {
+                    CivicColors.Warn
+                }
                 Text(
-                    text = if (r.milOn) "Check engine light ON" else "No check engine light",
-                    color = if (r.milOn) CivicColors.Accent else CivicColors.Ink,
-                    fontSize = 16.sp,
+                    text = activeIssue.summary,
+                    color = issueColor,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
                 )
+                activeIssue.detail?.let { detail ->
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = detail,
+                        color = CivicColors.Ink2,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
+
+            report != null -> {
                 Text(
-                    text = "${r.totalDtcCount} code" + if (r.totalDtcCount == 1) "" else "s",
+                    text = "All systems healthy",
+                    color = CivicColors.Good,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "No check engine light and 0 fault codes stored. Fuel mixture, " +
+                        "engine temperature, warm idle, charging voltage, and clutch grip are " +
+                        "watched automatically while you drive.",
                     color = CivicColors.Ink2,
                     fontSize = 14.sp,
                 )
             }
 
-            Spacer(Modifier.height(20.dp))
+            else -> {
+                Text(
+                    text = "Watched automatically when you drive",
+                    color = CivicColors.Ink,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "The app scans for fault codes and checks fuel mixture, thermostat " +
+                        "warm-up, warm idle, charging voltage, and clutch grip automatically " +
+                        "every time the car connects. You will get a notification if a problem " +
+                        "appears.",
+                    color = CivicColors.Ink2,
+                    fontSize = 14.sp,
+                )
+            }
+        }
 
-            CodeSection("Pending", r.pendingCodes, CivicColors.Warn)
-            CodeSection("Confirmed", r.confirmedCodes, CivicColors.Accent)
-            CodeSection("Permanent", r.permanentCodes, CivicColors.Ink2)
-
-            Spacer(Modifier.height(8.dp))
-            Hairline()
-            Spacer(Modifier.height(16.dp))
-
-            Text(
-                text = "EMISSIONS READINESS",
-                color = CivicColors.Ink3,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 2.sp,
-            )
-            Spacer(Modifier.height(10.dp))
-            r.monitors.labelled().forEach { (label, state) ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Text(label.replaceFirstChar { it.uppercase() }, color = CivicColors.Ink2, fontSize = 13.sp)
+        if (scanning) {
+            Spacer(Modifier.height(12.dp))
+            Text("Scanning ECU…", color = CivicColors.Ink3, fontSize = 13.sp)
+        } else {
+            report?.let { r ->
+                if (r.timestamp > 0L) {
+                    Spacer(Modifier.height(10.dp))
                     Text(
-                        text = state.label,
-                        color = when (state) {
-                            MonitorState.READY -> CivicColors.Ink
-                            MonitorState.NOT_READY -> CivicColors.Warn
-                            MonitorState.NOT_AVAILABLE -> CivicColors.Ink4
-                        },
-                        fontSize = 13.sp,
+                        text = "Last checked " +
+                            DateUtils.getRelativeTimeSpanString(r.timestamp).toString(),
+                        color = CivicColors.Ink3,
+                        fontSize = 12.sp,
                     )
                 }
             }
         }
 
-        Spacer(Modifier.height(24.dp))
-        Hairline()
-        Spacer(Modifier.height(12.dp))
+        report?.let { r ->
+            if (r.totalDtcCount > 0) {
+                Spacer(Modifier.height(20.dp))
+                Hairline()
+                Spacer(Modifier.height(16.dp))
+
+                CodeSection("Pending", r.pendingCodes, CivicColors.Warn)
+                CodeSection("Confirmed", r.confirmedCodes, CivicColors.Accent)
+                CodeSection("Permanent", r.permanentCodes, CivicColors.Ink2)
+            }
+
+            val supported = r.monitors.labelled().filter { it.second != MonitorState.NOT_AVAILABLE }
+            val incomplete = supported.filter { it.second == MonitorState.NOT_READY }
+
+            if (supported.isNotEmpty()) {
+                Spacer(Modifier.height(20.dp))
+                Hairline()
+                Spacer(Modifier.height(16.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    Text(
+                        text = "Smog check self-tests",
+                        color = CivicColors.Ink2,
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        text = if (incomplete.isEmpty()) {
+                            "Passed (${supported.size} of ${supported.size} ready)"
+                        } else {
+                            "${incomplete.size} of ${supported.size} still running"
+                        },
+                        color = if (incomplete.isEmpty()) CivicColors.Good else CivicColors.Warn,
+                        fontSize = 14.sp,
+                    )
+                }
+
+                if (incomplete.isNotEmpty()) {
+                    Spacer(Modifier.height(10.dp))
+                    incomplete.forEach { (label, _) ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                text = label.replaceFirstChar { it.uppercase() },
+                                color = CivicColors.Ink3,
+                                fontSize = 13.sp,
+                            )
+                            Text(
+                                text = "Not ready yet",
+                                color = CivicColors.Warn,
+                                fontSize = 13.sp,
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         if (connected && !scanning) {
-            ActionText(if (report == null) "Scan for codes" else "Scan again") {
+            Spacer(Modifier.height(24.dp))
+            Hairline()
+            Spacer(Modifier.height(12.dp))
+
+            ActionText(if (report == null) "Scan now" else "Check again now") {
                 TelemetryService.scanForCodes(context)
             }
 

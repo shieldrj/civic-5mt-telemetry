@@ -2,8 +2,10 @@ package com.shieldrj.civic5mt.service
 
 import com.shieldrj.civic5mt.core.ClutchHealthEngine
 import com.shieldrj.civic5mt.core.ClutchProfileStore
+import com.shieldrj.civic5mt.core.DtcReportStore
 import com.shieldrj.civic5mt.core.FuelBlendId
 import com.shieldrj.civic5mt.core.FuelCalibrationStore
+import com.shieldrj.civic5mt.core.InMemoryDtcReportStore
 import com.shieldrj.civic5mt.core.InMemoryTankStore
 import com.shieldrj.civic5mt.core.LifetimeStore
 import com.shieldrj.civic5mt.core.OilLifeEngine
@@ -49,6 +51,7 @@ internal fun publishPersistedRecords(
     calibration: FuelCalibrationStore,
     blend: FuelBlendId,
     tank: TankStore = InMemoryTankStore(),
+    dtcReport: DtcReportStore = InMemoryDtcReportStore(),
 ) {
     lifetime.load()?.let { TelemetryState.setLifetime(it) }
 
@@ -82,6 +85,8 @@ internal fun publishPersistedRecords(
         }
         TelemetryState.setTank(effectiveTank)
     }
+
+    dtcReport.load()?.let { TelemetryState.setDtcReport(it) }
 
     TelemetryState.setFuelBlend(blend)
 }

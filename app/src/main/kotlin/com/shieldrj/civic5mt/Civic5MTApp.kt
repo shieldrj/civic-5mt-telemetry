@@ -3,6 +3,7 @@ package com.shieldrj.civic5mt
 import android.app.Application
 import android.util.Log
 import com.shieldrj.civic5mt.service.PrefsClutchProfileStore
+import com.shieldrj.civic5mt.service.PrefsDtcReportStore
 import com.shieldrj.civic5mt.service.PrefsFuelCalibrationStore
 import com.shieldrj.civic5mt.service.PrefsLifetimeStore
 import com.shieldrj.civic5mt.service.PrefsOilProfileStore
@@ -40,6 +41,7 @@ class Civic5MTApp : Application() {
             calibration = PrefsFuelCalibrationStore(this),
             blend = loadFuelBlend(this),
             tank = tankStore,
+            dtcReport = PrefsDtcReportStore(this),
         )
     }
 

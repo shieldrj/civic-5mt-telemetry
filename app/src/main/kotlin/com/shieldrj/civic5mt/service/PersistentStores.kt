@@ -11,19 +11,29 @@ import com.shieldrj.civic5mt.core.ClutchProfileStore
 import com.shieldrj.civic5mt.core.ClutchSlipIncident
 import com.shieldrj.civic5mt.core.ClutchWearBreakdown
 import com.shieldrj.civic5mt.core.DegradationBreakdown
+import com.shieldrj.civic5mt.core.DtcCodec
+import com.shieldrj.civic5mt.core.DtcReportStore
+import com.shieldrj.civic5mt.core.DtcScanReport
+import com.shieldrj.civic5mt.core.DtcStatusType
 import com.shieldrj.civic5mt.core.FillRecord
+import com.shieldrj.civic5mt.core.FreezeFrame
 import com.shieldrj.civic5mt.core.FuelBlendId
 import com.shieldrj.civic5mt.core.FuelCalibrationState
 import com.shieldrj.civic5mt.core.FuelCalibrationStore
 import com.shieldrj.civic5mt.core.GasPrice
 import com.shieldrj.civic5mt.core.GasPriceSnapshot
+import com.shieldrj.civic5mt.core.HONDA_DTC_DATABASE
 import com.shieldrj.civic5mt.core.LifetimeStats
 import com.shieldrj.civic5mt.core.LifetimeStore
+import com.shieldrj.civic5mt.core.MonitorState
 import com.shieldrj.civic5mt.core.OilConditionGrade
 import com.shieldrj.civic5mt.core.OilLifeProfile
 import com.shieldrj.civic5mt.core.OilProfileStore
+import com.shieldrj.civic5mt.core.ReadinessMonitorStatus
+import com.shieldrj.civic5mt.core.ScannedDtc
 import com.shieldrj.civic5mt.core.TankState
 import com.shieldrj.civic5mt.core.TankStore
+import com.shieldrj.civic5mt.core.UNKNOWN_MONITORS
 import com.shieldrj.civic5mt.core.withUsableCalibration
 import com.shieldrj.civic5mt.core.withUsableIncidents
 import com.shieldrj.civic5mt.core.withUsableSpans
@@ -68,6 +78,7 @@ private const val KEY_BACKUP_DOC_URI = "backup_doc_uri"
 private const val KEY_LAST_BACKUP_AT = "last_backup_at"
 private const val KEY_GAS_PRICES = "costco_gas_prices_v1"
 private const val KEY_FUEL_CALIBRATION = "civic_2013_fuel_calibration_v1"
+private const val KEY_DTC_REPORT = "civic_2013_dtc_report_v1"
 
 private const val TAG = "PersistentStores"
 
@@ -773,6 +784,133 @@ fun loadGasPrices(context: Context): GasPriceSnapshot {
         .getOrDefault(GasPriceSnapshot())
 }
 
+// ── Last diagnostic scan report ─────────────────────────────────────────────────
+
+/**
+ * Keeps the last diagnostic scan on disk so the Codes section can show it when the car is off.
+ */
+class PrefsDtcReportStore(context: Context) : DtcReportStore {
+    private val prefs = telemetryPrefs(context)
+
+    override fun load(): DtcScanReport? {
+        val raw = prefs.getString(KEY_DTC_REPORT, null) ?: return null
+        return runCatching { parseDtcReport(JSONObject(raw)) }
+            .onFailure { Log.w(TAG, "DTC report unreadable, ignoring", it) }
+            .getOrNull()
+    }
+
+    override fun save(report: DtcScanReport) {
+        prefs.edit().putString(KEY_DTC_REPORT, dtcReportToJson(report).toString()).apply()
+    }
+}
+
+internal fun dtcReportToJson(report: DtcScanReport): JSONObject {
+    fun encodeCodes(codes: List<ScannedDtc>): JSONArray {
+        val arr = JSONArray()
+        for (dtc in codes) {
+            val obj = JSONObject()
+                .put("code", dtc.code)
+                .put("type", dtc.type.name)
+            dtc.freezeFrame?.let { f ->
+                obj.put(
+                    "freezeFrame",
+                    JSONObject()
+                        .put("rpm", f.rpm)
+                        .put("speedMph", f.speedMph)
+                        .put("coolantTempF", f.coolantTempF)
+                        .put("calcLoad", f.calcLoad)
+                        .put("fuelTrimSt", f.fuelTrimSt)
+                        .put("fuelTrimLt", f.fuelTrimLt),
+                )
+            }
+            arr.put(obj)
+        }
+        return arr
+    }
+
+    val m = report.monitors
+    val monitorsJson = JSONObject()
+        .put("misfire", m.misfire.name)
+        .put("fuelSystem", m.fuelSystem.name)
+        .put("comprehensive", m.comprehensive.name)
+        .put("catalyst", m.catalyst.name)
+        .put("evap", m.evap.name)
+        .put("o2Sensor", m.o2Sensor.name)
+        .put("o2Heater", m.o2Heater.name)
+        .put("egrVvt", m.egrVvt.name)
+
+    return JSONObject()
+        .put("timestamp", report.timestamp)
+        .put("milOn", report.milOn)
+        .put("pendingCodes", encodeCodes(report.pendingCodes))
+        .put("confirmedCodes", encodeCodes(report.confirmedCodes))
+        .put("permanentCodes", encodeCodes(report.permanentCodes))
+        .put("monitors", monitorsJson)
+}
+
+internal fun parseDtcReport(json: JSONObject): DtcScanReport {
+    fun decodeCodes(arr: JSONArray?, fallbackType: DtcStatusType): List<ScannedDtc> {
+        if (arr == null) return emptyList()
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val code = obj.optString("code").takeIf { it.isNotBlank() } ?: continue
+                val typeName = obj.optString("type")
+                val type = DtcStatusType.entries.firstOrNull { it.name == typeName } ?: fallbackType
+                val fObj = obj.optJSONObject("freezeFrame")
+                val frame = fObj?.let {
+                    FreezeFrame(
+                        rpm = it.optInt("rpm", 0),
+                        speedMph = it.optInt("speedMph", 0),
+                        coolantTempF = it.optInt("coolantTempF", 0),
+                        calcLoad = it.optDouble("calcLoad", 0.0),
+                        fuelTrimSt = it.optDouble("fuelTrimSt", 0.0),
+                        fuelTrimLt = it.optDouble("fuelTrimLt", 0.0),
+                    )
+                }
+                add(
+                    ScannedDtc(
+                        code = code,
+                        type = type,
+                        details = HONDA_DTC_DATABASE[code] ?: DtcCodec.genericDefinition(code, type),
+                        freezeFrame = frame,
+                    ),
+                )
+            }
+        }
+    }
+
+    fun monitorState(mObj: JSONObject?, key: String): MonitorState {
+        val raw = mObj?.optString(key) ?: return MonitorState.NOT_AVAILABLE
+        return MonitorState.entries.firstOrNull { it.name == raw } ?: MonitorState.NOT_AVAILABLE
+    }
+
+    val mObj = json.optJSONObject("monitors")
+    val monitors = if (mObj == null) {
+        UNKNOWN_MONITORS
+    } else {
+        ReadinessMonitorStatus(
+            misfire = monitorState(mObj, "misfire"),
+            fuelSystem = monitorState(mObj, "fuelSystem"),
+            comprehensive = monitorState(mObj, "comprehensive"),
+            catalyst = monitorState(mObj, "catalyst"),
+            evap = monitorState(mObj, "evap"),
+            o2Sensor = monitorState(mObj, "o2Sensor"),
+            o2Heater = monitorState(mObj, "o2Heater"),
+            egrVvt = monitorState(mObj, "egrVvt"),
+        )
+    }
+
+    return DtcScanReport(
+        timestamp = json.optLong("timestamp", 0L),
+        milOn = json.optBoolean("milOn", false),
+        pendingCodes = decodeCodes(json.optJSONArray("pendingCodes"), DtcStatusType.PENDING),
+        confirmedCodes = decodeCodes(json.optJSONArray("confirmedCodes"), DtcStatusType.CONFIRMED),
+        permanentCodes = decodeCodes(json.optJSONArray("permanentCodes"), DtcStatusType.PERMANENT),
+        monitors = monitors,
+    )
+}
+
 // ── The backup document itself ───────────────────────────────────────────────────
 
 /**
@@ -792,6 +930,7 @@ fun snapshotRecords(context: Context): JSONObject {
         .put(KEY_TANK, prefs.getString(KEY_TANK, null) ?: JSONObject.NULL)
         .put(KEY_FUEL_BLEND, prefs.getString(KEY_FUEL_BLEND, null) ?: JSONObject.NULL)
         .put(KEY_FUEL_CALIBRATION, prefs.getString(KEY_FUEL_CALIBRATION, null) ?: JSONObject.NULL)
+        .put(KEY_DTC_REPORT, prefs.getString(KEY_DTC_REPORT, null) ?: JSONObject.NULL)
 }
 
 /**
@@ -840,6 +979,14 @@ fun restoreRecords(context: Context, backup: JSONObject): List<String> {
             .getOrNull()?.let {
                 PrefsFuelCalibrationStore(context).save(it)
                 messages += "${it.fills.size} logged fill-ups"
+            }
+    }
+
+    if (prefs.getString(KEY_DTC_REPORT, null) == null && !backup.isNull(KEY_DTC_REPORT)) {
+        runCatching { parseDtcReport(JSONObject(backup.getString(KEY_DTC_REPORT))) }
+            .getOrNull()?.let {
+                PrefsDtcReportStore(context).save(it)
+                messages += "last diagnostic scan"
             }
     }
 
