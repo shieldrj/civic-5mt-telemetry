@@ -63,140 +63,152 @@ fun CodesSection(modifier: Modifier = Modifier) {
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 24.dp),
+            .padding(horizontal = 20.dp, vertical = 20.dp),
     ) {
-        when {
-            activeIssue != null -> {
-                val issueColor = if (activeIssue.level == HealthLevel.CRITICAL) {
-                    CivicColors.Accent
-                } else {
-                    CivicColors.Warn
-                }
-                Text(
-                    text = activeIssue.summary,
-                    color = issueColor,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                activeIssue.detail?.let { detail ->
-                    Spacer(Modifier.height(6.dp))
+        PanelCard {
+            when {
+                activeIssue != null -> {
+                    val issueColor = if (activeIssue.level == HealthLevel.CRITICAL) {
+                        CivicColors.Accent
+                    } else {
+                        CivicColors.Warn
+                    }
                     Text(
-                        text = detail,
+                        text = activeIssue.summary,
+                        color = issueColor,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    activeIssue.detail?.let { detail ->
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            text = detail,
+                            color = CivicColors.Ink2,
+                            fontSize = 14.sp,
+                            lineHeight = 20.sp,
+                        )
+                    }
+                }
+
+                report != null -> {
+                    Text(
+                        text = "All systems healthy",
+                        color = CivicColors.Good,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "No check engine light and 0 fault codes stored. Fuel mixture, " +
+                            "engine temperature, warm idle, charging voltage, and clutch grip are " +
+                            "watched automatically while you drive.",
                         color = CivicColors.Ink2,
                         fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                    )
+                }
+
+                else -> {
+                    Text(
+                        text = "Watched automatically when you drive",
+                        color = CivicColors.Ink,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "The app scans for fault codes and checks fuel mixture, thermostat " +
+                            "warm-up, warm idle, charging voltage, and clutch grip automatically " +
+                            "every time the car connects. You will get a notification if a problem " +
+                            "appears.",
+                        color = CivicColors.Ink2,
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
                     )
                 }
             }
 
-            report != null -> {
-                Text(
-                    text = "All systems healthy",
-                    color = CivicColors.Good,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = "No check engine light and 0 fault codes stored. Fuel mixture, " +
-                        "engine temperature, warm idle, charging voltage, and clutch grip are " +
-                        "watched automatically while you drive.",
-                    color = CivicColors.Ink2,
-                    fontSize = 14.sp,
-                )
-            }
-
-            else -> {
-                Text(
-                    text = "Watched automatically when you drive",
-                    color = CivicColors.Ink,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = "The app scans for fault codes and checks fuel mixture, thermostat " +
-                        "warm-up, warm idle, charging voltage, and clutch grip automatically " +
-                        "every time the car connects. You will get a notification if a problem " +
-                        "appears.",
-                    color = CivicColors.Ink2,
-                    fontSize = 14.sp,
-                )
-            }
-        }
-
-        if (scanning) {
-            Spacer(Modifier.height(12.dp))
-            Text("Scanning ECU…", color = CivicColors.Ink3, fontSize = 13.sp)
-        } else {
-            report?.let { r ->
-                if (r.timestamp > 0L) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        text = "Last checked " +
-                            DateUtils.getRelativeTimeSpanString(r.timestamp).toString(),
-                        color = CivicColors.Ink3,
-                        fontSize = 12.sp,
-                    )
+            if (scanning) {
+                Spacer(Modifier.height(12.dp))
+                Text("Scanning ECU…", color = CivicColors.Ink3, fontSize = 13.sp)
+            } else {
+                report?.let { r ->
+                    if (r.timestamp > 0L) {
+                        Spacer(Modifier.height(12.dp))
+                        Text(
+                            text = "Last checked " +
+                                DateUtils.getRelativeTimeSpanString(r.timestamp).toString(),
+                            color = CivicColors.Ink3,
+                            fontSize = 12.sp,
+                        )
+                    }
                 }
             }
         }
 
         report?.let { r ->
             if (r.totalDtcCount > 0) {
-                Spacer(Modifier.height(20.dp))
-                Hairline()
                 Spacer(Modifier.height(16.dp))
-
-                CodeSection("Pending", r.pendingCodes, CivicColors.Warn)
-                CodeSection("Confirmed", r.confirmedCodes, CivicColors.Accent)
-                CodeSection("Permanent", r.permanentCodes, CivicColors.Ink2)
+                PanelCard {
+                    CodeSection("Pending", r.pendingCodes, CivicColors.Warn)
+                    CodeSection("Confirmed", r.confirmedCodes, CivicColors.Accent)
+                    CodeSection("Permanent", r.permanentCodes, CivicColors.Ink2)
+                }
             }
 
             val supported = r.monitors.labelled().filter { it.second != MonitorState.NOT_AVAILABLE }
             val incomplete = supported.filter { it.second == MonitorState.NOT_READY }
 
             if (supported.isNotEmpty()) {
-                Spacer(Modifier.height(20.dp))
-                Hairline()
                 Spacer(Modifier.height(16.dp))
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
+                PanelCard {
                     Text(
-                        text = "Smog check self-tests",
-                        color = CivicColors.Ink2,
-                        fontSize = 14.sp,
+                        text = "EMISSIONS READINESS",
+                        color = CivicColors.Ink3,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        letterSpacing = 2.sp,
                     )
-                    Text(
-                        text = if (incomplete.isEmpty()) {
-                            "Passed (${supported.size} of ${supported.size} ready)"
-                        } else {
-                            "${incomplete.size} of ${supported.size} still running"
-                        },
-                        color = if (incomplete.isEmpty()) CivicColors.Good else CivicColors.Warn,
-                        fontSize = 14.sp,
-                    )
-                }
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = "Smog check self-tests",
+                            color = CivicColors.Ink2,
+                            fontSize = 14.sp,
+                        )
+                        Text(
+                            text = if (incomplete.isEmpty()) {
+                                "Passed (${supported.size} of ${supported.size} ready)"
+                            } else {
+                                "${incomplete.size} of ${supported.size} still running"
+                            },
+                            color = if (incomplete.isEmpty()) CivicColors.Good else CivicColors.Warn,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium,
+                        )
+                    }
 
-                if (incomplete.isNotEmpty()) {
-                    Spacer(Modifier.height(10.dp))
-                    incomplete.forEach { (label, _) ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(
-                                text = label.replaceFirstChar { it.uppercase() },
-                                color = CivicColors.Ink3,
-                                fontSize = 13.sp,
-                            )
-                            Text(
-                                text = "Not ready yet",
-                                color = CivicColors.Warn,
-                                fontSize = 13.sp,
-                            )
+                    if (incomplete.isNotEmpty()) {
+                        Spacer(Modifier.height(10.dp))
+                        incomplete.forEach { (label, _) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(
+                                    text = label.replaceFirstChar { it.uppercase() },
+                                    color = CivicColors.Ink3,
+                                    fontSize = 13.sp,
+                                )
+                                Text(
+                                    text = "Not ready yet",
+                                    color = CivicColors.Warn,
+                                    fontSize = 13.sp,
+                                )
+                            }
                         }
                     }
                 }
