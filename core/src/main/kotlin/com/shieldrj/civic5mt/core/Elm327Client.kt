@@ -563,11 +563,15 @@ class Elm327Client(
             "010E" -> PidParsers.timingAdvance(pollPid("010E"))?.let { s = s.copy(timingAdvance = it) }
             "012F" -> PidParsers.fuelLevelPercent(pollPid("012F"))?.let { s = s.copy(fuelLevelPercent = it) }
             "011F" -> PidParsers.engineRuntimeSec(pollPid("011F"))?.let { s = s.copy(engineRuntimeSec = it) }
-            "0107" -> PidParsers.longTermFuelTrim(pollPid("0107"))?.let { s = s.copy(ltft = it) }
+            "0107" -> PidParsers.longTermFuelTrim(pollPid("0107"))?.let {
+                s = s.copy(ltft = it, fuelTrimSampledAtMillis = clock.nowMillis())
+            }
             "0103" -> PidParsers.fuelSystemStatus(pollPid("0103"))?.let { s = s.copy(fuelSystemStatus = it) }
             "0145" -> PidParsers.relativeThrottlePercent(pollPid("0145"))?.let { s = s.copy(relativeThrottlePos = it) }
             "0106" -> {
-                PidParsers.shortTermFuelTrim(pollPid("0106"))?.let { s = s.copy(stft = it) }
+                PidParsers.shortTermFuelTrim(pollPid("0106"))?.let {
+                    s = s.copy(stft = it, fuelTrimSampledAtMillis = clock.nowMillis())
+                }
                 s = pollSeparateLambda(s)
             }
             AIR_SLOT -> s = pollOutsideAir(s)

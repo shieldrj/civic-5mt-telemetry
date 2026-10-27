@@ -22,7 +22,10 @@ import kotlin.math.roundToInt
  *  - **Sustained fuel trim drift**: a single frame at +18% happens on a throttle tip-in and
  *    means nothing. Holding +12% long-term trim (or ±16% total trim) for forty-five seconds of
  *    warm closed-loop running means the ECU is continuously compensating for unmetered air or
- *    fuel delivery drift.
+ *    fuel delivery drift. "Holding" is counted in readings, not ticks: the trims are polled
+ *    every forty-two cycles, and the first version counted every tick a single carried-forward
+ *    snapshot sat in the field. It warned "+16%" on 2026-10-26 in stop-and-go traffic while
+ *    the wideband read λ 0.99 and the fuel system monitor had passed.
  *  - **Thermostat regulation**: the R18Z1 thermostat opens around 172–180°F and holds
  *    178–198°F. Failing to reach 162°F after twelve minutes at road speed, or dropping back
  *    under 160°F for ninety seconds on the highway after warming up, is a thermostat stuck
@@ -41,6 +44,12 @@ object EngineHealthRules {
 
     /** Seconds of warm closed-loop running before a trim offset becomes a warning. */
     const val TRIM_SUSTAIN_SEC: Double = 45.0
+
+    /**
+     * Fresh trim readings in a row, every one of them out of range, before the time above
+     * counts. Without it one snapshot carried forward through a slow poll is the whole streak.
+     */
+    const val TRIM_MIN_READINGS: Int = 3
 
     /** Coolant temperature (°F) at which the R18Z1 is considered warmed up. */
     const val WARM_COOLANT_F: Int = 175
@@ -81,9 +90,13 @@ sealed interface EngineIssue {
 }
 
 class EngineHealthMonitor {
+    private var lastTrimSampleAt: Long? = null
+    private var leanReadings: Int = 0
+    private var richReadings: Int = 0
     private var leanSustainSec: Double = 0.0
     private var richSustainSec: Double = 0.0
     private var lastReportedTrimPct: Int = 0
+    private var trimIssue: EngineIssue? = null
 
     private var roadDriveSec: Double = 0.0
     private var reachedOperatingTemp: Boolean = false
@@ -107,6 +120,7 @@ class EngineHealthMonitor {
         stft: Double,
         ltft: Double,
         fuelSystemStatus: Int?,
+        trimSampledAtMillis: Long?,
         outsideAirC: Double?,
         dtSec: Double,
     ): EngineIssue? {
@@ -134,28 +148,49 @@ class EngineHealthMonitor {
             overcooledSec = 0.0
         }
 
-        // 2. Sustained closed-loop fuel trim tracking
-        val warmEnoughForTrim = coolantF >= 158
-        val closedLoop = fuelSystemStatus == null || isClosedLoop(fuelSystemStatus)
-        val totalTrim = stft + ltft
-        if (warmEnoughForTrim && closedLoop) {
-            val isLean = ltft >= EngineHealthRules.LTFT_WARN_PERCENT ||
-                totalTrim >= EngineHealthRules.TOTAL_TRIM_WARN_PERCENT
-            val isRich = ltft <= -EngineHealthRules.LTFT_WARN_PERCENT ||
-                totalTrim <= -EngineHealthRules.TOTAL_TRIM_WARN_PERCENT
+        // 2. Sustained closed-loop fuel trim tracking. Only a fresh reading is evidence; the
+        // ticks between readings add time to a streak but never start or extend one.
+        if (trimSampledAtMillis != null && trimSampledAtMillis != lastTrimSampleAt) {
+            lastTrimSampleAt = trimSampledAtMillis
+            val warmEnoughForTrim = coolantF >= 158
+            val closedLoop = fuelSystemStatus == null || isClosedLoop(fuelSystemStatus)
+            val totalTrim = stft + ltft
+            val judged = warmEnoughForTrim && closedLoop
+            val isLean = judged && (ltft >= EngineHealthRules.LTFT_WARN_PERCENT ||
+                totalTrim >= EngineHealthRules.TOTAL_TRIM_WARN_PERCENT)
+            val isRich = judged && (ltft <= -EngineHealthRules.LTFT_WARN_PERCENT ||
+                totalTrim <= -EngineHealthRules.TOTAL_TRIM_WARN_PERCENT)
 
-            if (isLean) {
-                leanSustainSec += dtSec
+            if (!isLean) {
+                leanReadings = 0
+                leanSustainSec = 0.0
+            }
+            if (!isRich) {
+                richReadings = 0
                 richSustainSec = 0.0
+            }
+            if (isLean) {
+                leanReadings++
                 lastReportedTrimPct = max(ltft, totalTrim).roundToInt()
             } else if (isRich) {
-                richSustainSec += dtSec
-                leanSustainSec = 0.0
+                richReadings++
                 lastReportedTrimPct = min(ltft, totalTrim).roundToInt()
-            } else if (abs(ltft) < 8.0 && abs(totalTrim) < 10.0) {
-                leanSustainSec = max(0.0, leanSustainSec - dtSec * 0.5)
-                richSustainSec = max(0.0, richSustainSec - dtSec * 0.5)
+            } else if (judged && abs(ltft) < 8.0 && abs(totalTrim) < 10.0) {
+                // Hysteresis: a raised warning stays up until a reading is plainly normal.
+                trimIssue = null
             }
+        }
+        if (leanReadings > 0) leanSustainSec += dtSec
+        if (richReadings > 0) richSustainSec += dtSec
+
+        if (leanReadings >= EngineHealthRules.TRIM_MIN_READINGS &&
+            leanSustainSec >= EngineHealthRules.TRIM_SUSTAIN_SEC
+        ) {
+            trimIssue = EngineIssue.LeanFuelTrim(lastReportedTrimPct)
+        } else if (richReadings >= EngineHealthRules.TRIM_MIN_READINGS &&
+            richSustainSec >= EngineHealthRules.TRIM_SUSTAIN_SEC
+        ) {
+            trimIssue = EngineIssue.RichFuelTrim(lastReportedTrimPct)
         }
 
         // 3. Warm idle stability tracking
@@ -195,11 +230,7 @@ class EngineHealthMonitor {
         }
 
         activeIssue = when {
-            leanSustainSec >= EngineHealthRules.TRIM_SUSTAIN_SEC ->
-                EngineIssue.LeanFuelTrim(lastReportedTrimPct)
-
-            richSustainSec >= EngineHealthRules.TRIM_SUSTAIN_SEC ->
-                EngineIssue.RichFuelTrim(lastReportedTrimPct)
+            trimIssue != null -> trimIssue
 
             overcooledSec >= EngineHealthRules.OVERCOOL_SUSTAIN_SEC ||
                 (!reachedOperatingTemp &&
@@ -218,9 +249,13 @@ class EngineHealthMonitor {
     }
 
     fun resetForDrive() {
+        lastTrimSampleAt = null
+        leanReadings = 0
+        richReadings = 0
         leanSustainSec = 0.0
         richSustainSec = 0.0
         lastReportedTrimPct = 0
+        trimIssue = null
         roadDriveSec = 0.0
         reachedOperatingTemp = false
         overcooledSec = 0.0
