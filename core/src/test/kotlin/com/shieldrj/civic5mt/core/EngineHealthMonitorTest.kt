@@ -10,45 +10,61 @@ import kotlin.test.assertTrue
 
 class EngineHealthMonitorTest {
 
+    /** One warm cruising tick, with the trim reading stamped [trimAt] (null: never read). */
+    private fun EngineHealthMonitor.cruise(stft: Double, ltft: Double, trimAt: Long?) = observe(
+        rpm = 2000.0,
+        speedKmh = 70.0,
+        coolantF = 186,
+        throttlePos = 22.0,
+        stft = stft,
+        ltft = ltft,
+        fuelSystemStatus = 0x02,
+        trimSampledAtMillis = trimAt,
+        outsideAirC = 20.0,
+        dtSec = 1.0,
+    )
+
     @Test
     @DisplayName("ignores brief fuel-trim transients, flags sustained positive trim drift")
     fun sustainedLeanFuelTrim() {
         val monitor = EngineHealthMonitor()
 
-        // 10 seconds of +14% total trim is only a transient, not a sustained fault
-        repeat(10) {
-            monitor.observe(
-                rpm = 2000.0,
-                speedKmh = 70.0,
-                coolantF = 186,
-                throttlePos = 22.0,
-                stft = 2.0,
-                ltft = 12.0,
-                fuelSystemStatus = 0x02,
-                outsideAirC = 20.0,
-                dtSec = 1.0,
-            )
-        }
+        // A fresh +14% reading every fifteen seconds, as the slow rotation delivers them.
+        // Thirty seconds and three readings in, that is still not forty-five seconds.
+        for (sec in 0 until 31) monitor.cruise(stft = 2.0, ltft = 12.0, trimAt = sec / 15 * 15_000L)
         assertNull(monitor.activeIssue)
 
-        // Sustained across 45 seconds triggers LeanFuelTrim
-        repeat(40) {
-            monitor.observe(
-                rpm = 2000.0,
-                speedKmh = 70.0,
-                coolantF = 186,
-                throttlePos = 22.0,
-                stft = 2.0,
-                ltft = 12.0,
-                fuelSystemStatus = 0x02,
-                outsideAirC = 20.0,
-                dtSec = 1.0,
-            )
-        }
+        for (sec in 31 until 50) monitor.cruise(stft = 2.0, ltft = 12.0, trimAt = sec / 15 * 15_000L)
         val issue = assertIs<EngineIssue.LeanFuelTrim>(monitor.activeIssue)
         val status = assertNotNull(engineIssueHealthStatus(issue))
         assertEquals(HealthLevel.ADVISORY, status.level)
         assertTrue(status.summary.startsWith("LEAN FUEL MIXTURE"))
+    }
+
+    @Test
+    @DisplayName("one trim reading carried forward through a slow poll is one reading, not 45 seconds")
+    fun carriedForwardTrimSnapshotIsNotSustained() {
+        val monitor = EngineHealthMonitor()
+
+        // 2026-10-26: one +16% total-trim snapshot on a tip-in, then nothing new for the
+        // forty-two cycles until the trims came round again. Counting ticks made that a warning.
+        repeat(60) { monitor.cruise(stft = 8.0, ltft = 8.0, trimAt = 1_000L) }
+        assertNull(monitor.activeIssue)
+    }
+
+    @Test
+    @DisplayName("lean readings broken up by in-between ones never add up across a drive")
+    fun intermittentLeanReadingsDoNotAccumulate() {
+        val monitor = EngineHealthMonitor()
+
+        // Ten minutes of readings that alternate between +16% and +12% total trim. The old
+        // counter held through the +12% ones and banked every +16% stretch until it fired.
+        for (sec in 0 until 600) {
+            val reading = sec / 15
+            val stft = if (reading % 2 == 0) 8.0 else 4.0
+            monitor.cruise(stft = stft, ltft = 8.0, trimAt = reading * 15_000L)
+        }
+        assertNull(monitor.activeIssue)
     }
 
     @Test
@@ -66,6 +82,7 @@ class EngineHealthMonitorTest {
                 stft = 0.0,
                 ltft = 0.0,
                 fuelSystemStatus = 0x02,
+                trimSampledAtMillis = null,
                 outsideAirC = 15.0,
                 dtSec = 1.0,
             )
@@ -94,6 +111,7 @@ class EngineHealthMonitorTest {
                 stft = 0.0,
                 ltft = 0.0,
                 fuelSystemStatus = 0x02,
+                trimSampledAtMillis = null,
                 outsideAirC = 20.0,
                 dtSec = 1.0,
             )

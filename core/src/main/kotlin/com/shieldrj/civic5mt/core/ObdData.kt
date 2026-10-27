@@ -84,6 +84,16 @@ data class RawObdData(
      * lifetime fuel total.
      */
     val motionSampledAtMillis: Long? = null,
+
+    /**
+     * When 0106 or 0107 last actually parsed. Null means never.
+     *
+     * The trims ride the slow rotation, one reading every forty-two cycles, and carry forward
+     * in between like everything else here. Short-term trim swings several percent a second,
+     * so the value sitting in [stft] between readings is one snapshot, not a level the engine
+     * held. [EngineHealthMonitor] reads this to count readings rather than ticks.
+     */
+    val fuelTrimSampledAtMillis: Long? = null,
 )
 
 /**

@@ -190,6 +190,7 @@ class CivicSimulatorEngine(private val clock: MillisClock = SystemMillisClock) {
             // this the freshness guard refuses every sample and a simulated drive silently
             // reports zero miles.
             motionSampledAtMillis = clock.nowMillis(),
+            fuelTrimSampledAtMillis = clock.nowMillis(),
         )
     }
 

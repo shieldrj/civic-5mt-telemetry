@@ -272,6 +272,7 @@ class TelemetryManager(
             stft = raw.stft,
             ltft = raw.ltft,
             fuelSystemStatus = raw.fuelSystemStatus,
+            trimSampledAtMillis = raw.fuelTrimSampledAtMillis,
             outsideAirC = raw.ambientC,
             dtSec = integrationDtSec,
         )
