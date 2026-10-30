@@ -185,6 +185,8 @@ class TelemetryManager(
                 distanceFactor = fuelCalibration.distanceFactor(),
             )
             collectFill()
+        } else {
+            tank.breakContiguity()
         }
         val tankState = tank.get()
 

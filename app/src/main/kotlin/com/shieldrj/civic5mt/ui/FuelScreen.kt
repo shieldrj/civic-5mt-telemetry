@@ -276,14 +276,11 @@ private fun ReceiptsSection(
                     )
                     Spacer(Modifier.height(6.dp))
 
-                    val fuelFactor = calibration.fuelCorrectionFactor
-                    val distFactor = calibration.distanceCorrectionFactor
-
                     calibration.fills.takeLast(5).asReversed().forEachIndexed { idx, fill ->
                         if (idx > 0) {
                             Box(Modifier.fillMaxWidth().height(1.dp).background(CivicColors.Hairline))
                         }
-                        FillHistoryItem(fill, fuelFactor, distFactor)
+                        FillHistoryItem(fill, calibration.tankSpanSummary(fill))
                     }
                 }
             }
@@ -307,7 +304,7 @@ private fun ReceiptsSection(
 }
 
 @Composable
-private fun FillHistoryItem(fill: FillRecord, fuelFactor: Double, distFactor: Double) {
+private fun FillHistoryItem(fill: FillRecord, spanSummary: Pair<Double, Double>?) {
     val levelJump = if (fill.levelBefore != null && fill.levelAfter != null) {
         "%.0f%% → %.0f%%".format(fill.levelBefore, fill.levelAfter)
     } else {
@@ -439,7 +436,7 @@ private fun TankAndRangeCard(
                 Spacer(Modifier.height(2.dp))
                 Text(
                     text = when {
-                        displayMiles != null -> "%.0f mi since fill".format(displayMiles)
+                        displayMiles != null -> "%.1f mi since fill".format(displayMiles)
                         senderPercent == null -> "no tank level"
                         else -> "calibrating…"
                     },

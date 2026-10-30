@@ -408,6 +408,37 @@ data class FuelCalibrationState(
         return last
     }
 
+    /**
+     * Miles and economy for the tank that [fill] closed, or null when the span is too short.
+     *
+     * Uses the odometer span and pump receipt when [fill] and the fill before it form a
+     * complete full-to-full odometer pair, so the row agrees with the receipt beside it and
+     * with [verifiedMpg]; falls back to the watched span with the learned corrections applied.
+     */
+    fun tankSpanSummary(fill: FillRecord): Pair<Double, Double>? {
+        val idx = fills.indexOf(fill)
+        val prev = if (idx > 0) fills[idx - 1] else null
+        val pump = fill.pumpGallons
+        val prevOdo = prev?.odometerAtFill
+        val curOdo = fill.odometerAtFill
+        if (prev != null && pump != null && prevOdo != null && curOdo != null) {
+            val odoMiles = curOdo - prevOdo
+            if (wasFull(prev) && wasFull(fill) &&
+                pump >= FuelCalibrationRules.MIN_PUMP_GALLONS &&
+                odoMiles >= FuelCalibrationRules.MIN_SPAN_MILES &&
+                odoMiles / pump in FuelCalibrationRules.MIN_PLAUSIBLE_MPG..FuelCalibrationRules.MAX_PLAUSIBLE_MPG
+            ) {
+                return odoMiles to (odoMiles / pump)
+            }
+        }
+        if (fill.spanRawMiles >= 10.0 && fill.spanRawGallons > 0.1) {
+            val miles = fill.spanRawMiles * distanceCorrectionFactor
+            val gallons = fill.spanRawGallons * fuelCorrectionFactor
+            return miles to (miles / gallons)
+        }
+        return null
+    }
+
     companion object {
         private fun median(values: List<Double>): Double? {
             if (values.isEmpty()) return null
@@ -419,17 +450,19 @@ data class FuelCalibrationState(
 }
 
 /**
- * Repairs stored fill spans whose watched gauge drop went negative under the old
- * stationary-slosh pause.
+ * Repairs stored fill spans whose watched gauge drop drifted outside the tank's physical
+ * start-to-end drop.
  *
  * When a stop after a hill paused measurement for sixty seconds, the upward slosh was counted
  * and the downward settle was not, leaving [FillRecord.spanObservedDropPercent] at -198% on a
- * tank whose start and end levels and watched fuel share were all recorded cleanly.
+ * tank whose start and end levels and watched fuel share were all recorded cleanly. Conversely,
+ * post-settle downward drift across many short drives can push the accumulated drop above the
+ * whole tank's start-to-end drop (e.g. 92.8% on a tank that dropped from 93.3% to 13.1%),
+ * inflating [FuelCalibrationState.fuelCorrectionFactor].
  */
 fun FuelCalibrationState.withUsableSpans(): FuelCalibrationState {
-    if (fills.none { it.spanObservedDropPercent < 0.0 }) return this
+    var changed = false
     val healed = fills.mapIndexed { index, fill ->
-        if (fill.spanObservedDropPercent >= 0.0) return@mapIndexed fill
         val startLevel = fills.getOrNull(index - 1)?.levelAfter ?: fill.levelAfter
         val endLevel = fill.levelBefore
         val totalDrop = if (startLevel != null && endLevel != null) {
@@ -437,14 +470,18 @@ fun FuelCalibrationState.withUsableSpans(): FuelCalibrationState {
         } else {
             0.0
         }
+        val outOfBounds = fill.spanObservedDropPercent < 0.0 ||
+            (totalDrop > 0.0 && fill.spanObservedDropPercent > totalDrop)
+        if (!outOfBounds) return@mapIndexed fill
         val watchedShare = if (fill.spanRawGallons > 0.0) {
             (fill.spanObservedRawGallons / fill.spanRawGallons).coerceIn(0.0, 1.0)
         } else {
             0.0
         }
+        changed = true
         fill.copy(spanObservedDropPercent = totalDrop * watchedShare)
     }
-    return copy(fills = healed)
+    return if (changed) copy(fills = healed) else this
 }
 
 /** Where the fill history is kept between runs. */
@@ -576,7 +613,7 @@ class FuelCalibrationEngine(
     }
 
     private fun commit(next: FuelCalibrationState) {
-        state = next
+        state = next.withUsableSpans()
         store.save(state)
     }
 }

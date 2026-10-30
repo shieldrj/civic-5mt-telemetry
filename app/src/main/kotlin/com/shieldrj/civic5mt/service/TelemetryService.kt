@@ -1335,7 +1335,7 @@ class TelemetryService : Service() {
         private const val MOVING_SPEED_MPH = 3.0
 
         /** At or above this, the engine is running. Idle on the R18Z1 sits around 700. */
-        private const val ENGINE_RUNNING_RPM = 250.0
+        private const val ENGINE_RUNNING_RPM = CivicSpecs.ENGINE_RUNNING_RPM
 
         /** RPM at zero this long, while stationary, is an ignition-off rather than a misread. */
         private const val ENGINE_OFF_CONFIRM_MS = 5_000L

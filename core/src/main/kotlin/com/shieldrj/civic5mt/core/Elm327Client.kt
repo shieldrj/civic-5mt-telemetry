@@ -216,7 +216,9 @@ class Elm327Client(
             return ""
         }
 
-        lastReplyAt = clock.nowMillis()
+        if (!isBusSilence(response)) {
+            lastReplyAt = clock.nowMillis()
+        }
 
         // Polling runs several commands a second, so logging all of it would bury the
         // handshake within seconds. Each PID is recorded once, the first time it is asked:
@@ -261,6 +263,22 @@ class Elm327Client(
     private fun log(cmd: String, resp: String) {
         val entry = ProtocolLogEntry(clock.nowMillis(), cmd, resp.ifEmpty { "(no reply)" })
         _log.value = (_log.value + entry).takeLast(60)
+    }
+
+    /**
+     * True when the adapter answered from its own firmware to say the CAN bus did not answer.
+     *
+     * When the ignition is switched off, the OBDLink MX+ stays powered on the 12V port for
+     * several minutes and answers every PID request with `NO DATA` instead of timing out.
+     * Counting `NO DATA` as a reply kept [lastReplyAt] fresh indefinitely while the car was
+     * off at a fuel pump or parked, preventing [wentSilent] from ending the drive.
+     */
+    private fun isBusSilence(response: String): Boolean {
+        val upper = response.uppercase()
+        return upper.contains("NO DATA") ||
+            upper.contains("CAN ERROR") ||
+            upper.contains("UNABLE TO CONNECT") ||
+            upper.contains("BUS INIT")
     }
 
     // ── Connect & handshake ──────────────────────────────────────────────────────

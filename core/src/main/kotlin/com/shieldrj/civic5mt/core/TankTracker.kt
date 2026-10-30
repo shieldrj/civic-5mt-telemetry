@@ -586,6 +586,15 @@ class TankTracker(
     fun get(): TankState = state
 
     /**
+     * Breaks the raw-level pair across ticks where tank integration was skipped (e.g. stale
+     * motion readings or engine stopped), so the next active tick starts a fresh pair rather
+     * than bridging across the gap.
+     */
+    fun breakContiguity() {
+        lastRawLevel = null
+    }
+
+    /**
      * One step of real driving.
      *
      * @param levelPercent the sender reading, or null on a car that does not report one
