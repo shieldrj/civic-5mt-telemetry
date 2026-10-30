@@ -391,7 +391,7 @@ class ProtocolTest {
             var ecuAwake = true
             t.autoRespond = { _ ->
                 clock.advanceMillis(60)
-                if (ecuAwake) "41 0C 1A F8>" else "NO DATA>"
+                if (ecuAwake) "41 0C 1A F8\r>" else "NO DATA\r>"
             }
             val client = Elm327Client(t, clock)
 

@@ -310,12 +310,8 @@ private fun FillHistoryItem(fill: FillRecord, spanSummary: Pair<Double, Double>?
     } else {
         null
     }
-    val tankSpan = if (fill.spanRawMiles >= 10.0 && fill.spanRawGallons > 0.1) {
-        val miles = fill.spanRawMiles * distFactor
-        val gallons = fill.spanRawGallons * fuelFactor
-        "%.0f mi · %.1f mpg".format(miles, miles / gallons)
-    } else {
-        null
+    val tankSpan = spanSummary?.let { (miles, mpg) ->
+        "%.0f mi · %.1f mpg".format(miles, mpg)
     }
 
     Column(
