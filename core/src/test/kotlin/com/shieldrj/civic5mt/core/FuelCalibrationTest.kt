@@ -372,6 +372,72 @@ class FuelCalibrationTest {
             assertEquals(1.0637, e.get().fuelCorrectionFactor, 0.005)
             assertNotNull(e.get().watchedMpg, "and unlocks watched economy")
         }
+
+        @Test
+        fun `a fill span whose watched drop drifted above the tank's total drop is bounded`() {
+            val store = InMemoryFuelCalibrationStore(
+                FuelCalibrationState(
+                    fills = listOf(
+                        FillRecord(
+                            detectedAtMillis = 1791503676538L,
+                            levelBefore = 9.711277486177668,
+                            levelAfter = 93.3,
+                            pumpGallons = 11.79,
+                            filledToShutoff = true,
+                            spanRawMiles = 48.109822970094806,
+                            spanRawGallons = 1.3987886531478313,
+                            spanObservedDropPercent = 9.5,
+                            spanObservedRawGallons = 1.2279207452081063,
+                        ),
+                        FillRecord(
+                            detectedAtMillis = 1792106070170L,
+                            levelBefore = 15.40851943533939,
+                            levelAfter = 93.3,
+                            pumpGallons = 10.83,
+                            filledToShutoff = true,
+                            spanRawMiles = 373.41677996401195,
+                            spanRawGallons = 10.254911748871819,
+                            spanObservedDropPercent = 74.7698486365322,
+                            spanObservedRawGallons = 9.843918681911583,
+                        ),
+                        FillRecord(
+                            detectedAtMillis = 1792710906247L,
+                            levelBefore = 32.51703363869855,
+                            levelAfter = 93.3,
+                            pumpGallons = 8.4,
+                            filledToShutoff = true,
+                            odometerAtFill = 196407.0,
+                            spanRawMiles = 290.1636463504843,
+                            spanRawGallons = 8.075774657267617,
+                            spanObservedDropPercent = 55.59999999999994,
+                            spanObservedRawGallons = 8.027310599581739,
+                        ),
+                        FillRecord(
+                            detectedAtMillis = 1793318062490L,
+                            levelBefore = 13.129790944626669,
+                            levelAfter = 93.24450055794158,
+                            pumpGallons = 11.228,
+                            filledToShutoff = true,
+                            odometerAtFill = 196810.0,
+                            spanRawMiles = 396.03394534987633,
+                            spanRawGallons = 10.735011924258165,
+                            spanObservedDropPercent = 92.80000000000024,
+                            spanObservedRawGallons = 10.594015326311732,
+                        ),
+                    ),
+                ),
+            )
+
+            val e = FuelCalibrationEngine(store = store, clock = MutableClock(t0))
+            val state = e.get()
+            val fill4 = state.fills.last()
+
+            assertTrue(fill4.spanObservedDropPercent < 80.2, "got ${fill4.spanObservedDropPercent}")
+            assertEquals(1.0316, state.fuelCorrectionFactor, 0.005)
+            val summary = assertNotNull(state.tankSpanSummary(fill4))
+            assertEquals(403.0, summary.first, 1e-6)
+            assertEquals(403.0 / 11.228, summary.second, 1e-6)
+        }
     }
 
     @Nested

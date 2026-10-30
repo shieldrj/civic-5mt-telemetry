@@ -385,6 +385,29 @@ class ProtocolTest {
         }
 
         @Test
+        fun `Polling gives up when the adapter answers NO DATA to every PID after ignition off`() = runTest {
+            val clock = MutableClock(1_700_000_000_000)
+            val t = FakeObdTransport()
+            var ecuAwake = true
+            t.autoRespond = { _ ->
+                clock.advanceMillis(60)
+                if (ecuAwake) "41 0C 1A F8>" else "NO DATA>"
+            }
+            val client = Elm327Client(t, clock)
+
+            val job = launch { client.runPollLoop(budgetMs = 1) }
+            advanceTimeBy(200)
+            assertTrue(client.isPolling)
+
+            ecuAwake = false
+            advanceTimeBy(120_000)
+            job.cancelAndJoin()
+
+            assertFalse(client.isPolling, "NO DATA from every PID is a sleeping ECU")
+            assertTrue(client.wentSilent)
+        }
+
+        @Test
         fun `An occasional timed-out PID is not a silent adapter`() = runTest {
             // A car that answers eleven of twelve requests is a car that is talking. Ending
             // the drive over one dropped reply would end it in a tunnel, at a red light, and
