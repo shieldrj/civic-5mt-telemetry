@@ -179,7 +179,7 @@ fun HudContent() {
                     style = MapsTokens.Numeric.copy(lineHeight = 20.sp),
                 )
                 Text(
-                    text = if (ringState != HudRingState.PLENTY && miles != null) "? mi" else "mi",
+                    text = if (ringState != HudRingState.PLENTY && miles != null) "⛽ mi" else "mi",
                     color = if (ringState != HudRingState.PLENTY && miles != null) ringColor else tokens.OnSurfaceVariant,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Medium,
