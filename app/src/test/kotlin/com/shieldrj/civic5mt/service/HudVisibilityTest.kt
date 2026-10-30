@@ -92,4 +92,43 @@ class HudVisibilityTest {
         val configChange = UsageEvents.Event.CONFIGURATION_CHANGE
         assertEquals(maps, foldForeground(maps, listOf(configChange to "android")))
     }
+
+    @Test
+    @DisplayName("turns ring amber at 150 mi in the afternoon so you stop 8 mi from work before the next day's 70-mile round trip")
+    fun afternoonCostcoRing() {
+        assertEquals(
+            HudRingState.PLENTY,
+            hudRingState(rangeMiles = 160, percentRemaining = 35.0, belowSenderZero = false, hourOfDay = 16),
+        )
+        assertEquals(
+            HudRingState.STOP_AT_COSTCO,
+            hudRingState(rangeMiles = 140, percentRemaining = 30.0, belowSenderZero = false, hourOfDay = 16),
+        )
+    }
+
+    @Test
+    @DisplayName("stays blue on a 140 mi morning commute when afternoon Costco is only 48 miles away")
+    fun morningVsAfternoonThreshold() {
+        assertEquals(
+            HudRingState.PLENTY,
+            hudRingState(rangeMiles = 140, percentRemaining = 30.0, belowSenderZero = false, hourOfDay = 7),
+        )
+        assertEquals(
+            HudRingState.STOP_AT_COSTCO,
+            hudRingState(rangeMiles = 120, percentRemaining = 26.0, belowSenderZero = false, hourOfDay = 7),
+        )
+    }
+
+    @Test
+    @DisplayName("turns ring red below 90 miles or below sender zero")
+    fun urgentCostcoRing() {
+        assertEquals(
+            HudRingState.URGENT,
+            hudRingState(rangeMiles = 85, percentRemaining = 20.0, belowSenderZero = false, hourOfDay = 7),
+        )
+        assertEquals(
+            HudRingState.URGENT,
+            hudRingState(rangeMiles = 130, percentRemaining = 10.0, belowSenderZero = true, hourOfDay = 16),
+        )
+    }
 }

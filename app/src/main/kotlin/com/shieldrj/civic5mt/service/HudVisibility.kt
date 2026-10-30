@@ -11,6 +11,50 @@ import com.shieldrj.civic5mt.core.ConnectionStatus
 internal const val GOOGLE_MAPS_PACKAGE = "com.google.android.apps.maps"
 
 /**
+ * How the Google Maps HUD ring colours itself for the San Dimas Costco commute.
+ *
+ * The range number inside the bubble includes the ~65-mile reserve below the dashboard's zero.
+ * Nobody wants to drive a 31-mile freeway leg staring at `0 miles` on the dash, so the
+ * thresholds keep the entire reserve plus a ~15-mile dashboard cushion intact at arrival:
+ *
+ * - **Afternoon (12:00?19:59, leaving work, 8 mi from Costco):** skipping Costco now costs
+ *   70 miles before reaching Costco tomorrow morning (39 mi home + 31 mi back to Costco).
+ *   Below [PM_COSTCO_STOP_MILES] (150 mi total / ~85 mi on the dash), the ring turns amber so
+ *   you stop on the 8-mile hop from work rather than driving home and back on low fuel.
+ * - **Morning / other hours (leaving home, 31 mi from Costco):** skipping Costco this morning
+ *   costs 48 miles before reaching Costco after work (39.5 mi to work + 8 mi to Costco).
+ *   Below [AM_COSTCO_STOP_MILES] (125 mi total / ~60 mi on the dash), the ring turns amber so
+ *   you stop on the way into work.
+ * - **Urgent ([URGENT_STOP_MILES] = 90 mi total / ~25 mi on the dash, or below sender zero):**
+ *   the ring turns red once one commute leg from the reserve remains.
+ */
+internal enum class HudRingState {
+    PLENTY,
+    STOP_AT_COSTCO,
+    URGENT,
+}
+
+internal const val PM_COSTCO_STOP_MILES = 150
+internal const val AM_COSTCO_STOP_MILES = 125
+internal const val URGENT_STOP_MILES = 90
+internal const val LOW_TANK_PERCENT = 25.0
+
+internal fun hudRingState(
+    rangeMiles: Int?,
+    percentRemaining: Double?,
+    belowSenderZero: Boolean,
+    hourOfDay: Int,
+): HudRingState {
+    if (belowSenderZero) return HudRingState.URGENT
+    if (rangeMiles != null && rangeMiles < URGENT_STOP_MILES) return HudRingState.URGENT
+    val isAfternoonCommute = hourOfDay in 12..19
+    val costcoThreshold = if (isAfternoonCommute) PM_COSTCO_STOP_MILES else AM_COSTCO_STOP_MILES
+    if (rangeMiles != null && rangeMiles < costcoThreshold) return HudRingState.STOP_AT_COSTCO
+    if (percentRemaining != null && percentRemaining < LOW_TANK_PERCENT) return HudRingState.STOP_AT_COSTCO
+    return HudRingState.PLENTY
+}
+
+/**
  * Whether the heads-up display should be on screen.
  *
  * Kept apart from the service so every combination can be tested on the JVM. The first three
