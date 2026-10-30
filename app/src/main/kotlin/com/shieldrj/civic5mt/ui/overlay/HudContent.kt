@@ -26,8 +26,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.shieldrj.civic5mt.service.HudRingState
 import com.shieldrj.civic5mt.service.HudTheme
 import com.shieldrj.civic5mt.service.TelemetryState
+import com.shieldrj.civic5mt.service.hudRingState
+import java.util.Calendar
 
 /**
  * Google Maps' own surface palettes, scoped to the overlay and deliberately not merged into
@@ -117,10 +120,17 @@ fun HudContent() {
     val miles = metrics.fuelRangeMiles
     val percent = metrics.fuelPercentRemaining
     val onE = metrics.tankBelowSenderZero
-    val ringColor = when {
-        onE -> tokens.RingEmpty
-        percent != null && percent < LOW_PERCENT -> tokens.RingLow
-        else -> tokens.Ring
+    val hourOfDay = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+    val ringState = hudRingState(
+        rangeMiles = miles,
+        percentRemaining = percent,
+        belowSenderZero = onE,
+        hourOfDay = hourOfDay,
+    )
+    val ringColor = when (ringState) {
+        HudRingState.URGENT -> tokens.RingEmpty
+        HudRingState.STOP_AT_COSTCO -> tokens.RingLow
+        HudRingState.PLENTY -> tokens.Ring
     }
 
     // The outer padding exists because the overlay window sizes itself to this content:
@@ -169,8 +179,8 @@ fun HudContent() {
                     style = MapsTokens.Numeric.copy(lineHeight = 20.sp),
                 )
                 Text(
-                    text = "mi",
-                    color = tokens.OnSurfaceVariant,
+                    text = if (ringState != HudRingState.PLENTY && miles != null) "? mi" else "mi",
+                    color = if (ringState != HudRingState.PLENTY && miles != null) ringColor else tokens.OnSurfaceVariant,
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Medium,
                     style = TextStyle(lineHeight = 10.sp),
