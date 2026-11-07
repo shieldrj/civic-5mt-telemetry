@@ -125,8 +125,22 @@ fun DriveScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                     ) {
-                        // No temperature readouts: Robert asked for none on 2026-11-06. An
-                        // overheat still reaches him through the dash light and health banner.
+                        // Coolant stays; the outside-air stat was removed at Robert's request
+                        // on 2026-11-06. He wants the coolant reading kept.
+                        val coolantColor = when {
+                            metrics.coolantTempF >= 225 -> CivicColors.Accent
+                            metrics.coolantTempF >= 212 -> CivicColors.Warn
+                            metrics.coolantTempF < 160 && metrics.coolantTempF > 32 -> CivicColors.Cold
+                            metrics.coolantTempF >= 160 -> CivicColors.Good
+                            else -> CivicColors.Ink
+                        }
+                        Stat(
+                            label = "Coolant",
+                            value = if (metrics.coolantTempF > 0) "${metrics.coolantTempF}" else "—",
+                            unit = if (metrics.coolantTempF > 0) "°F" else "",
+                            color = coolantColor,
+                        )
+
                         val volts = metrics.batteryVoltage
                         val voltageColor = when {
                             volts == null -> CivicColors.Ink
@@ -246,7 +260,21 @@ fun DriveScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                 ) {
-                    // No temperature readouts here either; see the landscape row above.
+                    // Coolant stays, outside air does not; see the landscape row above.
+                    val coolantColor = when {
+                        metrics.coolantTempF >= 225 -> CivicColors.Accent
+                        metrics.coolantTempF >= 212 -> CivicColors.Warn
+                        metrics.coolantTempF < 160 && metrics.coolantTempF > 32 -> CivicColors.Cold
+                        metrics.coolantTempF >= 160 -> CivicColors.Good
+                        else -> CivicColors.Ink
+                    }
+                    Stat(
+                        label = "Coolant",
+                        value = if (metrics.coolantTempF > 0) "${metrics.coolantTempF}" else "—",
+                        unit = if (metrics.coolantTempF > 0) "°F" else "",
+                        color = coolantColor,
+                    )
+
                     val volts = metrics.batteryVoltage
                     val voltageColor = when {
                         volts == null -> CivicColors.Ink
