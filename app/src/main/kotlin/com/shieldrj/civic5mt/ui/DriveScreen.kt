@@ -125,20 +125,8 @@ fun DriveScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                     ) {
-                        val coolantColor = when {
-                            metrics.coolantTempF >= 225 -> CivicColors.Accent
-                            metrics.coolantTempF >= 212 -> CivicColors.Warn
-                            metrics.coolantTempF < 160 && metrics.coolantTempF > 32 -> CivicColors.Cold
-                            metrics.coolantTempF >= 160 -> CivicColors.Good
-                            else -> CivicColors.Ink
-                        }
-                        Stat(
-                            label = "Coolant",
-                            value = if (metrics.coolantTempF > 0) "${metrics.coolantTempF}" else "—",
-                            unit = if (metrics.coolantTempF > 0) "°F" else "",
-                            color = coolantColor,
-                        )
-
+                        // No temperature readouts: Robert asked for none on 2026-11-06. An
+                        // overheat still reaches him through the dash light and health banner.
                         val volts = metrics.batteryVoltage
                         val voltageColor = when {
                             volts == null -> CivicColors.Ink
@@ -162,13 +150,6 @@ fun DriveScreen(
                             label = "Speed",
                             value = if (metrics.speedMph >= 0) "%.0f".format(metrics.speedMph) else "—",
                             unit = "MPH",
-                            color = CivicColors.Ink,
-                        )
-
-                        Stat(
-                            label = "Outside",
-                            value = metrics.outsideAirTempF?.toString() ?: "—",
-                            unit = if (metrics.outsideAirTempF != null) "°F" else "",
                             color = CivicColors.Ink,
                         )
                     }
@@ -265,27 +246,7 @@ fun DriveScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                 ) {
-                    val coolantColor = when {
-                        metrics.coolantTempF >= 225 -> CivicColors.Accent
-                        metrics.coolantTempF >= 212 -> CivicColors.Warn
-                        metrics.coolantTempF < 160 && metrics.coolantTempF > 32 -> CivicColors.Cold
-                        metrics.coolantTempF >= 160 -> CivicColors.Good
-                        else -> CivicColors.Ink
-                    }
-                    Stat(
-                        label = "Coolant",
-                        value = if (metrics.coolantTempF > 0) "${metrics.coolantTempF}" else "—",
-                        unit = if (metrics.coolantTempF > 0) "°F" else "",
-                        color = coolantColor,
-                    )
-
-                    Stat(
-                        label = "Outside",
-                        value = metrics.outsideAirTempF?.toString() ?: "—",
-                        unit = if (metrics.outsideAirTempF != null) "°F" else "",
-                        color = CivicColors.Ink,
-                    )
-
+                    // No temperature readouts here either; see the landscape row above.
                     val volts = metrics.batteryVoltage
                     val voltageColor = when {
                         volts == null -> CivicColors.Ink
