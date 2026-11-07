@@ -446,6 +446,8 @@ class ClutchHealthEngine(
         ambientTempC: Double?,
         speedMph: Double,
         dtSec: Double,
+        /** The speed miles are accumulated from: [speedMph] corrected to the odometer's scale. */
+        distanceSpeedMph: Double = speedMph,
     ): Pair<ClutchLiveStatus, ClutchProfile> {
         val stepDt = max(0.01, min(1.0, dtSec))
         val ambient = ambientTempC ?: 20.0
@@ -643,7 +645,7 @@ class ClutchHealthEngine(
             activeSlipGear = null
         }
 
-        val stepMiles = (speedMph / 3600.0) * stepDt
+        val stepMiles = (distanceSpeedMph / 3600.0) * stepDt
 
         profile = profile.copy(
             accumulatedFrictionEnergyJoules = profile.accumulatedFrictionEnergyJoules + effectiveWearEnergyJoules,

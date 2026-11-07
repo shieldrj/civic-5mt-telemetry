@@ -29,9 +29,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.shieldrj.civic5mt.core.FuelCalibrationState
 import com.shieldrj.civic5mt.data.TripCsv
 import com.shieldrj.civic5mt.data.TripDatabase
 import com.shieldrj.civic5mt.data.TripEntity
+import com.shieldrj.civic5mt.service.TelemetryState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -57,6 +59,7 @@ fun TripsScreen(modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
     val dao = remember { TripDatabase.get(context).tripDao() }
     val trips by dao.observeRecentTrips().collectAsStateWithLifecycle(emptyList())
+    val calibration by TelemetryState.calibration.collectAsStateWithLifecycle()
 
     var status by remember { mutableStateOf<String?>(null) }
 
@@ -120,15 +123,24 @@ fun TripsScreen(modifier: Modifier = Modifier) {
                 fontSize = 14.sp,
             )
         } else {
+            val groups = remember(trips, calibration) {
+                groupTripsByTank(trips, calibration)
+            }
+
             LazyColumn(modifier = Modifier.weight(1f)) {
-                items(trips, key = { it.id }) { trip ->
-                    TripRow(trip)
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(1.dp)
-                            .background(CivicColors.Hairline)
-                    )
+                groups.forEach { group ->
+                    item(key = "header_${group.title}_${group.dateSubtitle}") {
+                        TankGroupHeader(group)
+                    }
+                    items(group.trips, key = { it.id }) { trip ->
+                        TripRow(trip)
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .height(1.dp)
+                                .background(CivicColors.Hairline)
+                        )
+                    }
                 }
             }
         }
@@ -234,6 +246,140 @@ private fun TripRow(trip: TripEntity) {
         }
     }
 }
+
+private data class TankTripGroup(
+    val title: String,
+    val dateSubtitle: String,
+    val summaryStats: String,
+    val trips: List<TripEntity>,
+)
+
+private fun groupTripsByTank(
+    trips: List<TripEntity>,
+    calibration: FuelCalibrationState,
+): List<TankTripGroup> {
+    if (trips.isEmpty()) return emptyList()
+    val fills = calibration.fills
+    if (fills.isEmpty()) {
+        val totalMiles = trips.sumOf { it.distanceMiles }
+        return listOf(
+            TankTripGroup(
+                title = "All drives",
+                dateSubtitle = "",
+                summaryStats = "%.1f mi · %d drives".format(totalMiles, trips.size),
+                trips = trips,
+            )
+        )
+    }
+
+    val sortedFills = fills.sortedBy { it.detectedAtMillis }
+    val groups = mutableListOf<TankTripGroup>()
+
+    // 1) Current open tank: drives started at or after the latest fill
+    val latestFill = sortedFills.last()
+    val currentTrips = trips.filter { it.startedAt >= latestFill.detectedAtMillis }
+    if (currentTrips.isNotEmpty()) {
+        val miles = currentTrips.sumOf { it.distanceMiles }
+        groups.add(
+            TankTripGroup(
+                title = "Current tank",
+                dateSubtitle = "Since " + formatDate(latestFill.detectedAtMillis),
+                summaryStats = "%.1f mi · %d drives".format(miles, currentTrips.size),
+                trips = currentTrips,
+            )
+        )
+    }
+
+    // 2) Historical tanks: between consecutive fills (newest to oldest)
+    for (i in sortedFills.indices.reversed()) {
+        val fill = sortedFills[i]
+        val prevFill = if (i > 0) sortedFills[i - 1] else null
+        val tankTrips = trips.filter { trip ->
+            trip.startedAt < fill.detectedAtMillis &&
+                (prevFill == null || trip.startedAt >= prevFill.detectedAtMillis)
+        }
+        if (tankTrips.isEmpty()) continue
+
+        // Uses FuelCalibrationState.tankSpanSummary so the tank header agrees with the Fuel
+        // screen and never divides watched miles by a whole tank's pump receipt.
+        val spanSummary = calibration.tankSpanSummary(fill)
+        val totalMiles = spanSummary?.first ?: tankTrips.sumOf { it.distanceMiles }
+        val mpgPart = spanSummary?.second?.let { " · %.1f mpg".format(it) } ?: ""
+
+        val dateStr = if (prevFill != null) {
+            "${formatDate(prevFill.detectedAtMillis)} – ${formatDate(fill.detectedAtMillis)}"
+        } else {
+            "Filled " + formatDate(fill.detectedAtMillis)
+        }
+
+        groups.add(
+            TankTripGroup(
+                title = "Tank",
+                dateSubtitle = dateStr,
+                summaryStats = "%.1f mi%s · %d drives".format(totalMiles, mpgPart, tankTrips.size),
+                trips = tankTrips,
+            )
+        )
+    }
+
+    // 3) Drives recorded before the first fill
+    val firstFill = sortedFills.first()
+    val olderTrips = trips.filter { it.startedAt < firstFill.detectedAtMillis }
+    if (olderTrips.isNotEmpty()) {
+        val miles = olderTrips.sumOf { it.distanceMiles }
+        groups.add(
+            TankTripGroup(
+                title = "Earlier drives",
+                dateSubtitle = "Before " + formatDate(firstFill.detectedAtMillis),
+                summaryStats = "%.1f mi · %d drives".format(miles, olderTrips.size),
+                trips = olderTrips,
+            )
+        )
+    }
+
+    return groups
+}
+
+@Composable
+private fun TankGroupHeader(group: TankTripGroup) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 18.dp, bottom = 8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = group.title.uppercase(),
+                color = CivicColors.Ink2,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 1.4.sp,
+            )
+            if (group.dateSubtitle.isNotEmpty()) {
+                Text(
+                    text = group.dateSubtitle,
+                    color = CivicColors.Ink3,
+                    fontSize = 11.sp,
+                )
+            }
+        }
+        if (group.summaryStats.isNotEmpty()) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = group.summaryStats,
+                color = CivicColors.Ink3,
+                fontSize = 12.sp,
+            )
+        }
+    }
+}
+
+private fun formatDate(millis: Long): String =
+    SimpleDateFormat("d MMM", Locale.getDefault()).format(Date(millis))
 
 private fun formatWhen(millis: Long): String =
     SimpleDateFormat("d MMM, HH:mm", Locale.getDefault()).format(Date(millis))

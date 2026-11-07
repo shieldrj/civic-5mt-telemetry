@@ -113,6 +113,16 @@ data class TankState(
      * burned instead. See [gallonsRemaining].
      */
     val gallonsBelowFloor: Double = 0.0,
+    /**
+     * The level the tank is believed to be at, in sender percent, with the float's steps and
+     * its lag taken out. Null until a drive has been watched long enough to form one, in which
+     * case [smoothedLevelPercent] stands in. See [effectiveLevelPercent].
+     *
+     * Burn is counted down from the MAF between float readings (the corrected MAF is good to
+     * a few tenths of a percent, the float moves in steps of 0.4%) and the float is used to
+     * hold the MAF to account over minutes, not seconds. See [TankTracker.fuseLevel].
+     */
+    val fusedLevelPercent: Double? = null,
 ) {
     /**
      * Miles per gallon for this tank, or null before there is enough to divide.
@@ -157,6 +167,17 @@ data class TankState(
         }
 
     /**
+     * The sender level every gallons figure is built from: the fused estimate when there is
+     * one, the smoothed float otherwise.
+     *
+     * The smoothed float is an exponential average, which means that on a falling tank it
+     * runs behind the truth by (fall rate x time constant) - about a percent at a steady
+     * 36 mpg, a third of a gallon, a dozen miles of range. The fused level does not lag.
+     */
+    val effectiveLevelPercent: Double
+        get() = fusedLevelPercent ?: smoothedLevelPercent
+
+    /**
      * Gallons in the tank now: the sender's span, measured, plus what sits below its zero,
      * less whatever has been burned since the gauge reached E.
      *
@@ -166,7 +187,7 @@ data class TankState(
      * down with it instead of freezing.
      */
     val gallonsRemaining: Double
-        get() = (gallonsPerPercent * smoothedLevelPercent + reserveGallons - gallonsBelowFloor)
+        get() = (gallonsPerPercent * effectiveLevelPercent + reserveGallons - gallonsBelowFloor)
             .coerceIn(0.0, CivicSpecs.FUEL_TANK_CAPACITY_GALLONS)
 
     /**
@@ -444,6 +465,39 @@ object TankRules {
     const val SENDER_FLOOR_PERCENT = 1.0
 
     /**
+     * How long a run is watched before the fused level takes over from the smoothed float.
+     *
+     * Coming back to a car driven without the app, the stored level is stale and the smoothed
+     * float spends a few minutes easing down to where the fuel really is. Dead-reckoning from
+     * a stale starting point would carry the error along, so until the float has settled the
+     * fused level simply is the float.
+     */
+    const val HYBRID_STARTUP_SEC = 120.0
+
+    /**
+     * How slowly the float is allowed to correct the MAF's count. Five minutes: slow enough
+     * that fuel slosh and the float's steps average out, fast enough that a MAF that is a
+     * couple of percent out never drifts more than about half a percent of the tank.
+     */
+    const val HYBRID_TIME_CONSTANT_SEC = 300.0
+
+    /**
+     * The most one reading may pull the fused level, in sender percent. Slosh after a hill
+     * puts the raw float ten to seventeen points high for a minute; clamped, that costs a
+     * tenth of a percent instead of ten.
+     */
+    const val HYBRID_INNOVATION_CLAMP_PERCENT = 1.5
+
+    /**
+     * How far the fused level may sit from the smoothed float before it is abandoned for it.
+     *
+     * Eight percent is a gallon, or about thirty-five miles. A gap that large is not MAF
+     * drift, it is fuel that left the tank while nothing was watching - and nothing in this
+     * app may depend on having watched every drive.
+     */
+    const val HYBRID_MAX_DIVERGENCE_PERCENT = 8.0
+
+    /**
      * A lifetime figure needs this many real miles behind it before range leans on it.
      */
     const val MIN_LIFETIME_MILES_FOR_RANGE = 20.0
@@ -548,6 +602,9 @@ class TankTracker(
     /** How long since the sender was last being pushed up. See [TankRules.SETTLE_AFTER_FILL_SEC]. */
     private var settledForSec: Double = 0.0
 
+    /** Seconds watched in this run. Not stored: every run starts by trusting the float. */
+    private var runSec: Double = 0.0
+
     /** The tank the last fill closed, waiting to be collected. See [takeClosedTank]. */
     private var closed: ClosedTank? = null
 
@@ -615,6 +672,7 @@ class TankTracker(
 
         if (!started) {
             started = true
+            runSec = 0.0
 
             if (state.fillTimestamp == 0L) {
                 // Nothing stored: a new install, or the first drive. Take the sender as it
@@ -624,6 +682,7 @@ class TankTracker(
                     fillTimestamp = clock.nowMillis(),
                     levelPercentAtFill = levelPercent,
                     smoothedLevelPercent = levelPercent,
+                    fusedLevelPercent = levelPercent,
                     lowestLevelPercent = levelPercent,
                 )
                 store.save(state)
@@ -675,6 +734,16 @@ class TankTracker(
         // fill or the minute after one.
         settledForSec = if (risingForSec > 0.0) 0.0 else settledForSec + dtSec
         val settled = settledForSec >= TankRules.SETTLE_AFTER_FILL_SEC
+        runSec += dtSec
+        val fused = fuseLevel(
+            prior = state.fusedLevelPercent,
+            smoothed = smoothed,
+            raw = levelPercent,
+            gallonsStep = gallonsStep,
+            stationary = stationary,
+            following = risingForSec > 0.0 || !settled,
+            dtSec = dtSec,
+        )
         val previousRaw = if (settled) lastRawLevel else null
         lastRawLevel = if (settled) levelPercent else null
         val measurable = previousRaw != null && dtSec <= TankRules.MAX_CONTIGUOUS_STEP_SEC
@@ -684,6 +753,7 @@ class TankTracker(
 
         state = state.copy(
             smoothedLevelPercent = smoothed,
+            fusedLevelPercent = fused,
             milesSinceFill = state.milesSinceFill + milesStep,
             gallonsUsedSinceFill = state.gallonsUsedSinceFill + gallonsStep,
             // Signed, so that a slosh up cancels the slosh back down. Taking only the falls
@@ -795,13 +865,62 @@ class TankTracker(
             // and losing it at every fill would mean losing it forever - a fill is the only
             // time it is ever set.
             fullMarkPercent = max(state.fullMarkPercent, snapLevel ?: state.smoothedLevelPercent),
+            // A new tank starts from the float, which is the only thing that has seen the fill.
+            fusedLevelPercent = snapLevel ?: state.smoothedLevelPercent,
         )
         // A new tank is measured from scratch, and the reading this fill was detected on is
         // not one half of a pair with anything.
         lastRawLevel = null
         settledForSec = 0.0
+        runSec = 0.0
         store.save(state)
         lastSaveAt = clock.nowMillis()
+    }
+
+    /**
+     * One step of the complementary filter that keeps the level continuous.
+     *
+     * Predict from the burn, correct from the float. The float on its own moves in steps of
+     * 0.4% (two miles of range) and, once smoothed, runs a minute behind a falling tank;
+     * the MAF on its own is smooth and current but drifts a little. Each is good at what the
+     * other is bad at, so the burn moves the level every step and the float only pulls it
+     * back slowly - see [TankRules.HYBRID_TIME_CONSTANT_SEC].
+     *
+     * The float is trusted outright, with no MAF involved, in every case where the MAF's
+     * count cannot be trusted to carry on from the last reading: a fill is underway or has
+     * only just ended, the run is young, the gauge has bottomed out (the reserve is counted
+     * separately, see [TankState.gallonsBelowFloor]), or the two have disagreed by more than
+     * a tank's worth of drift could explain.
+     *
+     * Corrections are never taken from a stopped car. Slosh after a hill is the float's
+     * worst behaviour and it happens at a standstill.
+     */
+    private fun fuseLevel(
+        prior: Double?,
+        smoothed: Double,
+        raw: Double,
+        gallonsStep: Double,
+        stationary: Boolean,
+        following: Boolean,
+        dtSec: Double,
+    ): Double {
+        val perPercent = state.gallonsPerPercent
+        if (prior == null || following || perPercent <= 0.0 ||
+            runSec < TankRules.HYBRID_STARTUP_SEC ||
+            smoothed <= TankRules.SENDER_FLOOR_PERCENT
+        ) {
+            return smoothed
+        }
+        var level = prior - gallonsStep / perPercent
+        if (!stationary) {
+            val alpha = 1 - exp(-dtSec / TankRules.HYBRID_TIME_CONSTANT_SEC)
+            level += alpha * (raw - level).coerceIn(
+                -TankRules.HYBRID_INNOVATION_CLAMP_PERCENT,
+                TankRules.HYBRID_INNOVATION_CLAMP_PERCENT,
+            )
+        }
+        if (!stationary && level - smoothed > TankRules.HYBRID_MAX_DIVERGENCE_PERCENT) return smoothed
+        return level.coerceIn(0.0, max(state.fullMarkPercent, smoothed))
     }
 
     /**

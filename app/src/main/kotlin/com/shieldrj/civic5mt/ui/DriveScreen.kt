@@ -2,6 +2,8 @@ package com.shieldrj.civic5mt.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -123,20 +125,8 @@ fun DriveScreen(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                     ) {
-                        val coolantColor = when {
-                            metrics.coolantTempF >= 225 -> CivicColors.Accent
-                            metrics.coolantTempF >= 212 -> CivicColors.Warn
-                            metrics.coolantTempF < 160 && metrics.coolantTempF > 32 -> CivicColors.Cold
-                            metrics.coolantTempF >= 160 -> CivicColors.Good
-                            else -> CivicColors.Ink
-                        }
-                        Stat(
-                            label = "Coolant",
-                            value = if (metrics.coolantTempF > 0) "${metrics.coolantTempF}" else "—",
-                            unit = if (metrics.coolantTempF > 0) "°F" else "",
-                            color = coolantColor,
-                        )
-
+                        // No temperature readouts: Robert asked for none on 2026-11-06. An
+                        // overheat still reaches him through the dash light and health banner.
                         val volts = metrics.batteryVoltage
                         val voltageColor = when {
                             volts == null -> CivicColors.Ink
@@ -163,6 +153,8 @@ fun DriveScreen(
                             color = CivicColors.Ink,
                         )
                     }
+
+                    LiveEconomyBar(metrics)
 
                     Hairline()
 
@@ -254,20 +246,7 @@ fun DriveScreen(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceEvenly,
                 ) {
-                    val coolantColor = when {
-                        metrics.coolantTempF >= 225 -> CivicColors.Accent
-                        metrics.coolantTempF >= 212 -> CivicColors.Warn
-                        metrics.coolantTempF < 160 && metrics.coolantTempF > 32 -> CivicColors.Cold
-                        metrics.coolantTempF >= 160 -> CivicColors.Good
-                        else -> CivicColors.Ink
-                    }
-                    Stat(
-                        label = "Coolant",
-                        value = if (metrics.coolantTempF > 0) "${metrics.coolantTempF}" else "—",
-                        unit = if (metrics.coolantTempF > 0) "°F" else "",
-                        color = coolantColor,
-                    )
-
+                    // No temperature readouts here either; see the landscape row above.
                     val volts = metrics.batteryVoltage
                     val voltageColor = when {
                         volts == null -> CivicColors.Ink
@@ -408,7 +387,7 @@ private fun HealthStatusBanner(
     Box(
         modifier = Modifier
             .clickable(onClick = onClick)
-            .background(bgColor, androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+            .background(bgColor, RoundedCornerShape(8.dp))
             .padding(horizontal = 14.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -417,7 +396,7 @@ private fun HealthStatusBanner(
                 modifier = Modifier
                     .height(7.dp)
                     .width(7.dp)
-                    .background(textColor, androidx.compose.foundation.shape.CircleShape)
+                    .background(textColor, CircleShape)
             )
             Spacer(Modifier.width(8.dp))
             Text(
@@ -466,6 +445,70 @@ private fun Stat(
             fontWeight = FontWeight.Medium,
             letterSpacing = 1.4.sp,
         )
+    }
+}
+
+@Composable
+private fun LiveEconomyBar(
+    metrics: LiveMetrics,
+    modifier: Modifier = Modifier,
+) {
+    val isDfco = metrics.isDfcoActive || metrics.mpgDisplayState == MpgDisplayState.COASTING
+    val isIdle = metrics.mpgDisplayState == MpgDisplayState.IDLE
+    val fraction = when {
+        isDfco -> 1.0f
+        isIdle -> 0.0f
+        else -> (metrics.displayMpg / 60.0).coerceIn(0.0, 1.0).toFloat()
+    }
+    val valueText = when {
+        isDfco -> "DFCO · Coasting"
+        isIdle -> "Idle"
+        metrics.displayMpg > 0 -> "%.1f MPG".format(metrics.displayMpg)
+        else -> "—"
+    }
+    val barColor = when {
+        isDfco -> CivicColors.Good
+        metrics.displayMpg >= 40 -> CivicColors.Good
+        metrics.displayMpg >= 28 -> CivicColors.Ink
+        else -> CivicColors.Warn
+    }
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "INSTANT ECONOMY",
+                color = CivicColors.Ink3,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                letterSpacing = 1.2.sp,
+            )
+            Text(
+                text = valueText,
+                color = if (isDfco) CivicColors.Good else CivicColors.Ink,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium,
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(6.dp)
+                .background(CivicColors.Hairline, RoundedCornerShape(3.dp))
+        ) {
+            if (fraction > 0f) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction)
+                        .height(6.dp)
+                        .background(barColor, RoundedCornerShape(3.dp))
+                )
+            }
+        }
     }
 }
 

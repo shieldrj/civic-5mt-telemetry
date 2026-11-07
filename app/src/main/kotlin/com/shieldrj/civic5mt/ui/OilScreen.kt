@@ -174,6 +174,16 @@ private fun OilBody(p: OilLifeProfile) {
 
     Spacer(Modifier.height(20.dp))
 
+    // Only once the record has been tied to the car's odometer by a receipt. Before that its
+    // odometer counts from an arbitrary base, and printing "due at" a figure that cannot be
+    // compared with the dashboard would be worse than printing nothing.
+    if (p.odometerSynced) {
+        Factor(
+            label = "Next change due",
+            value = "%,d mi".format((p.currentOdometer + p.estimatedMilesRemaining).roundToInt()),
+            note = "on the dashboard odometer",
+        )
+    }
     Factor(
         label = "Crank revolutions",
         value = "%.2fM".format(p.accumulatedRevolutions / 1_000_000),
