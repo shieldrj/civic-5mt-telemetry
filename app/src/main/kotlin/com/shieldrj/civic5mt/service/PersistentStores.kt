@@ -152,6 +152,7 @@ internal fun oilProfileToJson(p: OilLifeProfile): JSONObject = JSONObject()
     .put("estimatedMilesRemaining", p.estimatedMilesRemaining)
     .put("estimatedDaysRemaining", p.estimatedDaysRemaining ?: JSONObject.NULL)
     .put("oilConditionGrade", p.oilConditionGrade.label)
+    .put("odometerSynced", p.odometerSynced)
     .put(
         "degradationBreakdown",
         JSONObject()
@@ -178,6 +179,7 @@ internal fun parseOilProfile(json: JSONObject): OilLifeProfile {
             if (json.isNull("estimatedDaysRemaining")) null
             else json.optInt("estimatedDaysRemaining").takeIf { it > 0 },
         oilConditionGrade = gradeFromLabel(json.optString("oilConditionGrade")),
+        odometerSynced = json.optBoolean("odometerSynced", false),
         degradationBreakdown = DegradationBreakdown(
             revWearFactor = breakdown.optDouble("revWearFactor", 0.0),
             coldStartPenalty = breakdown.optDouble("coldStartPenalty", 0.0),
@@ -375,6 +377,7 @@ internal fun tankToJson(state: TankState): JSONObject = JSONObject()
     .put("rawGallonsSinceFill", state.rawGallonsSinceFill)
     .put("observedRawGallons", state.observedRawGallons)
     .put("gallonsBelowFloor", state.gallonsBelowFloor)
+    .put("fusedLevelPercent", state.fusedLevelPercent ?: JSONObject.NULL)
 
 internal fun parseTank(j: JSONObject): TankState = TankState(
     fillTimestamp = j.optLong("fillTimestamp", 0L),
@@ -409,6 +412,13 @@ internal fun parseTank(j: JSONObject): TankState = TankState(
     rawGallonsSinceFill = j.optDouble("rawGallonsSinceFill", j.optDouble("gallonsUsedSinceFill", 0.0)),
     observedRawGallons = j.optDouble("observedRawGallons", j.optDouble("observedGallons", 0.0)),
     gallonsBelowFloor = j.optDouble("gallonsBelowFloor", 0.0),
+    // Absent on a record from before the fused level existed, and null is the right reading:
+    // it falls back to the smoothed float until a drive has been watched long enough.
+    fusedLevelPercent = if (j.has("fusedLevelPercent") && !j.isNull("fusedLevelPercent")) {
+        j.optDouble("fusedLevelPercent").takeIf { it.isFinite() }
+    } else {
+        null
+    },
 )
 
 // ── What the pump receipts taught ────────────────────────────────────────────────
@@ -599,6 +609,8 @@ data class WidgetSnapshot(
     val tankMpg: Double? = null,
     val rangeMiles: Int? = null,
     val rangeIsCeiling: Boolean = false,
+    /** Miles until the gauge reads E - the figure the dashboard is comparable with. */
+    val rangeToGaugeEmptyMiles: Int? = null,
 )
 
 fun saveWidgetSnapshot(context: Context, snapshot: WidgetSnapshot) {
@@ -606,6 +618,7 @@ fun saveWidgetSnapshot(context: Context, snapshot: WidgetSnapshot) {
         .put("tankMpg", snapshot.tankMpg ?: JSONObject.NULL)
         .put("rangeMiles", snapshot.rangeMiles ?: JSONObject.NULL)
         .put("rangeIsCeiling", snapshot.rangeIsCeiling)
+        .put("rangeToGaugeEmptyMiles", snapshot.rangeToGaugeEmptyMiles ?: JSONObject.NULL)
     telemetryPrefs(context).edit().putString(KEY_WIDGET_SNAPSHOT, json.toString()).apply()
 }
 
@@ -620,6 +633,8 @@ fun loadWidgetSnapshot(context: Context): WidgetSnapshot {
             // Absent in snapshots written before this existed, and false is the right reading
             // of those: they were saved by a build that only ever showed plain figures.
             rangeIsCeiling = j.optBoolean("rangeIsCeiling", false),
+            rangeToGaugeEmptyMiles =
+                if (j.isNull("rangeToGaugeEmptyMiles")) null else j.optInt("rangeToGaugeEmptyMiles"),
         )
     }.onFailure { Log.w(TAG, "Widget snapshot unreadable, ignoring", it) }
         .getOrDefault(WidgetSnapshot())

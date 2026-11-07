@@ -236,7 +236,9 @@ class TelemetryManager(
             // The permanent record's step, not the display step. Oil life is a maintenance
             // figure, so a stalled timer has to be discarded here exactly as it is for
             // distance - it was taking the raw step, and booking a locked phone as running.
-            oilLife.recordTelemetryStep(raw.rpm, raw.coolantC, raw.engineLoad, speedMph, integrationDtSec)
+            // Corrected speed, like every other accumulating figure: the oil interval is in
+            // miles, and it should be the same miles the trip and the range are made of.
+            oilLife.recordTelemetryStep(raw.rpm, raw.coolantC, raw.engineLoad, speedMphForDistance, integrationDtSec)
         } else {
             oilLife.getProfile()
         }
@@ -253,6 +255,7 @@ class TelemetryManager(
             ambientTempC = raw.ambientC,
             speedMph = speedMph,
             dtSec = if (isRealDrive) integrationDtSec else dtSec,
+            distanceSpeedMph = speedMphForDistance,
         )
 
         // The charging verdict is watched across the drive rather than read off this tick -
@@ -647,6 +650,11 @@ class TelemetryManager(
         val odometerAtFill = odometerNow?.let { it - tank.get().milesSinceFill }
         val outcome = fuelCalibration.attachReceipt(pumpGallons, filledToShutoff, odometerAtFill)
         applyCalibration()
+        // The odometer the driver read is the car's own figure, the only one this app has ever
+        // been given. It anchors the oil record to the dashboard.
+        if (outcome is ReceiptOutcome.Saved && odometerNow != null) {
+            oilLife.syncOdometer(odometerNow)
+        }
         return outcome
     }
 

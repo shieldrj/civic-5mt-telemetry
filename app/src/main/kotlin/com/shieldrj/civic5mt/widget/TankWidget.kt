@@ -1,15 +1,19 @@
 package com.shieldrj.civic5mt.widget
 
+import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
 import android.widget.RemoteViews
 import com.shieldrj.civic5mt.R
 import com.shieldrj.civic5mt.core.LiveMetrics
+import com.shieldrj.civic5mt.service.TelemetryService
 import com.shieldrj.civic5mt.service.WidgetSnapshot
 import com.shieldrj.civic5mt.service.loadWidgetSnapshot
 import com.shieldrj.civic5mt.service.saveWidgetSnapshot
+import com.shieldrj.civic5mt.ui.MainActivity
 
 /**
  * The home-screen widget, and why it reads like the HUD: same question, same answer.
@@ -29,6 +33,7 @@ object TankWidget {
             tankMpg = metrics.tankMpg,
             rangeMiles = metrics.fuelRangeMiles,
             rangeIsCeiling = metrics.tankBelowSenderZero,
+            rangeToGaugeEmptyMiles = metrics.fuelRangeToSenderZeroMiles,
         )
         saveWidgetSnapshot(context, snapshot)
         push(context, snapshot)
@@ -42,6 +47,7 @@ object TankWidget {
     private fun push(context: Context, snapshot: WidgetSnapshot) {
         val tankMpg = snapshot.tankMpg
         val rangeMiles = snapshot.rangeMiles
+        val toGauge = snapshot.rangeToGaugeEmptyMiles
         val views = RemoteViews(context.packageName, R.layout.tank_widget).apply {
             setTextViewText(
                 R.id.widget_tank_mpg,
@@ -51,14 +57,26 @@ object TankWidget {
                 R.id.widget_detail,
                 when {
                     tankMpg == null -> "MPG · waiting for the car"
-                    // "about" once the gauge is on E. The widget carries the same
-                    // figure as the HUD and has to carry the same caveat with it, or the one
-                    // screen nobody is looking at closely becomes the confident one.
                     rangeMiles == null -> "MPG · ? mi to empty"
-                    snapshot.rangeIsCeiling -> "MPG · about $rangeMiles mi to empty"
+                    snapshot.rangeIsCeiling -> "MPG · about $rangeMiles mi dry"
+                    toGauge != null && toGauge > 0 && toGauge != rangeMiles ->
+                        "MPG · $toGauge mi to E · $rangeMiles dry"
+                    toGauge != null && toGauge <= 0 ->
+                        "MPG · on E · $rangeMiles mi dry"
                     else -> "MPG · $rangeMiles mi to empty"
                 },
             )
+            val intent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                putExtra(TelemetryService.EXTRA_OPEN_SCREEN, TelemetryService.SCREEN_FUEL)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            setOnClickPendingIntent(R.id.widget_container, pendingIntent)
         }
         AppWidgetManager.getInstance(context).updateAppWidget(
             ComponentName(context, TankWidgetProvider::class.java),

@@ -54,6 +54,12 @@ data class OilLifeProfile(
     val estimatedDaysRemaining: Int?,
     val oilConditionGrade: OilConditionGrade,
     val degradationBreakdown: DegradationBreakdown,
+    /**
+     * Whether [currentOdometer] has been tied to the car's own odometer by a reading the
+     * driver gave. Until then it counts miles from an arbitrary base and means nothing on its
+     * own, so nothing may be shown as "due at" a dashboard figure.
+     */
+    val odometerSynced: Boolean = false,
 )
 
 /**
@@ -238,9 +244,35 @@ class OilLifeEngine(
             estimatedDaysRemaining = null,
             oilConditionGrade = OilConditionGrade.EXCELLENT,
             degradationBreakdown = DegradationBreakdown(0.0, 0.0, 0.0, 0.0),
+            odometerSynced = profile.odometerSynced,
         )
         saveProfile()
         return profile
+    }
+
+    /**
+     * Ties the oil record's odometer to the one on the dashboard.
+     *
+     * The record's odometer started from a seeded base and has only ever advanced by the
+     * miles this app watched, so it is wrong by a constant plus every mile driven with the
+     * phone elsewhere. A reading typed in with a fuel receipt is the car's own figure.
+     *
+     * The reset odometer moves by the same amount, on purpose. Miles driven since the oil
+     * change is [OilLifeProfile.currentOdometer] minus [OilLifeProfile.lastResetOdometer],
+     * and it is divided into the wear that was measured - which only covers the miles that
+     * were watched. Counting the unwatched ones on top would stretch the projected interval
+     * with fuel and revolutions nobody counted, and that is the optimistic direction.
+     */
+    fun syncOdometer(dashOdometer: Double) {
+        if (!dashOdometer.isFinite() || dashOdometer <= 0.0) return
+        val delta = dashOdometer - profile.currentOdometer
+        profile = profile.copy(
+            lastResetOdometer = profile.lastResetOdometer + delta,
+            currentOdometer = dashOdometer,
+            odometerSynced = true,
+        )
+        recalculateOilHealth()
+        saveProfile()
     }
 
     private fun recalculateOilHealth() {

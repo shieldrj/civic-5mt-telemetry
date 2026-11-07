@@ -4,6 +4,8 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.RemoteInput
+import com.shieldrj.civic5mt.core.ReceiptInput
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -370,6 +372,21 @@ class TelemetryService : Service() {
             Intent(this, TelemetryService::class.java).apply { action = ACTION_SKIP_RECEIPT },
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
+        val remoteInput = RemoteInput.Builder(KEY_RECEIPT_TEXT)
+            .setLabel("Gallons (e.g. 10.5 or 10.5 197214)")
+            .build()
+        val inlineIntent = PendingIntent.getService(
+            this,
+            RECEIPT_NOTIFICATION_ID + 1,
+            Intent(this, TelemetryService::class.java).apply { action = ACTION_INLINE_RECEIPT },
+            PendingIntent.FLAG_MUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        val replyAction = Notification.Action.Builder(
+            null,
+            "Enter gallons",
+            inlineIntent,
+        ).addRemoteInput(remoteInput).build()
+
         runCatching {
             getSystemService(NotificationManager::class.java).notify(
                 RECEIPT_NOTIFICATION_ID,
@@ -378,6 +395,7 @@ class TelemetryService : Service() {
                     .setContentText("Add the gallons from your receipt whenever you have them.")
                     .setSmallIcon(R.drawable.ic_stat_telemetry)
                     .setContentIntent(open)
+                    .addAction(replyAction)
                     .addAction(Notification.Action.Builder(null, "No receipt", skip).build())
                     .setAutoCancel(false)
                     .setOnlyAlertOnce(true)
@@ -672,6 +690,27 @@ class TelemetryService : Service() {
                 TelemetryState.setStatusMessage(
                     "Fill-ups cleared. The next receipt measures the gauge again.",
                 )
+                stopIfIdle()
+            }
+
+            ACTION_INLINE_RECEIPT -> {
+                val remoteInput = RemoteInput.getResultsFromIntent(intent)
+                val text = remoteInput?.getCharSequence(KEY_RECEIPT_TEXT)?.toString()
+                val entry = ReceiptInput.parse(text)
+                if (entry != null) {
+                    recordFill(
+                        pumpGallons = entry.pumpGallons,
+                        filledToShutoff = entry.filledToShutoff,
+                        odometerMiles = entry.odometerMiles,
+                        amendLast = false,
+                    )
+                } else if (!text.isNullOrBlank()) {
+                    android.widget.Toast.makeText(
+                        applicationContext,
+                        "Could not parse receipt: '$text'. Try e.g. 10.5 or 10.5 197214",
+                        android.widget.Toast.LENGTH_LONG,
+                    ).show()
+                }
                 stopIfIdle()
             }
 
@@ -1042,6 +1081,15 @@ class TelemetryService : Service() {
         val message = receiptFeedback(outcome, pumpGallons, before, odometerGiven = odometerMiles != null)
         TelemetryState.setStatusMessage(message)
         TelemetryState.postActionFeedback(message, worked = outcome is ReceiptOutcome.Saved)
+
+        // A receipt is the most valuable record in the app and is usually entered with no drive
+        // about to end, so it cannot wait for teardown to be backed up.
+        if (outcome is ReceiptOutcome.Saved) {
+            manager.flush()
+            scope.launch {
+                runCatching { withContext(kotlinx.coroutines.Dispatchers.IO) { BackupManager.runBackup(applicationContext) } }
+            }
+        }
     }
 
     /**
@@ -1197,6 +1245,9 @@ class TelemetryService : Service() {
             if (::recorder.isInitialized) {
                 runCatching { recorder.finish(System.currentTimeMillis(), manager.getTrip()) }
             }
+            // After the flush, so the backup holds what was just written. runBackup is safe
+            // with no location configured and never throws.
+            runCatching { withContext(kotlinx.coroutines.Dispatchers.IO) { BackupManager.runBackup(applicationContext) } }
         }
         TelemetryState.setStatusMessage(message)
         if (TelemetryState.connection.value != ConnectionStatus.ERROR) {
@@ -1305,6 +1356,8 @@ class TelemetryService : Service() {
         const val ACTION_RESET_CLUTCH = "com.shieldrj.civic5mt.RESET_CLUTCH"
         const val ACTION_MARK_FILLED = "com.shieldrj.civic5mt.MARK_FILLED"
         const val ACTION_RECORD_FILL = "com.shieldrj.civic5mt.RECORD_FILL"
+        const val ACTION_INLINE_RECEIPT = "com.shieldrj.civic5mt.INLINE_RECEIPT"
+        const val KEY_RECEIPT_TEXT = "key_receipt_text"
         const val ACTION_RESET_FUEL_CALIBRATION = "com.shieldrj.civic5mt.RESET_FUEL_CALIBRATION"
         const val EXTRA_PUMP_GALLONS = "pump_gallons"
         const val EXTRA_FILLED_TO_SHUTOFF = "filled_to_shutoff"
