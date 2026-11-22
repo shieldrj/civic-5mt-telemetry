@@ -153,6 +153,11 @@ internal fun oilProfileToJson(p: OilLifeProfile): JSONObject = JSONObject()
     .put("estimatedDaysRemaining", p.estimatedDaysRemaining ?: JSONObject.NULL)
     .put("oilConditionGrade", p.oilConditionGrade.label)
     .put("odometerSynced", p.odometerSynced)
+    .put("weightedRevolutions", p.weightedRevolutions)
+    .put("coldExtraRevolutions", p.coldExtraRevolutions)
+    .put("shortTripExtraRevolutions", p.shortTripExtraRevolutions)
+    .put("hotExtraRevolutions", p.hotExtraRevolutions)
+    .put("lastEngineStopMillis", p.lastEngineStopMillis ?: JSONObject.NULL)
     .put(
         "degradationBreakdown",
         JSONObject()
@@ -180,6 +185,15 @@ internal fun parseOilProfile(json: JSONObject): OilLifeProfile {
             else json.optInt("estimatedDaysRemaining").takeIf { it > 0 },
         oilConditionGrade = gradeFromLabel(json.optString("oilConditionGrade")),
         odometerSynced = json.optBoolean("odometerSynced", false),
+        // Absent on a record saved before the temperature-weighted model. The engine then
+        // carries the plain revolutions over at factor 1 (see OilLifeEngine's init).
+        weightedRevolutions = json.optDouble("weightedRevolutions", 0.0),
+        coldExtraRevolutions = json.optDouble("coldExtraRevolutions", 0.0),
+        shortTripExtraRevolutions = json.optDouble("shortTripExtraRevolutions", 0.0),
+        hotExtraRevolutions = json.optDouble("hotExtraRevolutions", 0.0),
+        lastEngineStopMillis =
+            if (json.isNull("lastEngineStopMillis")) null
+            else json.optLong("lastEngineStopMillis").takeIf { it > 0 },
         degradationBreakdown = DegradationBreakdown(
             revWearFactor = breakdown.optDouble("revWearFactor", 0.0),
             coldStartPenalty = breakdown.optDouble("coldStartPenalty", 0.0),

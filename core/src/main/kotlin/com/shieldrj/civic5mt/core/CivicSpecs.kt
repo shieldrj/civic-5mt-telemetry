@@ -319,14 +319,10 @@ object CivicSpecs {
     const val CLUTCH_NORMAL_TEMP_THRESHOLD_C: Double = 130.0 // Below this is standard wear
     const val CLUTCH_GLAZE_TEMP_THRESHOLD_C: Double = 200.0 // Above this accelerates thermal wear & glazing
 
-    // Oil Life Baseline Constants
+    // Oil. The oil-life constants themselves are in GmOilLifeMethod, each with its source.
     const val OIL_CAPACITY_QUARTS: Double = 3.9
-    const val BASELINE_OIL_LIFE_MILES: Double = 7500.0 // Full synthetic normal duty interval
-    const val BASELINE_LIFETIME_REVOLUTIONS: Double = 14_500_000.0 // ~14.5M engine cycles
-    const val OPERATING_TEMP_THRESHOLD_C: Double = 71.0 // 160°F (below this is a cold-start penalty)
+    const val OPERATING_TEMP_THRESHOLD_C: Double = 71.0 // 160°F: below this a start counts as cold
     const val OPTIMAL_OPERATING_TEMP_C: Double = 85.0 // 185°F
-    const val HIGH_THERMAL_THRESHOLD_RPM: Double = 4500.0
-    const val HIGH_LOAD_THRESHOLD_PERCENT: Double = 75.0
 
     /** Honda DBW PID 0111 reads ~12-15% at foot-off idle. */
     const val CLOSED_THROTTLE_BASELINE_PERCENT: Double = 14.0

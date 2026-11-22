@@ -60,6 +60,20 @@ data class OilLifeProfile(
      * own, so nothing may be shown as "due at" a dashboard figure.
      */
     val odometerSynced: Boolean = false,
+    /**
+     * Revolutions, each multiplied by the penalty factor for the oil temperature it ran at
+     * ([GmOilLifeMethod.penaltyFactor]). This is the measurement oil life is a view of: the
+     * oil is spent when it reaches [GmOilLifeMethod.BUDGET_REVOLUTIONS].
+     */
+    val weightedRevolutions: Double = 0.0,
+    /** The part of [weightedRevolutions] above factor 1 run with oil under 80°C on drives that warmed up. */
+    val coldExtraRevolutions: Double = 0.0,
+    /** The same, on drives that ended before the oil ever reached 80°C. */
+    val shortTripExtraRevolutions: Double = 0.0,
+    /** The part above factor 1 run with oil over 130°C. */
+    val hotExtraRevolutions: Double = 0.0,
+    /** When the engine last stopped, for the patent's short-time-off correction. */
+    val lastEngineStopMillis: Long? = null,
 )
 
 /**
@@ -97,8 +111,25 @@ class OilLifeEngine(
     private var currentTripMaxTempC: Double = 0.0
     private var lastSaveTimestamp: Long = 0L
 
+    // The oil-temperature estimate for the drive in progress. Not persisted: if the app
+    // restarts mid-drive the warm-up starts again from the coolant reading, which on a warm
+    // engine reaches 80°C almost at once.
+    private var tripReferenceTempC: Double? = null
+    private var tripRevolutions: Double = 0.0
+    private var tripOilWarm: Boolean = false
+    private var tripColdExtra: Double = 0.0
+
     init {
-        profile = store.load() ?: defaultProfile().also { store.save(it) }
+        val loaded = store.load()
+        profile = when {
+            loaded == null -> defaultProfile().also { store.save(it) }
+            // A record from before the weighted count existed. Its revolutions were never
+            // weighted by temperature, so carry them over at factor 1. That understates
+            // cold running on the old record, which ends at the next oil change anyway.
+            loaded.weightedRevolutions == 0.0 && loaded.accumulatedRevolutions > 0.0 ->
+                loaded.copy(weightedRevolutions = loaded.accumulatedRevolutions)
+            else -> loaded
+        }
 
         // Recompute the derived half of what was just loaded, rather than trusting it.
         //
@@ -117,6 +148,7 @@ class OilLifeEngine(
         currentOdometer = 114250.0,
         oilLifePercent = 78.5,
         accumulatedRevolutions = 3_200_000.0,
+        weightedRevolutions = 3_200_000.0,
         coldStartsCount = 42,
         timeBelowOperatingTempSec = 28400.0,
         shortTripsCount = 14,
@@ -172,23 +204,41 @@ class OilLifeEngine(
         currentTripDurationSec += dtSec
         currentTripMaxTempC = max(currentTripMaxTempC, coolantTempC)
 
-        // 1. Mechanical revolutions.
         val stepRevs = (rpm / 60.0) * dtSec
-        // Mileage increment estimate.
         val stepMiles = (speedMph / 3600.0) * dtSec
 
-        // 2. Cold operation and warmup penalty. Normal operating temperature is ~71-90°C.
-        val isCold = coolantTempC < CivicSpecs.OPERATING_TEMP_THRESHOLD_C
+        // Oil temperature, by the patent's two equations. A drive whose start was never
+        // registered warms up from the coolant reading it was first seen at.
+        val referenceTempC = tripReferenceTempC ?: coolantTempC.also { tripReferenceTempC = it }
+        val oilTempC = if (tripOilWarm) {
+            GmOilLifeMethod.equilibriumOilTempC(coolantTempC, rpm, speedMph)
+        } else {
+            GmOilLifeMethod.warmupOilTempC(referenceTempC, tripRevolutions)
+        }
+        tripRevolutions += stepRevs
+        if (oilTempC >= GmOilLifeMethod.WARM_OIL_C) tripOilWarm = true
 
-        // 3. High thermal / RPM stress penalty.
-        val isHighStress = rpm > CivicSpecs.HIGH_THERMAL_THRESHOLD_RPM &&
-            engineLoadPercent > CivicSpecs.HIGH_LOAD_THRESHOLD_PERCENT
+        val factor = GmOilLifeMethod.penaltyFactor(oilTempC)
+        val extra = stepRevs * (factor - 1.0)
+        val coldExtra = if (oilTempC < GmOilLifeMethod.WARM_OIL_C) extra else 0.0
+        val hotExtra = if (oilTempC >= GmOilLifeMethod.HOT_OIL_C) extra else 0.0
+        tripColdExtra += coldExtra
+
+        // Kept as plain counts for the screen. They no longer drive the percentage - the
+        // weighted revolutions do - but they say in everyday terms what the weighting saw.
+        val isCold = coolantTempC < CivicSpecs.OPERATING_TEMP_THRESHOLD_C
 
         profile = profile.copy(
             accumulatedRevolutions = profile.accumulatedRevolutions + stepRevs,
+            weightedRevolutions = profile.weightedRevolutions + stepRevs * factor,
+            coldExtraRevolutions = profile.coldExtraRevolutions + coldExtra,
+            hotExtraRevolutions = profile.hotExtraRevolutions + hotExtra,
             currentOdometer = profile.currentOdometer + stepMiles,
             timeBelowOperatingTempSec = profile.timeBelowOperatingTempSec + if (isCold) dtSec else 0.0,
-            highThermalStressSec = profile.highThermalStressSec + if (isHighStress) dtSec else 0.0,
+            // Seconds with the estimated oil over 130°C. Until this model it counted seconds
+            // over 4,500 rpm at high load; a record from then carries a few of those.
+            highThermalStressSec = profile.highThermalStressSec +
+                if (oilTempC >= GmOilLifeMethod.HOT_OIL_C) dtSec else 0.0,
         )
 
         recalculateOilHealth()
@@ -204,6 +254,13 @@ class OilLifeEngine(
         currentTripDurationSec = 0.0
         currentTripMaxTempC = coolantTempC
 
+        val minutesOff = profile.lastEngineStopMillis
+            ?.let { (clock.nowMillis() - it) / 60_000.0 }
+        tripReferenceTempC = GmOilLifeMethod.referenceTempC(coolantTempC, minutesOff)
+        tripRevolutions = 0.0
+        tripOilWarm = false
+        tripColdExtra = 0.0
+
         if (coolantTempC < CivicSpecs.OPERATING_TEMP_THRESHOLD_C) {
             profile = profile.copy(coldStartsCount = profile.coldStartsCount + 1)
         }
@@ -218,6 +275,19 @@ class OilLifeEngine(
         if (currentTripDurationSec > 60 && currentTripDurationSec < 900 && currentTripMaxTempC < 80) {
             profile = profile.copy(shortTripsCount = profile.shortTripsCount + 1)
         }
+        // A drive that ended with the oil still cold: its cold-oil cost belongs to short
+        // trips, which is what the screen calls it. Same total, different label.
+        if (!tripOilWarm && tripColdExtra > 0.0) {
+            profile = profile.copy(
+                coldExtraRevolutions = max(0.0, profile.coldExtraRevolutions - tripColdExtra),
+                shortTripExtraRevolutions = profile.shortTripExtraRevolutions + tripColdExtra,
+            )
+        }
+        profile = profile.copy(lastEngineStopMillis = clock.nowMillis())
+        tripReferenceTempC = null
+        tripRevolutions = 0.0
+        tripOilWarm = false
+        tripColdExtra = 0.0
         currentTripDurationSec = 0.0
         currentTripMaxTempC = 0.0
         recalculateOilHealth()
@@ -239,12 +309,13 @@ class OilLifeEngine(
             timeBelowOperatingTempSec = 0.0,
             shortTripsCount = 0,
             highThermalStressSec = 0.0,
-            estimatedMilesRemaining = CivicSpecs.BASELINE_OIL_LIFE_MILES.toInt(),
+            estimatedMilesRemaining = GmOilLifeMethod.MAX_INTERVAL_MILES.toInt(),
             // No history yet, so no rate to project from. It fills in once there is one.
             estimatedDaysRemaining = null,
             oilConditionGrade = OilConditionGrade.EXCELLENT,
             degradationBreakdown = DegradationBreakdown(0.0, 0.0, 0.0, 0.0),
             odometerSynced = profile.odometerSynced,
+            lastEngineStopMillis = profile.lastEngineStopMillis,
         )
         saveProfile()
         return profile
@@ -276,48 +347,48 @@ class OilLifeEngine(
     }
 
     private fun recalculateOilHealth() {
-        // 1. Baseline revolutions wear: 14.5M revolutions = 100% baseline wear.
-        val revWearPercent =
-            (profile.accumulatedRevolutions / CivicSpecs.BASELINE_LIFETIME_REVOLUTIONS) * 100
+        // GM's published method (see GmOilLifeMethod): the oil is spent when the
+        // temperature-weighted revolutions reach the budget. The penalties are inside the
+        // weighting, so nothing is added on top - the model this replaced added per-event
+        // percentages to a 14.5M budget and asked for a change after about 4,000 miles of
+        // a mostly-freeway commute (Robert, 2026-11-21).
+        val budget = GmOilLifeMethod.BUDGET_REVOLUTIONS
+        fun percentOfBudget(revs: Double) = revs / budget * 100
 
-        // 2. Cold start and warmup penalty - each cold start and each minute below 160°F
-        //    shears oil molecules.
-        val coldStartPenaltyPercent =
-            (profile.coldStartsCount * 0.15) + (profile.timeBelowOperatingTempSec / 3600) * 0.4
+        val coldPercent = percentOfBudget(profile.coldExtraRevolutions)
+        val shortTripPercent = percentOfBudget(profile.shortTripExtraRevolutions)
+        val hotPercent = percentOfBudget(profile.hotExtraRevolutions)
+        val basePercent = max(
+            0.0,
+            percentOfBudget(profile.weightedRevolutions) - coldPercent - shortTripPercent - hotPercent,
+        )
 
-        // 3. Short-trip moisture dilution penalty.
-        val shortTripPenaltyPercent = profile.shortTripsCount * 0.35
+        val daysSinceReset =
+            max(1.0, (clock.nowMillis() - profile.lastResetTimestamp) / (24.0 * 60 * 60 * 1000))
+        // Patent: a year after the change the oil is due whatever the count says.
+        val expired = daysSinceReset > GmOilLifeMethod.MAX_AGE_DAYS
+        val remainingPercent = if (expired) {
+            0.0
+        } else {
+            max(0.0, min(100.0, 100.0 - percentOfBudget(profile.weightedRevolutions)))
+        }
 
-        // 4. High thermal / RPM shear penalty.
-        val thermalPenaltyPercent = (profile.highThermalStressSec / 60) * 0.25
-
-        val totalDegradation =
-            revWearPercent + coldStartPenaltyPercent + shortTripPenaltyPercent + thermalPenaltyPercent
-        val remainingPercent = max(0.0, min(100.0, 100.0 - totalDegradation))
-
-        // Estimated miles remaining.
-        val milesDriven = max(0.0, profile.currentOdometer - profile.lastResetOdometer)
-        val degradationRatio = if (totalDegradation > 0) totalDegradation / 100 else 0.01
-        // Capped at the service interval, and only the optimistic side is capped.
+        // Miles remaining: the budget left, divided by what a mile has cost so far.
         //
-        // The extrapolation is worth keeping - gentle driving genuinely does use oil up more
-        // slowly, and harsh driving pushes this below the baseline, which is the direction
-        // that needs to move. But uncapped it produced "26,122 miles remaining" on a record
-        // showing 95% life, because 1,300 miles of very light wear projects to an interval no
-        // 0W-20 in a Civic would survive. Oil is contamination- and time-limited as well as
-        // wear-limited, and a maintenance figure that reads three times the manufacturer's
-        // interval is one somebody acts on.
-        val projectedTotalMiles =
-            if (milesDriven > 50) milesDriven / degradationRatio else CivicSpecs.BASELINE_OIL_LIFE_MILES
-        val effectiveTotalMiles = min(CivicSpecs.BASELINE_OIL_LIFE_MILES, projectedTotalMiles)
-        val estimatedMilesRemaining =
-            max(0L, ((remainingPercent / 100) * effectiveTotalMiles).roundToLong()).toInt()
+        // A mile can never cost fewer revolutions than one in fifth gear with warm oil, so
+        // that is the floor on the rate. It matters: the app does not see every drive, and a
+        // record whose odometer moved further than its revolutions did (1,300 miles on 665k
+        // revolutions, once) would otherwise project an interval no oil could last.
+        val milesDriven = max(0.0, profile.currentOdometer - profile.lastResetOdometer)
+        val observedRevsPerMile =
+            if (milesDriven > 50) profile.weightedRevolutions / milesDriven else 0.0
+        val revsPerMile = max(GmOilLifeMethod.TOP_GEAR_REVS_PER_MILE, observedRevsPerMile)
+        val revsLeft = if (expired) 0.0 else max(0.0, budget - profile.weightedRevolutions)
+        val estimatedMilesRemaining = (revsLeft / revsPerMile).roundToLong().toInt()
 
         // Days remaining, from the daily mileage burn rate - but only once that rate is
         // measured over long enough to be a rate rather than an accident of when the app
         // happened to be running.
-        val daysSinceReset =
-            max(1.0, (clock.nowMillis() - profile.lastResetTimestamp) / (24.0 * 60 * 60 * 1000))
         val dailyMileage = milesDriven / daysSinceReset
         val estimatedDaysRemaining = if (daysSinceReset >= MIN_DAYS_FOR_RATE && dailyMileage > 0.1) {
             (estimatedMilesRemaining / dailyMileage).roundToInt()
@@ -336,10 +407,10 @@ class OilLifeEngine(
         profile = profile.copy(
             oilLifePercent = round1(remainingPercent),
             degradationBreakdown = DegradationBreakdown(
-                revWearFactor = round1(revWearPercent),
-                coldStartPenalty = round1(coldStartPenaltyPercent),
-                shortTripPenalty = round1(shortTripPenaltyPercent),
-                thermalShearPenalty = round1(thermalPenaltyPercent),
+                revWearFactor = round1(basePercent),
+                coldStartPenalty = round1(coldPercent),
+                shortTripPenalty = round1(shortTripPercent),
+                thermalShearPenalty = round1(hotPercent),
             ),
             estimatedMilesRemaining = estimatedMilesRemaining,
             estimatedDaysRemaining = estimatedDaysRemaining,
