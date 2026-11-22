@@ -142,6 +142,11 @@ class PersistentStoresJsonTest {
                 shortTripPenalty = 0.07,
                 thermalShearPenalty = 0.03,
             ),
+            weightedRevolutions = 1.12e8,
+            coldExtraRevolutions = 2.5e6,
+            shortTripExtraRevolutions = 7.5e5,
+            hotExtraRevolutions = 1.2e4,
+            lastEngineStopMillis = 1_699_500_000_000,
         )
 
         @Test

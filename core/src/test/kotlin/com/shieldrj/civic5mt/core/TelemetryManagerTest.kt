@@ -914,7 +914,7 @@ class TelemetryManagerTest {
             assertTrue(p.oilLifePercent > 90, "got ${p.oilLifePercent}%")
             assertEquals(OilConditionGrade.EXCELLENT, p.oilConditionGrade)
             assertTrue(
-                p.estimatedMilesRemaining <= CivicSpecs.BASELINE_OIL_LIFE_MILES.toInt(),
+                p.estimatedMilesRemaining <= GmOilLifeMethod.MAX_INTERVAL_MILES.toInt(),
                 "got ${p.estimatedMilesRemaining} mi",
             )
         }
@@ -947,7 +947,7 @@ class TelemetryManagerTest {
 
             val p = engine.getProfile()
             assertTrue(
-                p.estimatedMilesRemaining <= CivicSpecs.BASELINE_OIL_LIFE_MILES.toInt(),
+                p.estimatedMilesRemaining <= GmOilLifeMethod.MAX_INTERVAL_MILES.toInt(),
                 "projected ${p.estimatedMilesRemaining} mi remaining",
             )
             // Still proportional to what is left, rather than pinned to the cap.
@@ -997,7 +997,9 @@ class TelemetryManagerTest {
 
         @Test
         fun `Harsh use still shortens the interval below the baseline`() {
-            // The cap is one-sided on purpose: it clips optimism, not the warning.
+            // The floor on revolutions per mile is one-sided on purpose: it clips optimism,
+            // not the warning. Harsh use is 3,000 miles that cost 20M weighted revolutions -
+            // 8M real ones, most of them with the oil cold.
             val store = InMemoryOilProfileStore(
                 OilLifeProfile(
                     lastResetTimestamp = 1_700_000_000_000 - 200L * 24 * 60 * 60 * 1000,
@@ -1005,6 +1007,7 @@ class TelemetryManagerTest {
                     currentOdometer = 103_000.0,
                     oilLifePercent = 40.0,
                     accumulatedRevolutions = 8_000_000.0,
+                    weightedRevolutions = 20_000_000.0,
                     coldStartsCount = 120,
                     timeBelowOperatingTempSec = 90_000.0,
                     shortTripsCount = 60,

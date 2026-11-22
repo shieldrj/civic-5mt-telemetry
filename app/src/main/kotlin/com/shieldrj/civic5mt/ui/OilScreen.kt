@@ -192,7 +192,7 @@ private fun OilBody(p: OilLifeProfile) {
     Factor(
         label = "Cold starts",
         value = p.coldStartsCount.toString(),
-        note = "+${p.degradationBreakdown.coldStartPenalty}% dilution",
+        note = "+${p.degradationBreakdown.coldStartPenalty}% cold oil",
     )
     Factor(
         label = "Short trips",
@@ -200,7 +200,7 @@ private fun OilBody(p: OilLifeProfile) {
         note = "+${p.degradationBreakdown.shortTripPenalty}%",
     )
     Factor(
-        label = "High-rpm time",
+        label = "Oil over 130°C",
         // Minutes past a minute. The web build printed raw seconds, so a season of enjoying
         // the car read as "54600s" - the same figure, unreadable at a glance.
         value = formatWearSeconds(p.highThermalStressSec),
@@ -222,7 +222,7 @@ private fun OilBody(p: OilLifeProfile) {
     DegradationMeter(p)
     Spacer(Modifier.height(8.dp))
     Text(
-        text = "Revolutions · Cold starts · Short trips · Thermal",
+        text = "Revolutions · Cold oil · Short trips · Hot oil",
         color = CivicColors.Ink3,
         fontSize = 11.sp,
     )
